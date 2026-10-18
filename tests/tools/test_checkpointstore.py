@@ -13,13 +13,14 @@ from typing import cast
 import h5py
 import pytest
 
-from loqs.core import Instruction, QuantumProgram
+from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.core.history import History
 from loqs.core.programresults import ProgramResults
 from loqs.internal import checkpointstore
 from loqs.internal.checkpointstore import (
     COMMIT_MARKER_ATTR,
     ITEM_LAYOUT,
+    NEXT_CACHE_ID_ATTR,
     SHOT_LAYOUT,
     BatchReceipt,
     CheckpointReadError,
@@ -41,11 +42,15 @@ from loqs.internal.streamingmerge import (
 from _shared_checkpoint_test_helpers import (
     BASE_SEED,
     _final_frame_signature,
+    as_fresh_process,
     build_shot_program,
+    cache_nodes,
     build_sweep_runner,
+    build_tagged_program,
     injection_for,
     record_h5_writes,
     record_seed_apply,
+    repeated_cache_ids,
     sessions_in,
     simulate_process_death,
 )
@@ -74,6 +79,14 @@ def _shot_entries(histories, keys) -> dict[int, dict]:
         k: {"shot_histories": histories[k], "shot_wall_clock_times": 0.5 + k}
         for k in keys
     }
+
+
+def _snapshot_store(directory, histories) -> CheckpointStore:
+    """A shot store whose canonical file holds a shot-free snapshot, which
+    shot payload puts need."""
+    store = CheckpointStore(directory, SHOT_LAYOUT)
+    store.write_snapshot(_shot_results(histories, []))
+    return store
 
 
 def _read_marker(path: Path) -> dict[str, int]:
@@ -111,7 +124,7 @@ def test_payload_put_interrupt_sweep(tmp_path, histories):
     """An interrupt anywhere in a payload write never leaves a payload
     under its final name or a surviving temp file."""
     entries = _shot_entries(histories, [2, 3])
-    probe = CheckpointStore(tmp_path / "probe", SHOT_LAYOUT)
+    probe = _snapshot_store(tmp_path / "probe", histories)
     with record_h5_writes() as tap:
         probe.put_batch(entries, worker_id="w_1")
     session = sessions_in(tap.sessions, "shot_payload")[0]
@@ -119,7 +132,7 @@ def test_payload_put_interrupt_sweep(tmp_path, histories):
 
     failures = []
     for event in range(len(session.events)):
-        store = CheckpointStore(tmp_path / f"e{event}", SHOT_LAYOUT)
+        store = _snapshot_store(tmp_path / f"e{event}", histories)
         injection = injection_for(
             tap.sessions, "shot_payload", 1, event_index=event
         )
@@ -127,7 +140,11 @@ def test_payload_put_interrupt_sweep(tmp_path, histories):
             with pytest.raises(KeyboardInterrupt):
                 store.put_batch(entries, worker_id="w_1")
         assert run.fired
-        leftover = sorted(p.name for p in store.directory.glob("*"))
+        leftover = sorted(
+            p.name
+            for p in store.directory.glob("*")
+            if p.name != SHOT_LAYOUT.canonical_filename
+        )
         if leftover:
             failures.append((event, session.events[event], leftover))
     assert not failures, failures
@@ -210,7 +227,7 @@ def test_snapshot_marker_chunks_and_decode(tmp_path, histories):
 
 
 def test_payload_put_contents_and_names(tmp_path, histories):
-    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    store = _snapshot_store(tmp_path, histories)
     receipt = store.put_batch(
         _shot_entries(histories, [3, 2]), worker_id="w_1"
     )
@@ -311,6 +328,7 @@ def test_canonical_filename_override_survives_pickle(tmp_path, histories):
     store = CheckpointStore(
         tmp_path, SHOT_LAYOUT, canonical_filename="custom.h5"
     )
+    store.write_snapshot(_shot_results(histories, []))
     assert store.canonical_path == tmp_path / "custom.h5"
     clone = pickle.loads(pickle.dumps(store))
     assert clone.canonical_path == tmp_path / "custom.h5"
@@ -366,6 +384,7 @@ def _make_store(kind, tmp_path):
 @pytest.mark.parametrize("kind", ["memory", "durable"])
 def test_contract_round_trip(tmp_path, histories, kind):
     store = _make_store(kind, tmp_path)
+    store.write_snapshot(_shot_results(histories, []))
     store.put_batch(_shot_entries(histories, [4, 2]), worker_id="w_a")
     store.put_batch(_shot_entries(histories, [0, 1]), worker_id="w_b")
     assert store.keys() == [0, 1, 2, 4]
@@ -430,7 +449,7 @@ def _truncate_in_half(path: Path) -> None:
 
 
 def test_truncated_payload_is_a_strict_error(tmp_path, histories):
-    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    store = _snapshot_store(tmp_path, histories)
     store.put_batch(_shot_entries(histories, [0, 1]), worker_id="a")
     bad = store.put_batch(_shot_entries(histories, [2, 3]), worker_id="b")
     path = Path(bad.path)
@@ -462,7 +481,7 @@ def test_payload_without_primary_attr_is_a_strict_error(tmp_path):
 
 
 def test_unpaired_payload_sides_are_a_strict_error(tmp_path, histories):
-    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    store = _snapshot_store(tmp_path, histories)
     bad = store.put_batch(_shot_entries(histories, [0, 1]), worker_id="a")
     with h5py.File(bad.path, "a") as f:
         del f["shot_histories"]["dict"]["values"]["iterable"]["1"]
@@ -676,8 +695,9 @@ def test_interrupted_read_leaves_no_placeholders(
 
 
 def test_open_retries_only_lock_contention(tmp_path, histories, monkeypatch):
-    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    store = _snapshot_store(tmp_path, histories)
     store.put_batch(_shot_entries(histories, [0, 1]), worker_id="w")
+    store.canonical_path.unlink()  # leave the payload as the one source
     real_file = h5py.File
     monkeypatch.setattr(checkpointstore.time, "sleep", lambda _s: None)
     calls = []
@@ -822,6 +842,22 @@ def _state_problems(store, histories, count) -> list[str]:
     return problems
 
 
+def _reused_ids_after_one_more_append(store, histories) -> list[str]:
+    """Append shot 6 as a new process would; the IDs repeated anywhere in
+    the canonical file afterwards."""
+    as_fresh_process()
+    store.put_batch(
+        {
+            6: {
+                "shot_histories": histories[0],
+                "shot_wall_clock_times": 6.5,
+            }
+        }
+    )
+    repeated = repeated_cache_ids(store.canonical_path)
+    return [f"repeated cache IDs {repeated}"] if repeated else []
+
+
 def test_canonical_append_basics(tmp_path, histories):
     store = CheckpointStore(tmp_path, SHOT_LAYOUT)
     with pytest.raises(FileNotFoundError, match="results.h5"):
@@ -864,14 +900,17 @@ def test_canonical_append_interrupt_sweep(tmp_path, histories, exception):
         injection = injection_for(
             tap.sessions, "results", 1, event_index=event, exception=exception
         )
+        as_fresh_process()
         with record_h5_writes(injection) as run:
             with pytest.raises(exception):
                 store.put_batch(entries, encode_cache=cache)
         assert run.fired
         if exception is KeyboardInterrupt:
             simulate_process_death()
+            as_fresh_process()
         store.put_batch(entries, encode_cache=cache)
         problems = _state_problems(store, histories, 4)
+        problems += _reused_ids_after_one_more_append(store, histories)
         if problems:
             failures.append((event, session.events[event], problems))
     assert not failures, failures
@@ -913,6 +952,7 @@ def test_consolidate_interrupt_sweep(tmp_path, histories):
         simulate_process_death()
         store.consolidate()
         problems = _state_problems(store, histories, 6)
+        problems += _reused_ids_after_one_more_append(store, histories)
         if store.payload_paths():
             problems.append("payloads remain")
         if problems:
@@ -930,8 +970,9 @@ def test_consolidate_returns_only_new_keys(tmp_path, histories):
 
 
 def test_consolidate_requires_canonical_file(tmp_path, histories):
-    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    store = _snapshot_store(tmp_path, histories)
     store.put_batch(_shot_entries(histories, [0]), worker_id="a")
+    store.canonical_path.unlink()
     with pytest.raises(FileNotFoundError, match="results.h5"):
         store.consolidate()
     assert len(store.payload_paths()) == 1
@@ -1330,3 +1371,285 @@ def test_nested_read_attrs_is_lazy_and_strict(
     assert info.value.path == str(store.canonical_path)
     with pytest.raises(CheckpointReadError, match="runner.h5"):
         view.read_attrs(("absent",))
+
+
+# -- cache ID continuation ---------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def tagged_histories() -> dict[int, History]:
+    """Six shot histories whose frames each hold an equal `Instruction`."""
+    results = build_tagged_program().run(num_shots=6, verbose=False)
+    return {i: results.get_shot_history(i) for i in range(6)}
+
+
+def _shot_path_append(tmp_path, h):
+    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    as_fresh_process()
+    store.write_snapshot(_shot_results(h, []))
+    cache: dict = {}
+    for keys in ([0, 1], [2, 3]):
+        as_fresh_process()
+        store.put_batch(_shot_entries(h, keys), encode_cache=cache)
+    as_fresh_process()
+    store.put_batch(_shot_entries(h, [4, 5]), encode_cache={})
+    return store
+
+
+def _shot_path_consolidate(tmp_path, h):
+    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    as_fresh_process()
+    store.write_snapshot(_shot_results(h, []))
+    for round_keys in (([0, 1], [2, 3]), ([4], [5])):
+        for keys in round_keys:
+            as_fresh_process()
+            store.put_batch(_shot_entries(h, keys), worker_id=f"w{keys[0]}")
+        as_fresh_process()
+        store.consolidate()
+    return store
+
+
+def _item_payload(h, key) -> dict:
+    return {
+        key: {
+            "results": h[key],
+            "item_wall_clock_times": 1.5 + key,
+            "shot_wall_clock_times": {key: 0.25},
+            "_program_results": _shot_results(h, [2 * key, 2 * key + 1]),
+        }
+    }
+
+
+def _item_path_keep_entries(tmp_path, h):
+    runner = build_sweep_runner(tmp_path / "items", tmp_path / "shots")
+    runner.index_map = {"a": 0}
+    store = CheckpointStore(tmp_path / "store", ITEM_LAYOUT)
+    as_fresh_process()
+    store.write_snapshot(runner)
+    for key in (0, 1):
+        as_fresh_process()
+        store.put_batch(_item_payload(h, key), worker_id=f"w_{key}")
+    as_fresh_process()
+    store.consolidate()
+    runner.index_map = {"a": 0, "b": 1}
+    as_fresh_process()
+    store.write_snapshot(runner, keep_entries=True)
+    as_fresh_process()
+    store.put_batch(_item_payload(h, 2), worker_id="w_2")
+    as_fresh_process()
+    store.consolidate()
+    return store
+
+
+@pytest.mark.parametrize("path", ["append", "consolidate", "keep_entries"])
+def test_fresh_counter_writes_reuse_no_cache_id(
+    tmp_path, tagged_histories, path
+):
+    h = tagged_histories
+    if path == "keep_entries":
+        store = _item_path_keep_entries(tmp_path, h)
+        assert repeated_cache_ids(store.canonical_path) == {}
+        for key in (0, 1, 2):
+            fresh = CheckpointStore(store.directory, ITEM_LAYOUT)
+            assert _digest(fresh.get(key)) == _digest(h[key])
+            fresh = CheckpointStore(store.directory, ITEM_LAYOUT)
+            kept = fresh.get(key, "_program_results")
+            assert _digest(kept) == _digest(
+                _shot_results(h, [2 * key, 2 * key + 1])
+            )
+            view = CheckpointStore(store.directory, ITEM_LAYOUT).nested(key)
+            read = [hist for _, hist in view.iter_items()]
+            assert [_digest(x) for x in read] == [
+                _digest(h[2 * key]),
+                _digest(h[2 * key + 1]),
+            ]
+        return
+    build = {
+        "append": _shot_path_append,
+        "consolidate": _shot_path_consolidate,
+    }[path]
+    store = build(tmp_path, h)
+    assert repeated_cache_ids(store.canonical_path) == {}
+    for key in range(6):
+        fresh = CheckpointStore(store.directory, SHOT_LAYOUT)
+        assert _digest(fresh.get(key)) == _digest(h[key])
+
+
+def _drop_next_id(path) -> None:
+    with h5py.File(path, "a") as f:
+        del f.attrs[NEXT_CACHE_ID_ATTR]
+
+
+def test_missing_next_id_record_is_refused(tmp_path, tagged_histories):
+    h = tagged_histories
+    store = CheckpointStore(tmp_path / "shots", SHOT_LAYOUT)
+    store.write_snapshot(_shot_results(h, [0]))
+    store.put_batch(_shot_entries(h, [2, 3]), worker_id="a")
+    _drop_next_id(store.canonical_path)
+    keys_before = store.keys()
+    marker_before = _read_marker(store.canonical_path)
+    _, item_store = _kept_item_store(tmp_path, h)
+    _drop_next_id(item_store.canonical_path)
+    runner = build_sweep_runner(tmp_path / "i", tmp_path / "s")
+
+    def refuse(call, target):
+        before = target.canonical_path.read_bytes()
+        with pytest.raises(CheckpointReadError) as info:
+            call()
+        assert info.value.path == str(target.canonical_path)
+        assert target.canonical_path.read_bytes() == before
+
+    refuse(lambda: store.put_batch(_shot_entries(h, [1])), store)
+    refuse(store.consolidate, store)
+    refuse(
+        lambda: item_store.write_snapshot(runner, keep_entries=True),
+        item_store,
+    )
+    assert store.keys() == keys_before
+    assert _read_marker(store.canonical_path) == marker_before
+    # A new path, so no payload seed is memoised for it.
+    fresh = CheckpointStore(tmp_path / "fresh", SHOT_LAYOUT)
+    fresh.write_snapshot(_shot_results(h, []))
+    _drop_next_id(fresh.canonical_path)
+    refuse(
+        lambda: fresh.put_batch(_shot_entries(h, [4]), worker_id="b"), fresh
+    )
+    assert fresh.payload_paths() == []
+
+
+# -- shot payloads share the parent program ---------------------------------
+
+
+def _program_entries(program, keys) -> dict[int, dict]:
+    return {
+        i: {
+            "shot_histories": History(
+                [Frame({"program_ref": program, "seed": i})]
+            ),
+            "shot_wall_clock_times": 0.5,
+        }
+        for i in keys
+    }
+
+
+def _program_ref(history):
+    return history[0]["program_ref"]
+
+
+def _program_snapshot(directory, program, num_shots=4) -> CheckpointStore:
+    store = CheckpointStore(directory, SHOT_LAYOUT)
+    as_fresh_process()
+    store.write_snapshot(
+        ProgramResults(parent_program=program, num_shots=num_shots)
+    )
+    return store
+
+
+def test_shot_payloads_reference_the_parent_program(tmp_path):
+    program = build_tagged_program()
+    store = _program_snapshot(tmp_path, program)
+    with h5py.File(store.canonical_path, "r") as f:
+        floor = int(f.attrs[NEXT_CACHE_ID_ATTR])
+    paths = []
+    for keys in ([0, 1], [2, 3]):
+        as_fresh_process()
+        receipt = store.put_batch(
+            _program_entries(program, keys), worker_id=f"w{keys[0]}"
+        )
+        paths.append(receipt.path)
+    for path in paths:
+        sources = [
+            n
+            for n in cache_nodes(path)
+            if n.get("cache_type") == "source"
+            and n.get("class") == "QuantumProgram"
+        ]
+        assert sources == []
+        assert repeated_cache_ids(path) == {}
+        # Payload IDs sit above every ID the canonical file holds.
+        minted = [
+            n.get("cache_id", n.get("source_cache_id"))
+            for n in cache_nodes(path)
+            if n["cache_type"] in ("source", "copy")
+        ]
+        assert minted and min(minted) >= floor
+
+    def check(reader):
+        for key in range(4):
+            history = reader.get(key)
+            assert _digest(_program_ref(history)) == _digest(program)
+            assert history[0]["seed"] == key
+        items = list(reader.iter_items())
+        assert [k for k, _ in items] == [0, 1, 2, 3]
+        for _, history in items:
+            assert _digest(_program_ref(history)) == _digest(program)
+
+    check(CheckpointStore(tmp_path, SHOT_LAYOUT))
+    as_fresh_process()
+    store.consolidate(encode_cache=store.shared_encode_cache())
+    assert store.payload_paths() == []
+    assert repeated_cache_ids(store.canonical_path) == {}
+    check(CheckpointStore(tmp_path, SHOT_LAYOUT))
+
+
+def test_payload_seed_is_kept_across_batches_and_refreshed(
+    tmp_path, monkeypatch
+):
+    program = build_tagged_program()
+    other = build_shot_program()
+    real = checkpointstore.decode_object_attrs
+    decodes = []
+
+    def spy(group, names, cache):
+        if list(names) == ["parent_program"]:
+            decodes.append(1)
+        return real(group, names, cache)
+
+    monkeypatch.setattr(checkpointstore, "decode_object_attrs", spy)
+    store = _program_snapshot(tmp_path, program)
+    for keys in ([0], [1], [2]):
+        store.put_batch(_program_entries(program, keys), worker_id="w")
+    assert len(decodes) == 1
+
+    store = _program_snapshot(tmp_path, other)
+    store.put_batch(_program_entries(other, [3]), worker_id="x")
+    assert len(decodes) == 2
+    reader = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    assert _digest(_program_ref(reader.get(3))) == _digest(other)
+
+
+def test_payload_put_needs_the_canonical_file_for_shots_only(
+    tmp_path, tagged_histories
+):
+    shots = tmp_path / "shots"
+    with pytest.raises(FileNotFoundError, match="results.h5"):
+        CheckpointStore(shots, SHOT_LAYOUT).put_batch(
+            _shot_entries(tagged_histories, [0]), worker_id="w"
+        )
+    assert not shots.exists() or list(shots.iterdir()) == []
+
+    items = CheckpointStore(tmp_path / "items", ITEM_LAYOUT)
+    receipt = items.put_batch(
+        _item_payload(tagged_histories, 0), worker_id="w"
+    )
+    assert receipt.path is not None and Path(receipt.path).exists()
+
+
+def test_failed_payload_decode_keeps_the_shared_objects(tmp_path, monkeypatch):
+    program = build_tagged_program()
+    store = _program_snapshot(tmp_path, program, num_shots=2)
+    store.put_batch(_program_entries(program, [0, 1]), worker_id="w")
+    real = checkpointstore._decode_group_entry
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("injected")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(checkpointstore, "_decode_group_entry", flaky)
+    reader = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    items = list(reader.iter_items(strict=False))
+    assert [k for k, _ in items] == [1]
+    assert _digest(_program_ref(items[0][1])) == _digest(program)

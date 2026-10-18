@@ -410,6 +410,17 @@ class TestSerializableNestedData:
         assert loaded1.name == "obj1"
         assert loaded2.name == "obj2"
 
+    def test_equal_sets_share_a_serial_hash_in_any_order(self):
+        # 1 and 9 share a slot in a small set, so these two iterate in
+        # different orders, as a set rebuilt on decode can.
+        a, b = {1, 9}, {9, 1}
+        assert list(a) != list(b)
+        obj1 = MockSerializable(name="s", value=1, data={"keys": a})
+        obj2 = MockSerializable(name="s", value=1, data={"keys": b})
+        assert Serializable._serial_hash(obj1) == Serializable._serial_hash(
+            obj2
+        )
+
     def test_same__serial_hash_different_instances(self, make_temp_path):
         """Test objects with same serializable content but different instances."""
         # Create two objects with identical content but different instances

@@ -50,6 +50,10 @@ from loqs.internal.swmrledger import is_swmr_ledger_file
 COMMIT_MARKER_ATTR = "checkpoint_store_committed"
 """Name of the file-root attribute holding the committed lengths."""
 
+NEXT_CACHE_ID_ATTR = "checkpoint_store_next_cache_id"
+"""Name of the int file-root attribute of a canonical file holding the next
+free encode cache ID. Every cache ID in the file is below it."""
+
 
 @dataclass(frozen=True)
 class StreamedAttr:
@@ -77,12 +81,17 @@ class StoreLayout:
 
     `attrs[0]` is the primary attribute, whose keys say whether an entry
     exists.
+
+    `shared_attr` names the canonical file's non-streamed attribute whose
+    cached objects payloads may reference, or is None when payloads are
+    self-contained.
     """
 
     canonical_filename: str
     ledger_tag: str
     payload_tag: str
     attrs: tuple[StreamedAttr, ...]
+    shared_attr: str | None = None
 
     @property
     def primary(self) -> StreamedAttr:
@@ -108,8 +117,10 @@ SHOT_LAYOUT = StoreLayout(
         StreamedAttr("shot_histories", False),
         StreamedAttr("shot_wall_clock_times", True),
     ),
+    "parent_program",
 )
-"""Shot-level layout, as `ProgramResults` checkpoints today."""
+"""Shot-level layout, as `ProgramResults` checkpoints today. Shot payloads
+reference the parent program stored in the canonical file."""
 
 ITEM_LAYOUT = StoreLayout(
     "runner.h5",
@@ -370,6 +381,15 @@ class _Opened:
     path: str
     canonical_names: bool
     require_primary: bool
+    shared: Callable[[], Mapping[int, Any]] | None = None
+    """Loads the shared objects a groups-format value may reference. They
+    seed `cache` before the first such decode."""
+    seeded: bool = False
+
+    def _seed(self) -> None:
+        if self.shared is not None and not self.seeded:
+            self.cache.update(self.shared())
+            self.seeded = True
 
     def _name(self, streamed: StreamedAttr) -> str:
         return streamed.canonical if self.canonical_names else streamed.name
@@ -443,12 +463,16 @@ class _Opened:
         values_group = sides[1]
         if values_group.attrs.get("storage_format", "groups") == "dataset":
             return _dataset_value(values_group, pos)
+        self._seed()
         try:
             return _decode_group_entry(values_group, pos, self.cache)
         except BaseException:
-            # A decode cut short leaves `DeferredRef` placeholders behind,
-            # which later references would resolve to.
+            # A cut-short decode leaves `DeferredRef` placeholders behind;
+            # reset to the shared objects alone, so later values decode.
             self.cache.clear()
+            if self.seeded:
+                assert self.shared is not None
+                self.cache.update(self.shared())
             raise
 
 
@@ -590,6 +614,25 @@ def _working_copy(encode_cache: dict | None) -> dict:
     }
 
 
+_PAYLOAD_SEED: tuple[tuple[str, tuple[int, int, int]], tuple[dict, int]] | None
+_PAYLOAD_SEED = None
+"""The process's one payload seed: `((canonical path, file identity),
+(encode seed, next-ID record))`. Each batch builds a new store, so only a
+module-level slot lets a worker's cache outlive a batch."""
+
+
+def _invert_shared(shared: Mapping[int, Any]) -> dict:
+    """An encode cache from decoded shared objects. Entries carry no object
+    id, since a decoded object's id goes stale once its cache is freed. The
+    lowest ID per hash wins, which is the source's, never a copy's."""
+    seed: dict = {}
+    for cache_id in sorted(shared):
+        seed.setdefault(
+            Serializable._serial_hash(shared[cache_id]), [(None, cache_id)]
+        )
+    return seed
+
+
 def _parse_marker(f: h5py.File) -> dict[str, int]:
     """The committed lengths in a canonical file's marker; `ValueError` if
     the marker is missing."""
@@ -645,6 +688,23 @@ def _trim_attr(
                 del side[str(i)]
 
 
+def _read_next_id(f: h5py.File, path: str | os.PathLike) -> int:
+    """The next-ID record of a canonical file; `CheckpointReadError` if it
+    is missing or not an int."""
+    value = f.attrs.get(NEXT_CACHE_ID_ATTR)
+    if value is None:
+        raise CheckpointReadError(
+            path, f"the canonical file has no {NEXT_CACHE_ID_ATTR!r} record"
+        )
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, np.integer)
+    ):
+        raise CheckpointReadError(
+            path, f"{NEXT_CACHE_ID_ATTR!r} is not an int: {value!r}"
+        )
+    return int(value)
+
+
 @dataclass
 class _CanonicalWriter:
     """The canonical file, open for appending after its tail was trimmed.
@@ -659,6 +719,7 @@ class _CanonicalWriter:
     layout: StoreLayout
     limits: dict[str, int]
     committed: dict[str, set[int]]
+    next_id: int
 
     def new_keys(self, streamed: StreamedAttr, keys: Iterable[int]) -> list:
         """The sorted keys of `keys` not yet committed for `streamed`."""
@@ -671,7 +732,12 @@ class _CanonicalWriter:
         pairs: Iterable[tuple[int, Any]],
         encode_cache: dict,
     ) -> None:
-        """Append `(key, value)` pairs, uncommitted until `commit`."""
+        """Append `(key, value)` pairs, uncommitted until `commit`.
+
+        The encoder's ID counter is raised to the file's next free ID
+        first, so a counter reset between appends is harmless.
+        """
+        HDF5Encoder.ENCODE_ID = max(HDF5Encoder.ENCODE_ID, self.next_id)
         merge_dict_attr(
             self.container,
             streamed.canonical,
@@ -680,9 +746,15 @@ class _CanonicalWriter:
             key_use_dataset=True,
             value_use_dataset=streamed.use_dataset,
         )
+        self.next_id = max(self.next_id, HDF5Encoder.ENCODE_ID)
 
     def commit(self, added: Mapping[str, Iterable[int]]) -> None:
-        """Overwrite the marker, in place, with the physical lengths."""
+        """Write the next-ID record, then overwrite the marker in place
+        with the physical lengths.
+
+        The record goes first: one above the committed IDs only skips
+        some, while one below them would let a later write reuse them.
+        """
         lengths = dict(self.limits)
         for streamed in self.layout.attrs:
             sides = _iterable_groups(self.container, streamed.canonical)
@@ -696,6 +768,7 @@ class _CanonicalWriter:
                     f"but {n_values} values"
                 )
             lengths[streamed.canonical] = n_keys
+        self.f.attrs.modify(NEXT_CACHE_ID_ATTR, self.next_id)
         self.f.attrs.modify(COMMIT_MARKER_ATTR, json.dumps(lengths))
         self.limits = lengths
         for name, keys in added.items():
@@ -710,6 +783,10 @@ class CheckpointStore(_ReadableStore):
     commit marker (`COMMIT_MARKER_ATTR` on the file root): a JSON object
     that maps each streamed attribute's canonical name to its committed
     length.
+
+    With a layout that has a shared attribute, a payload references the
+    objects of that attribute stored in the canonical file, and every read
+    decodes the payload with them.
     """
 
     def __init__(
@@ -815,10 +892,13 @@ class CheckpointStore(_ReadableStore):
         With `keep_entries`, the existing canonical file must exist and be
         readable. Its committed entries of every streamed attribute are
         copied into the new file as stored, never decoded, in place of
-        whatever `obj` held. Any tail beyond the old marker is dropped.
+        whatever `obj` held. Any tail beyond the old marker is dropped, and
+        the new cache IDs continue above every ID the old file holds.
+        Either way the next free cache ID is recorded in the new file
+        (`NEXT_CACHE_ID_ATTR`).
         """
         with contextlib.ExitStack() as stack:
-            old: tuple[h5py.Group, dict[str, int]] | None = None
+            old: tuple[h5py.Group, dict[str, int], int] | None = None
             if keep_entries:
                 old = self._open_for_rewrite(stack)
             self.directory.mkdir(parents=True, exist_ok=True)
@@ -828,9 +908,9 @@ class CheckpointStore(_ReadableStore):
 
     def _open_for_rewrite(
         self, stack: contextlib.ExitStack
-    ) -> tuple[h5py.Group, dict[str, int]]:
+    ) -> tuple[h5py.Group, dict[str, int], int]:
         """Open the canonical file read-only on `stack` and validate it;
-        returns its object group and committed lengths."""
+        returns its object group, committed lengths and next-ID record."""
         path = self.canonical_path
         if not path.is_file():
             raise FileNotFoundError(
@@ -844,20 +924,23 @@ class CheckpointStore(_ReadableStore):
             _Opened(container, limits, None, str(path), True, False).validate(
                 self.layout
             )
+            next_id = _read_next_id(f, path)
+        except CheckpointReadError:
+            raise
         except Exception as exc:
             raise CheckpointReadError(
                 path, f"{type(exc).__name__}: {exc}"
             ) from exc
-        return container, limits
+        return container, limits, next_id
 
     def _carry_entries(
         self,
         container: h5py.Group,
-        old: tuple[h5py.Group, dict[str, int]],
+        old: tuple[h5py.Group, dict[str, int], int],
     ) -> None:
         """Replace every streamed attr of `container` with a copy of the
         old file's committed entries."""
-        old_container, limits = old
+        old_container, limits, _ = old
         for streamed in self.layout.attrs:
             name = streamed.canonical
             if name in container:
@@ -878,10 +961,15 @@ class CheckpointStore(_ReadableStore):
     def _write_snapshot_file(
         self,
         obj: Serializable,
-        old: tuple[h5py.Group, dict[str, int]] | None,
+        old: tuple[h5py.Group, dict[str, int], int] | None,
     ) -> None:
         with atomic_h5_file(self.canonical_path) as f:
-            obj.dump(f, "hdf5")
+            if old is None:
+                obj.dump(f, "hdf5")
+            else:
+                # Continue above every ID the carried entries may hold.
+                HDF5Encoder.ENCODE_ID = max(HDF5Encoder.ENCODE_ID, old[2])
+                obj.dump(f, "hdf5", reset_encode_id=False)
             for streamed in self.layout.attrs:
                 _reset_empty_groups_format_dict_attr(f, streamed.canonical)
             container = _resolve_checkpoint_object_group(f)
@@ -896,6 +984,7 @@ class CheckpointStore(_ReadableStore):
                 for side in sides:
                     _make_side_growable(side)
                 lengths[streamed.canonical] = side_length(sides[0])
+            f.attrs[NEXT_CACHE_ID_ATTR] = HDF5Encoder.ENCODE_ID
             f.attrs[COMMIT_MARKER_ATTR] = json.dumps(lengths)
 
     def put_batch(
@@ -912,6 +1001,13 @@ class CheckpointStore(_ReadableStore):
         the canonical file in place and committed by rewriting its marker
         last. `encode_cache` is only for canonical appends and changes only
         when the batch commits.
+
+        For a layout with a shared attribute, a payload references the
+        objects of that attribute stored in the canonical file, instead of
+        embedding them, so the canonical file must exist
+        (`FileNotFoundError` otherwise). The process keeps one encode
+        cache seeded from it across batches, and the payload's IDs start
+        above the file's next-ID record.
         """
         if worker_id is not None and encode_cache is not None:
             raise ValueError(
@@ -926,9 +1022,14 @@ class CheckpointStore(_ReadableStore):
             self._put_canonical(entries, keys, encode_cache)
             return BatchReceipt(keys, str(self.canonical_path))
         path = self.payload_path(worker_id, keys[0])
+        if self.layout.shared_attr is None:
+            # A fresh cache per payload keeps it self-contained.
+            cache: dict = {}
+        else:
+            seed, floor = self._payload_seed()
+            HDF5Encoder.ENCODE_ID = max(HDF5Encoder.ENCODE_ID, floor)
+            cache = _working_copy(seed)
         self.directory.mkdir(parents=True, exist_ok=True)
-        # One fresh cache per payload keeps it self-contained.
-        cache: dict = {}
         with atomic_h5_file(path) as f:
             for streamed in self.layout.attrs:
                 pairs = [
@@ -1020,18 +1121,95 @@ class CheckpointStore(_ReadableStore):
                 yield _resolve_checkpoint_object_group(f), decode_cache
             finally:
                 f.close()
+        except CheckpointReadError:
+            raise
         except Exception as exc:
             raise CheckpointReadError(
                 path, f"{type(exc).__name__}: {exc}"
             ) from exc
 
+    def shared_encode_cache(self) -> dict:
+        """A new encode cache seeded from the canonical file's shared
+        attribute, for encoding objects that reference it.
+
+        Empty for a layout without a shared attribute. Raises
+        `CheckpointReadError` if the attribute can't be read.
+        """
+        if self.layout.shared_attr is None:
+            return {}
+        return _invert_shared(self._shared_objects())
+
+    def _shared_objects(self) -> dict[int, Any]:
+        """The decoded shared attribute's cached objects by cache ID; empty
+        with no canonical file."""
+        attr = self.layout.shared_attr
+        if attr is None or not self.canonical_path.is_file():
+            return {}
+        cache = ResolvingDecodeCache(root=None, format="hdf5")
+        self.read_attrs((attr,), decode_cache=cache)
+        return dict(cache)
+
+    def _shared_loader(self) -> Callable[[], Mapping[int, Any]] | None:
+        """A loader of the shared objects that decodes them at most once,
+        for one store call; None for a layout without a shared attribute."""
+        if self.layout.shared_attr is None:
+            return None
+        loaded: dict[int, Any] | None = None
+
+        def load() -> Mapping[int, Any]:
+            nonlocal loaded
+            if loaded is None:
+                loaded = self._shared_objects()
+            return loaded
+
+        return load
+
+    def _payload_seed(self) -> tuple[dict, int]:
+        """The encode seed and ID floor for a payload, from the process's
+        memo of the canonical file, rebuilt when the file is replaced.
+
+        Raises `FileNotFoundError` with no canonical file and
+        `CheckpointReadError` if the next-ID record or the shared
+        attribute can't be read.
+        """
+        global _PAYLOAD_SEED
+        path = self.canonical_path
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"The canonical file {path} does not exist; "
+                "write_snapshot creates it"
+            )
+        key = str(path.resolve())
+        memo = _PAYLOAD_SEED
+        if memo is not None and memo[0] == (
+            key,
+            self._identity(os.stat(path)),
+        ):
+            return memo[1]
+        attr = self.layout.shared_attr
+        assert attr is not None
+        with self._committed_object() as (group, cache):
+            f = group.file
+            identity = self._identity(os.fstat(f.id.get_vfd_handle()))
+            floor = _read_next_id(f, path)
+            result = decode_object_attrs(group, [attr], cache)
+        if attr not in result:
+            raise CheckpointReadError(path, f"attributes {[attr]} are missing")
+        value = (_invert_shared(cache), floor)
+        _PAYLOAD_SEED = ((key, identity), value)
+        return value
+
     def _sources(self) -> list[_Source]:
         sources: list[_Source] = []
         if self.canonical_path.is_file():
             sources.append(_Source(self.canonical_path, self._open_canonical))
+        shared = self._shared_loader()
         for path in self.payload_paths():
             sources.append(
-                _Source(path, functools.partial(self._open_payload, path))
+                _Source(
+                    path,
+                    functools.partial(self._open_payload, path, shared),
+                )
             )
         return sources
 
@@ -1065,7 +1243,11 @@ class CheckpointStore(_ReadableStore):
             f.close()
 
     @contextlib.contextmanager
-    def _open_payload(self, path: Path) -> Iterator[_Opened]:
+    def _open_payload(
+        self,
+        path: Path,
+        shared: Callable[[], Mapping[int, Any]] | None = None,
+    ) -> Iterator[_Opened]:
         f = open_h5(path, "r")
         try:
             yield _Opened(
@@ -1075,6 +1257,7 @@ class CheckpointStore(_ReadableStore):
                 str(path),
                 canonical_names=False,
                 require_primary=True,
+                shared=shared,
             )
         finally:
             f.close()
@@ -1110,6 +1293,7 @@ class CheckpointStore(_ReadableStore):
                 raise CheckpointReadError(
                     path, f"{type(exc).__name__}: {exc}"
                 ) from exc
+            next_id = _read_next_id(f, path)
             container = _resolve_checkpoint_object_group(f)
             committed: dict[str, set[int]] = {}
             for streamed in self.layout.attrs:
@@ -1129,7 +1313,7 @@ class CheckpointStore(_ReadableStore):
                     ]
                 committed[streamed.name] = set(keys)
             yield _CanonicalWriter(
-                f, container, self.layout, limits, committed
+                f, container, self.layout, limits, committed, next_id
             )
         finally:
             f.close()
@@ -1168,7 +1352,9 @@ class CheckpointStore(_ReadableStore):
 
         Run it only when no writer is live. An unreadable payload raises
         `CheckpointReadError` and nothing is deleted. Returns the sorted
-        keys that got at least one attr appended.
+        keys that got at least one attr appended. A shot payload is
+        decoded with the parent program stored in the canonical file, once
+        per call.
         """
         payloads = self.payload_paths()
         exists = self.canonical_path.is_file()
@@ -1180,19 +1366,28 @@ class CheckpointStore(_ReadableStore):
         appended: set[int] = set()
         if exists:
             work = _working_copy(encode_cache)
+            shared = self._shared_loader()
             with self._canonical_writer() as writer:
                 for path in payloads:
-                    appended.update(self._merge_payload(writer, path, work))
+                    appended.update(
+                        self._merge_payload(writer, path, work, shared)
+                    )
             if encode_cache is not None:
                 encode_cache.update(work)
         self._remove_leftovers(payloads)
         return tuple(sorted(appended))
 
     def _merge_payload(
-        self, writer: _CanonicalWriter, path: Path, work: dict
+        self,
+        writer: _CanonicalWriter,
+        path: Path,
+        work: dict,
+        shared: Callable[[], Mapping[int, Any]] | None,
     ) -> set[int]:
         """Append one payload's uncommitted entries and commit them."""
-        source = _Source(path, functools.partial(self._open_payload, path))
+        source = _Source(
+            path, functools.partial(self._open_payload, path, shared)
+        )
         added: dict[str, list[int]] = {}
         with self._opened(source, wrap_body=False) as opened:
             for streamed in self.layout.attrs:
@@ -1228,6 +1423,8 @@ class CheckpointStore(_ReadableStore):
         for key in keys:
             try:
                 value = opened.read(streamed, position[key])
+            except CheckpointReadError:
+                raise
             except Exception as exc:
                 raise CheckpointReadError(
                     opened.path, f"{type(exc).__name__}: {exc}"
@@ -1304,7 +1501,11 @@ class _PayloadView(_ReadOnlyStore):
         return [
             _Source(
                 self._path,
-                functools.partial(self._parent._open_payload, self._path),
+                functools.partial(
+                    self._parent._open_payload,
+                    self._path,
+                    self._parent._shared_loader(),
+                ),
             )
         ]
 

@@ -669,6 +669,14 @@ class Serializable:
                     obj.flatten().tolist(), _visited
                 )
                 return hash((shape_id, data_id))
+            elif isinstance(obj, (set, frozenset)):
+                # Order-free: equal sets can iterate in different orders
+                return hash(
+                    frozenset(
+                        Serializable._serial_hash(item, _visited)
+                        for item in obj
+                    )
+                )
             else:
                 # Base case: hash the object itself
                 try:
@@ -981,6 +989,7 @@ class Serializable:
         use_caching: bool = True,
         encode_cache: EncodeCache = None,
         json_format_kwargs: Mapping | None = None,
+        reset_encode_id: bool = True,
     ) -> None:
         """
         Serializes and writes this object to a given output stream.
@@ -1002,6 +1011,11 @@ class Serializable:
             Additional arguments specific to the JSON format.
             For example, the JSON format accepts `indent` as an argument
             because `json.dump` does.
+
+        reset_encode_id : bool, optional
+            If True (default), the encoder's cache ID counter restarts at 0.
+            If False, encoding continues from the current counter, so the
+            new IDs do not repeat ones minted earlier in the same file.
 
         Returns
         -------
@@ -1039,7 +1053,10 @@ class Serializable:
                 )
 
             encoded = Serializable.encode(
-                self, "json", encode_cache=encode_cache, reset_encode_id=True
+                self,
+                "json",
+                encode_cache=encode_cache,
+                reset_encode_id=reset_encode_id,
             )
 
             import json
@@ -1059,7 +1076,7 @@ class Serializable:
                 self,
                 "hdf5",
                 encode_cache=encode_cache,
-                reset_encode_id=True,
+                reset_encode_id=reset_encode_id,
                 h5_group=root_group,
             )
         else:

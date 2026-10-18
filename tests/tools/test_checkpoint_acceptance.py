@@ -13,24 +13,34 @@ from typing import Any
 
 import pytest
 from _shared_checkpoint_test_helpers import (
+    BASE_SEED,
     NUM_SHOTS,
+    TAG_NAME,
     H5Injection,
     H5Session,
     InlineExecutor,
     ShotSignature,
+    as_fresh_process,
     assert_shot_results_match,
     build_shot_program,
     build_sweep_runner,
+    build_tagged_program,
+    cache_nodes,
     classify_checkpoint_file,
     inline_execution_patches,
     record_h5_writes,
+    repeated_cache_ids,
     run_shot_program,
     sessions_in,
     shot_signature,
     simulate_process_death,
 )
+from loqs.core import Instruction
 from loqs.core.history import History
+from loqs.core.programresults import ProgramResults
 from loqs.core.quantumprogram import QuantumProgram
+from loqs.internal.checkpointstore import SHOT_LAYOUT, CheckpointStore
+from loqs.internal.serializable import Serializable
 from loqs.tools.noisesweeptools import NoiseSweepRunner
 
 
@@ -228,3 +238,142 @@ def test_checkpointed_workers_do_not_return_histories(
         "contain a History"
     )
     assert_shot_results_match(results, serial_reference)
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["serial", "parallel"])
+def test_resume_in_a_fresh_process_reuses_no_cache_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parallel: bool
+) -> None:
+    num_shots = 6
+
+    def run(resume: bool, executor: InlineExecutor | None):
+        return build_tagged_program().run(
+            num_shots=num_shots,
+            checkpoint=True,
+            resume=resume,
+            checkpoint_dir=tmp_path,
+            checkpoint_batch_size=1,
+            shot_executor=executor,
+            verbose=False,
+        )
+
+    if parallel:
+        with pytest.raises(KeyboardInterrupt):
+            run(False, InlineExecutor(interrupt_on_submit=4))
+    else:
+        real_run_shot = QuantumProgram._run_shot
+
+        def run_shot(program, max_frame_limit=100, seed=None, shot_index=None):
+            if shot_index == 3:
+                raise KeyboardInterrupt
+            return real_run_shot(program, max_frame_limit, seed, shot_index)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(QuantumProgram, "_run_shot", staticmethod(run_shot))
+            with pytest.raises(KeyboardInterrupt):
+                run(False, None)
+    simulate_process_death()
+    as_fresh_process()
+    run(True, InlineExecutor() if parallel else None)
+
+    canonical = tmp_path / "results.h5"
+    assert repeated_cache_ids(canonical) == {}
+    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    assert store.keys() == list(range(num_shots))
+
+    def problems(history: History) -> tuple[Any, Any]:
+        frame = history[-1]
+        tag: Any = frame["tag"]
+        return frame["seed"], (isinstance(tag, Instruction), tag.name)
+
+    for i in range(num_shots):
+        fresh = CheckpointStore(tmp_path, SHOT_LAYOUT)
+        assert problems(fresh.get(i)) == (BASE_SEED + i, (True, TAG_NAME))
+    loaded = ProgramResults(lazy_loading=False)
+    loaded.load_checkpoint(checkpoint_dir=tmp_path)
+    for i in range(num_shots):
+        assert problems(loaded.shot_histories[i]) == (
+            BASE_SEED + i,
+            (True, TAG_NAME),
+        )
+
+
+def _trivial_codepack_program() -> QuantumProgram:
+    """A one-qubit trivial-codepack program whose frames hold `patches`,
+    with a `QECCode` from the program's `patch_types`."""
+    from loqs.backends import QSimQuantumState
+    from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+
+    qubits = ["Q0"]
+    stack: list[dict[str, Any]] = [
+        {
+            "instruction": "Init State",
+            "state": len(qubits),
+            "qubit_labels": qubits,
+        },
+        {
+            "instruction": "Init Patch Trivial",
+            "new_patch_label": "L0",
+            "qubits": qubits,
+        },
+        {
+            "instruction": "Init Counter",
+            "patch_label": "L0",
+            "initial_value": 0,
+        },
+        {
+            "instruction": "Increment",
+            "patch_label": "L0",
+            "increment_by": 1,
+        },
+    ]
+    return QuantumProgram(
+        stack,
+        default_noise_model=trivial_codepack.create_ideal_model(qubits),
+        state_type=QSimQuantumState,
+        patch_types={"Trivial": trivial_codepack.create_qec_code()},
+        default_base_seed=0,
+        name="Trivial codepack program",
+    )
+
+
+def test_shot_payloads_do_not_reembed_the_parent_program(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("quantumsim")
+    num_shots = 6
+    reference = _trivial_codepack_program().run(
+        num_shots=num_shots, checkpoint=False, verbose=False
+    )
+    seen: list[list[dict]] = []
+
+    def hook(_n: int) -> None:
+        for path in _shot_payloads(tmp_path):
+            seen.append(cache_nodes(path))
+
+    results = _trivial_codepack_program().run(
+        num_shots=num_shots,
+        checkpoint=True,
+        checkpoint_dir=tmp_path,
+        checkpoint_batch_size=2,
+        shot_executor=InlineExecutor(hook=hook),
+        verbose=False,
+    )
+    assert seen, "test fault: the hook saw no shot payload"
+    for nodes in seen:
+        assert not [
+            n
+            for n in nodes
+            if n.get("cache_type") == "source" and n.get("class") == "QECCode"
+        ]
+
+    def data_digests(history: History | None) -> list[int]:
+        # A stored frame decodes with its expired keys listed twice, so
+        # compare the frames' data rather than their whole encodings.
+        assert history is not None
+        return [Serializable._serial_hash(f._data) for f in history]
+
+    for i in range(num_shots):
+        assert data_digests(results.get_shot_history(i)) == data_digests(
+            reference.get_shot_history(i)
+        )

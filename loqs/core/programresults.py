@@ -20,10 +20,8 @@ import h5py
 
 from loqs.internal import (
     Displayable,
-    Serializable,
     worker_id as _global_worker_id,
 )
-from loqs.internal.serializable import ResolvingDecodeCache
 from loqs.internal.swmrledger import (
     held_swmr_writer,
     mark_ledger_item_done,
@@ -255,7 +253,9 @@ class ProgramResults(Displayable):
         if checkpoint_enabled and isinstance(parent_program, QuantumProgram):
             self._ensure_snapshot()
             self.parent_program = str(self._shot_store().canonical_path)
-            self._seed_encode_cache()
+            self._checkpoint_encode_cache = (
+                self._shot_store().shared_encode_cache()
+            )
 
     def _set_nested_shot_source(self, view: _NestedStore) -> None:
         """Configure this ProgramResults to read from a nested view.
@@ -368,20 +368,6 @@ class ProgramResults(Displayable):
             results_filename=self._results_filename,
         )
         store.write_snapshot(shell)
-
-    def _seed_encode_cache(self) -> None:
-        """Seed the encode cache from the parent program stored in the
-        canonical file, reading no shot. Read errors propagate."""
-        decode_cache = ResolvingDecodeCache(root=None, format="hdf5")
-        self._shot_store().read_attrs(
-            ("parent_program",), decode_cache=decode_cache
-        )
-        # Invert decode_cache (cache_id -> object) into the encode cache
-        # layout: _serial_hash(object) -> [(id(object), cache_id)].
-        self._checkpoint_encode_cache = {
-            Serializable._serial_hash(v): [(id(v), k)]
-            for k, v in decode_cache.items()
-        }
 
     def add_shot(
         self,

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import json
 import os
 import re
 import threading
@@ -30,6 +31,8 @@ import loqs.internal
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.core.history import History
 from loqs.core.programresults import ProgramResults
+from loqs.internal.encoder import HDF5Encoder, JSONEncoder
+from loqs.internal.encoder.hdf5encoder import _COLLAPSED_BLOB_NAME
 from loqs.tools import multiprogramrunner, paralleltools
 from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.noisesweeptools import NoiseSweepRunner
@@ -291,6 +294,9 @@ def _wrap_file_init(tap: H5WriteTap) -> Callable[[], None]:
         if isinstance(name, (str, bytes, os.PathLike)) and (
             mode in _WRITE_MODES
         ):
+            # HDF5 reports the shared file's intent for a read-only handle
+            # opened beside a writer, so the handle itself is marked.
+            self._tap_write_handle = True
             tap.on_open(os.path.abspath(os.fsdecode(name)))
 
     setattr(h5py.File, "__init__", wrapper)
@@ -302,8 +308,11 @@ def _wrap_file_close(tap: H5WriteTap) -> Callable[[], None]:
 
     def wrapper(self):
         path = _path_of(self.id) if self.id else None
+        # Only a write-mode handle ends a session; a read-only handle may
+        # open and close on the same file while a writer holds it.
+        writable = getattr(self, "_tap_write_handle", False)
         original(self)
-        if path is not None:
+        if path is not None and writable:
             tap.on_close(path)
 
     setattr(h5py.File, "close", wrapper)
@@ -416,6 +425,66 @@ def simulate_process_death() -> None:
                 file_id.close()
     gc.collect()
     loqs.internal._worker_id_cache = None
+
+
+def as_fresh_process() -> None:
+    """Reset the encoder's cache ID counters, as a new process has them."""
+    HDF5Encoder.ENCODE_ID = 0
+    JSONEncoder.ENCODE_ID = 0
+
+
+# ---------------------------------------------------------------------------
+# Cache ID inspection
+# ---------------------------------------------------------------------------
+
+
+def cache_nodes(path: str | os.PathLike) -> list[dict]:
+    """The attrs of every cache node in an HDF5 file: each group or
+    dataset whose attrs carry `cache_type`, plus each dict with a
+    `cache_type` key inside a `$collapsed` JSON blob, at any depth."""
+    out: list[dict] = []
+
+    def from_json(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("cache_type") is not None:
+                out.append(node)
+            for value in node.values():
+                from_json(value)
+        elif isinstance(node, list):
+            for item in node:
+                from_json(item)
+
+    def visit(node: Any) -> None:
+        attrs = dict(node.attrs)
+        if attrs.get("cache_type") is not None:
+            out.append(attrs)
+        if isinstance(node, h5py.Group):
+            for name in node.keys():
+                visit(node[name])
+            if _COLLAPSED_BLOB_NAME in node:
+                raw = node[_COLLAPSED_BLOB_NAME][()].tobytes()
+                from_json(json.loads(raw.decode("utf-8")))
+
+    with h5py.File(path, "r") as f:
+        visit(f)
+    return out
+
+
+def repeated_cache_ids(path: str | os.PathLike) -> dict[int, int]:
+    """Each cache ID minted more than once in the file, with its count. A
+    `source` node mints its `cache_id`, a `copy` node its
+    `source_cache_id`."""
+    counts: dict[int, int] = {}
+    for node in cache_nodes(path):
+        kind = node["cache_type"]
+        if kind == "source":
+            minted = int(node["cache_id"])
+        elif kind == "copy":
+            minted = int(node["source_cache_id"])
+        else:
+            continue
+        counts[minted] = counts.get(minted, 0) + 1
+    return {k: v for k, v in counts.items() if v > 1}
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +608,38 @@ def build_shot_program() -> QuantumProgram:
         global_instructions={"Record Seed": RECORD_SEED},
         default_base_seed=BASE_SEED,
         name="seed recording program",
+    )
+
+
+TAG_NAME = "Tag"
+
+
+def _tag_noop() -> Frame:
+    return Frame({})
+
+
+def record_tagged_seed(seed) -> Frame:
+    """Record the seed and a fresh, equal `Instruction` per shot, which the
+    encoder writes as a source once and as copies after."""
+    return Frame(
+        {
+            "seed": seed,
+            "tag": Instruction(apply_fn=_tag_noop, name=TAG_NAME),
+        }
+    )
+
+
+TAGGED_SEED = Instruction(apply_fn=record_tagged_seed, name="Tagged Seed")
+
+
+def build_tagged_program() -> QuantumProgram:
+    """Like `build_shot_program()`, but every shot's frame holds an
+    `Instruction`, so cache references cross shots."""
+    return QuantumProgram(
+        [{"instruction": "Tagged Seed"}],
+        global_instructions={"Tagged Seed": TAGGED_SEED},
+        default_base_seed=BASE_SEED,
+        name="tagged seed program",
     )
 
 
