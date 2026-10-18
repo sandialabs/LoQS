@@ -258,9 +258,12 @@ class ResolvingDecodeCache(dict):
         re-pointed (e.g. to a fresh file handle) after construction.
     _format : {'hdf5', 'json'}
         The format of `_root`.
+    _fallback : Callable[[], Mapping[int, Any]] | None
+        A loader of objects whose sources live outside `_root`, consulted
+        on a miss before `_root` is scanned.
     """
 
-    def __init__(self, root, format):
+    def __init__(self, root, format, fallback=None):
         """Initialize the cache with a root structure to search.
 
         Parameters
@@ -269,10 +272,16 @@ class ResolvingDecodeCache(dict):
             The root structure (HDF5 file/group or JSON dict) to search for sources.
         format : {'hdf5', 'json'}
             The format of the root structure.
+        fallback : Callable[[], Mapping[int, Any]] | None
+            A loader of objects whose sources live outside `root`, by cache
+            ID. It is called on each miss, so it should be cheap after its
+            first call. A missing ID found in its mapping is stored and
+            returned without scanning `root`; otherwise `root` is scanned.
         """
         super().__init__()
         self._root = root
         self._format = format
+        self._fallback = fallback
 
     def resolve(self, cache_id):
         """Return the cached object, or locate and decode its source if missing.
@@ -294,6 +303,12 @@ class ResolvingDecodeCache(dict):
         """
         if cache_id in self:
             return self[cache_id]
+
+        if self._fallback is not None:
+            external = self._fallback()
+            if cache_id in external:
+                self[cache_id] = external[cache_id]
+                return self[cache_id]
 
         # Search for the source node
         if self._format == "hdf5":

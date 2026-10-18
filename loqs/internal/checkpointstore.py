@@ -381,15 +381,6 @@ class _Opened:
     path: str
     canonical_names: bool
     require_primary: bool
-    shared: Callable[[], Mapping[int, Any]] | None = None
-    """Loads the shared objects a groups-format value may reference. They
-    seed `cache` before the first such decode."""
-    seeded: bool = False
-
-    def _seed(self) -> None:
-        if self.shared is not None and not self.seeded:
-            self.cache.update(self.shared())
-            self.seeded = True
 
     def _name(self, streamed: StreamedAttr) -> str:
         return streamed.canonical if self.canonical_names else streamed.name
@@ -463,16 +454,12 @@ class _Opened:
         values_group = sides[1]
         if values_group.attrs.get("storage_format", "groups") == "dataset":
             return _dataset_value(values_group, pos)
-        self._seed()
         try:
             return _decode_group_entry(values_group, pos, self.cache)
         except BaseException:
-            # A cut-short decode leaves `DeferredRef` placeholders behind;
-            # reset to the shared objects alone, so later values decode.
+            # A cut-short decode leaves `DeferredRef` placeholders; reset.
+            # The cache's fallback still supplies the shared objects.
             self.cache.clear()
-            if self.seeded:
-                assert self.shared is not None
-                self.cache.update(self.shared())
             raise
 
 
@@ -1253,11 +1240,10 @@ class CheckpointStore(_ReadableStore):
             yield _Opened(
                 f,
                 None,
-                ResolvingDecodeCache(root=f, format="hdf5"),
+                ResolvingDecodeCache(root=f, format="hdf5", fallback=shared),
                 str(path),
                 canonical_names=False,
                 require_primary=True,
-                shared=shared,
             )
         finally:
             f.close()

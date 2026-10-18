@@ -1841,54 +1841,14 @@ class TestItemCheckpointWithLedger:
     ledger only once that payload write has fully completed; `_get_worker_
     ledger` caches its opened ledger group per process per directory."""
 
-    def test_write_item_checkpoint_with_ledger_writes_payload_and_marks_done(
-        self, tmp_path
-    ):
-        """A real ledger plus real entries: the payload file exists and is
-        readable with the expected entries afterward, and the ledger's
-        `done`/`wall_clock_times` reflect the item as done with the correct
-        wall-clock time."""
-        from loqs.internal.swmrledger import (
-            open_swmr_writer,
-            read_swmr_ledger_status,
-        )
-        from loqs.tools.multiprogramrunner import (
-            _write_item_checkpoint_with_ledger,
-        )
-
-        store = CheckpointStore(tmp_path / "ckpt", ITEM_LAYOUT)
-        store.directory.mkdir()
-        _, ledger_group = open_swmr_writer(
-            store.ledger_path("test"),
-            fields=["done", "wall_clock_times"],
-        )
-
-        entry = {"results": 42, "item_wall_clock_times": 0.25}
-        _write_item_checkpoint_with_ledger(
-            store, ledger_group, 3, entry, wall_clock_time=0.25
-        )
-
-        (payload_path,) = store.payload_paths()
-        assert payload_path == store.payload_path(worker_id(), 3)
-        view = store.payload_view(payload_path)
-        assert dict(view.iter_items("results")) == {3: 42}
-        assert dict(view.iter_items("item_wall_clock_times")) == {
-            3: pytest.approx(0.25)
-        }
-
-        status = read_swmr_ledger_status(ledger_group)
-        assert bool(status.done[3]) is True
-        assert status.wall_clock_times[3] == pytest.approx(0.25)
-
     def test_write_item_checkpoint_with_ledger_does_not_mark_done_on_failure(
         self, tmp_path, monkeypatch
     ):
-        """If `merge_dict_attr` raises partway through the payload write
-        (after at least one entry is already written), the exception
-        propagates out of `_write_item_checkpoint_with_ledger` and the
-        ledger's `done` entry for that index stays False -- proving
-        `mark_ledger_item_done` is never reached before the payload file is
-        fully written."""
+        """If `merge_dict_attr` raises partway through the payload write,
+        the exception propagates and the item stays not done. A retry then
+        writes the payload and marks the item done, only once the payload
+        is renamed into place and closed, with the right entries and
+        wall-clock time."""
         from loqs.internal import checkpointstore as store_module
         from loqs.internal.swmrledger import (
             open_swmr_writer,
@@ -1912,20 +1872,20 @@ class TestItemCheckpointWithLedger:
                 raise RuntimeError("simulated failure partway through")
             return real_merge_dict_attr(*args, **kwargs)
 
-        monkeypatch.setattr(
-            store_module, "merge_dict_attr", flaky_merge_dict_attr
-        )
-
         entry = {
             "results": 1,
             "item_wall_clock_times": 0.1,
             "shot_wall_clock_times": {0: 0.05},
         }
 
-        with pytest.raises(RuntimeError, match="simulated failure"):
-            mpr_module._write_item_checkpoint_with_ledger(
-                store, ledger_group, 5, entry, wall_clock_time=0.1
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                store_module, "merge_dict_attr", flaky_merge_dict_attr
             )
+            with pytest.raises(RuntimeError, match="simulated failure"):
+                mpr_module._write_item_checkpoint_with_ledger(
+                    store, ledger_group, 5, entry, wall_clock_time=0.1
+                )
         assert store.payload_paths() == []
 
         assert call_count["n"] == 2
@@ -1937,6 +1897,33 @@ class TestItemCheckpointWithLedger:
             else False
         )
         assert done_at_5 is False
+
+        real_mark = mpr_module.mark_ledger_item_done
+        marked: list[int] = []
+
+        def spy_mark(group, index, *args, **kwargs):
+            path = store.payload_path(worker_id(), 5)
+            assert path.exists()
+            assert path.resolve() not in _open_hdf5_file_paths()
+            assert not list(store.directory.glob("*.tmp"))
+            assert 5 in store.payload_view(path).keys()
+            marked.append(index)
+            return real_mark(group, index, *args, **kwargs)
+
+        monkeypatch.setattr(mpr_module, "mark_ledger_item_done", spy_mark)
+        mpr_module._write_item_checkpoint_with_ledger(
+            store, ledger_group, 5, entry, wall_clock_time=0.1
+        )
+
+        assert marked == [5]
+        view = store.payload_view(store.payload_path(worker_id(), 5))
+        assert dict(view.iter_items("results")) == {5: 1}
+        assert dict(view.iter_items("item_wall_clock_times")) == {
+            5: pytest.approx(0.1)
+        }
+        status = read_swmr_ledger_status(ledger_group)
+        assert bool(status.done[5]) is True
+        assert status.wall_clock_times[5] == pytest.approx(0.1)
 
     @pytest.mark.parametrize("program_executor", ["serial", "pool"])
     def test_no_item_ledger_open_after_run(self, tmp_path, program_executor):

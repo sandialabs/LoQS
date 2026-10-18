@@ -1383,9 +1383,9 @@ class TestResumeFromCheckpoint:
             # Verify pre-condition: results.h5 exists but no consolidated data yet,
             # only worker files
             assert (checkpoint_dir / "results.h5").exists()
-            worker_files_before = list(
-                checkpoint_dir.glob("worker_*_checkpoint.h5")
-            )
+            worker_files_before = CheckpointStore(
+                checkpoint_dir, SHOT_LAYOUT
+            ).ledger_paths()
             assert len(worker_files_before) == 2
 
             # Run with checkpoint=True, resume=True: should detect all shots done,

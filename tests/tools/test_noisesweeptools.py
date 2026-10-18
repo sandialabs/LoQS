@@ -866,8 +866,8 @@ class TestNoiseSweepRunnerHooks:
         assert result.failure_rates == [0.1, 0.2, None]
         assert result.stderrs == [0.05, 0.06, None]
         assert result.strengths == [0.1, 0.2, 0.3]
-        # Verify no result.h5 file was created
-        assert not (tmp_path.exists() and any(tmp_path.glob("**/result.h5")))
+        # Verify no file was written
+        assert not any(path.is_file() for path in tmp_path.rglob("*"))
 
     def test_chkpt_subdir_prefix_is_point(self):
         """NoiseSweepRunner.CHKPT_SUBDIR_PREFIX should be "point"."""
