@@ -12,6 +12,7 @@ from pygsti.protocols import ExperimentDesign
 
 from loqs.backends import DictNoiseModel, STIMQuantumState, StimCircuitGateRep
 from loqs.core import PatchGeometry
+from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as steane_codepack
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.tools.multiprogramrunner import CheckpointConfig
@@ -275,7 +276,9 @@ class TestEdesignRunnerHooks:
             s.circs[1].str: 0,
         }
         stored._reduced_results = {}
-        stored.write(ckpt / "runner.h5")
+        stored.item_wall_clock_times = {}
+        stored.shot_wall_clock_times = {}
+        CheckpointStore(ckpt, ITEM_LAYOUT).write_snapshot(stored)
 
         ds = s.simulate(ckpt=ckpt)
 

@@ -67,25 +67,19 @@ def write_item_ledger(
         update_ledger_heartbeat,
         update_ledger_in_flight,
     )
-    from loqs.tools.multiprogramrunner import (
-        _ITEM_LEDGER_FIELDS,
-        _write_item_checkpoint_with_ledger,
-    )
+    from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
+    from loqs.tools.multiprogramrunner import _ITEM_LEDGER_FIELDS
 
-    directory = Path(directory)
-    path = directory / f"worker_{host}_{pid}_{suffix}_runner.h5"
+    store = CheckpointStore(Path(directory), ITEM_LAYOUT)
+    worker = f"{host}_{pid}_{suffix}"
+    path = store.ledger_path(worker)
     f, group = open_swmr_writer(path, _ITEM_LEDGER_FIELDS)
     try:
         for index in done:
             mark_ledger_item_done(group, index, 1.0)
         for index, value in (payloads or {}).items():
-            payload_path = (
-                directory
-                / f"worker_{host}_{pid}_{suffix}_item_{index}_payload.h5"
-            )
-            _write_item_checkpoint_with_ledger(
-                group, payload_path, index, [("results", value, False)], 1.0
-            )
+            store.put_batch({index: {"results": value}}, worker_id=worker)
+            mark_ledger_item_done(group, index, 1.0)
         if current_item is not None:
             update_ledger_in_flight(
                 group, current_item, shots_done, shots_total

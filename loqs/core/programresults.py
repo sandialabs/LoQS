@@ -11,8 +11,6 @@
 
 from __future__ import annotations
 
-import random
-import time
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager
@@ -42,16 +40,12 @@ from typing import TYPE_CHECKING, Iterable
 
 from loqs.internal.checkpointstore import (
     SHOT_LAYOUT,
+    BaseCheckpointStore,
     BatchReceipt,
     CheckpointStore,
+    _NestedStore,
 )
-from loqs.internal.streamingmerge import (
-    _normalize_decoded_int_keyed_dict,
-    decode_object_attrs,
-    get_dict_attr_value,
-    get_dict_attr_group,
-    get_dict_attr_keys,
-)
+from loqs.internal.streamingmerge import _normalize_decoded_int_keyed_dict
 
 if TYPE_CHECKING:
     from loqs.core.quantumprogram import QuantumProgram
@@ -211,14 +205,9 @@ class ProgramResults(Displayable):
         )
         """Directory where checkpoint files are stored."""
 
-        self._nested_source_file: Path | None = None
-        """File path containing a nested group source (an entry inside
-        another object's _program_results dict attribute), if this
-        ProgramResults was constructed to load shots from a nested source."""
-
-        self._nested_source_index: int | None = None
-        """Integer key of this ProgramResults inside a parent's _program_results
-        dict attribute, if loaded from a nested source."""
+        self._nested_store: _NestedStore | None = None
+        """A read-only view of this object's entry inside another store's
+        `_program_results`, if this is a lazy nested proxy."""
 
         self._name_value: Any = name
         """Backing field for the `name` property."""
@@ -256,12 +245,6 @@ class ProgramResults(Displayable):
         call for this object's lifetime, so an object reused across shots is written
         once and cheaply referenced afterward, instead of re-expanded every time."""
 
-        self._checkpoint_decode_cache: ResolvingDecodeCache = (
-            ResolvingDecodeCache(root=None, format="hdf5")
-        )
-        """Persistent `Serializable.decode` cache shared across lazy shot loading
-        calls; `_root` is re-pointed at each freshly-opened file handle."""
-
         self._shot_store_cache: CheckpointStore | None = None
         """The store `_shot_store()` hands out. Not serialized."""
 
@@ -274,23 +257,19 @@ class ProgramResults(Displayable):
             self.parent_program = str(self._shot_store().canonical_path)
             self._seed_encode_cache()
 
-    def _set_nested_shot_source(self, source_file: Path, index: int) -> None:
-        """Configure this ProgramResults to load shots from a nested source.
+    def _set_nested_shot_source(self, view: _NestedStore) -> None:
+        """Configure this ProgramResults to read from a nested view.
 
-        Sets up internal fields to point to an entry inside another object's
-        own `_program_results` dict attribute, rather than a standalone
-        checkpoint file.
+        The view is a store's `nested(index)` over an entry of another
+        object's `_program_results`. Shots are read through it, and `name`,
+        `parent_program` and `max_frame_limit` resolve from it on first use.
 
         Parameters
         ----------
-        source_file : Path
-            Path to the HDF5 file containing the parent object.
-        index : int
-            Integer key of this ProgramResults inside the parent's
-            `_program_results` dict attribute.
+        view : _NestedStore
+            The read-only nested view of this object's entry.
         """
-        self._nested_source_file = Path(source_file)
-        self._nested_source_index = index
+        self._nested_store = view
         self._name_value = _UNRESOLVED
         self._parent_program_value = _UNRESOLVED
         if self._max_frame_limit_value is None:
@@ -302,9 +281,7 @@ class ProgramResults(Displayable):
         first access if this is a lazy nested-source proxy that hasn't
         resolved it yet."""
         if self._name_value is _UNRESOLVED:
-            self._name_value = self._resolve_nested_attr(
-                "name", default="(Unnamed program results)"
-            )
+            self._name_value = self._resolve_nested_attr("name")
         return self._name_value
 
     @name.setter
@@ -318,7 +295,7 @@ class ProgramResults(Displayable):
         this is a lazy nested-source proxy that hasn't resolved it yet."""
         if self._parent_program_value is _UNRESOLVED:
             self._parent_program_value = self._resolve_nested_attr(
-                "parent_program", default=None
+                "parent_program"
             )
         return self._parent_program_value
 
@@ -335,7 +312,7 @@ class ProgramResults(Displayable):
         nested-source proxy that hasn't resolved it yet."""
         if self._max_frame_limit_value is _UNRESOLVED:
             self._max_frame_limit_value = self._resolve_nested_attr(
-                "max_frame_limit", default=None
+                "max_frame_limit"
             )
         return self._max_frame_limit_value
 
@@ -343,46 +320,14 @@ class ProgramResults(Displayable):
     def max_frame_limit(self, value: "int | None") -> None:
         self._max_frame_limit_value = value
 
-    def _resolve_nested_attr(self, attr_name: str, default: Any) -> Any:
-        """Lazily read a single non-dict attribute (`name` or
-        `parent_program`) from this object's own nested-source entry,
-        without decoding `shot_histories` or any other sibling attribute.
-        Only ever meaningful for a `ProgramResults` configured via
-        `_set_nested_shot_source`; returns `default` for anything else or
-        on any lookup failure.
+    def _resolve_nested_attr(self, attr_name: str) -> Any:
+        """Read one non-streamed attribute (`name`, `parent_program` or
+        `max_frame_limit`) from this proxy's nested entry, without decoding
+        its shots. Errors propagate, so a damaged entry is never hidden by
+        a default.
         """
-        if (
-            self._nested_source_file is None
-            or self._nested_source_index is None
-            or not self._nested_source_file.exists()
-        ):
-            return default
-
-        def _read_attr(f: h5py.File) -> Any:
-            source_group = self._resolve_shot_source_group(f)
-            if source_group is None or len(source_group) == 0:
-                return default
-
-            # Unwrap the Serializable wrapper group (same pattern
-            # already used by _load_shot_from_single_file).
-            actual_group = source_group[next(iter(source_group.keys()))]
-
-            decode_cache = getattr(self, "_checkpoint_decode_cache", None)
-            if isinstance(decode_cache, ResolvingDecodeCache):
-                decode_cache._root = f
-            else:
-                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-                self._checkpoint_decode_cache = decode_cache
-
-            return decode_object_attrs(
-                actual_group, [attr_name], decode_cache
-            ).get(attr_name, default)
-
-        try:
-            with h5py.File(self._nested_source_file, "r") as f:
-                return _read_attr(f)
-        except (ValueError, KeyError):
-            return default
+        assert self._nested_store is not None
+        return self._nested_store.read_attrs((attr_name,))[attr_name]
 
     def _shot_store(self) -> CheckpointStore:
         """The shot-level checkpoint store for this object's directory and
@@ -509,33 +454,18 @@ class ProgramResults(Displayable):
     def _iter_histories_in_order(self) -> Iterator[History]:
         """Yield every available shot's history in ascending shot order.
 
-        A nested source reads its shots one by one; a checkpoint directory
-        reads the stored shots not in memory in one pass, one decoded value
-        at a time; otherwise only the shots in memory are yielded.
+        The reader (a nested view or the checkpoint directory's store) gives
+        the stored shots not in memory in one pass, one decoded value at a
+        time; without one only the shots in memory are yielded.
         """
-        if self._nested_source_file is not None:
-            if not self._lazy_loading:
-                yield from (
-                    self.shot_histories[i] for i in sorted(self.shot_histories)
-                )
-                return
-            nested = self._nested_shot_indices(
-                expected_num_shots=self.num_shots
-            )
-            for idx in sorted(set(nested) | set(self.shot_histories)):
-                history = self.get_shot_history(idx)
-                if history is not None:
-                    yield history
-            return
-
         in_memory = sorted(self.shot_histories)
-        if self._checkpoint_dir is None:
+        reader = self._shot_reader()
+        if reader is None:
             yield from (self.shot_histories[i] for i in in_memory)
             return
 
-        store = self._shot_store()
-        stored = store.iter_items(
-            keys=[k for k in store.keys() if k not in self.shot_histories]
+        stored = reader.iter_items(
+            keys=[k for k in reader.keys() if k not in self.shot_histories]
         )
         pending = next(stored, None)
         for idx in in_memory:
@@ -547,49 +477,15 @@ class ProgramResults(Displayable):
             yield pending[1]
             pending = next(stored, None)
 
-    def _nested_shot_indices(
-        self, expected_num_shots: int | None = None
-    ) -> list[int]:
-        """Return the shot indices of this object's nested `runner.h5`
-        source, or `[]` without one or when it holds none.
-
-        `expected_num_shots`, when given, opts into retrying (up to 5 total
-        attempts, jittered exponential backoff) whenever a read finds a
-        stale key (`KeyError`) or returns fewer keys than expected, to ride
-        out a benign write/read race. A file that can't be opened
-        (`OSError`) ends the attempts. Left `None`, a single successful
-        read is returned immediately regardless of completeness.
-        """
-        source_file = self._nested_source_file
-        if source_file is None or not source_file.exists():
-            return []
-        max_attempts = 5 if expected_num_shots is not None else 1
-
-        def _read_nested(f: h5py.File) -> list[int]:
-            source_group = self._resolve_shot_source_group(f)
-            if source_group is None:
-                return []
-            return get_dict_attr_keys(source_group, "shot_histories")
-
-        keys: list[int] = []
-        for attempt in range(max_attempts):
-            try:
-                with h5py.File(source_file, "r") as f:
-                    keys = _read_nested(f)
-            except KeyError:
-                keys = []
-            except OSError:
-                # Not a stale read: another attempt would only retry the
-                # open.
-                return []
-            if keys and (
-                expected_num_shots is None or len(keys) >= expected_num_shots
-            ):
-                return keys
-            if attempt < max_attempts - 1:
-                delay = 0.01 * (2**attempt)
-                time.sleep(delay + random.uniform(0, delay))
-        return keys  # Whatever the last read found
+    def _shot_reader(self) -> BaseCheckpointStore | None:
+        """The store shots are read from: the nested view of a lazy proxy,
+        else the shot store when a checkpoint directory is set, else
+        `None`."""
+        if self._nested_store is not None:
+            return self._nested_store
+        if self._checkpoint_dir is not None:
+            return self._shot_store()
+        return None
 
     def mark_shots_as_written(self, shot_indices: list[int]) -> None:
         """Mark shots as having been written to checkpoint files.
@@ -925,14 +821,17 @@ class ProgramResults(Displayable):
             if shot_index in self.shot_histories:
                 return self.shot_histories[shot_index]
 
-            # Not cached: load from the nested source or the store (a missing
-            # shot is None; a corrupt file raises `CheckpointReadError`).
+            # Not cached: load from the reader (a missing shot is None; a
+            # corrupt file raises `CheckpointReadError`).
+            # Known and deferred: right after `collect_shot_data` this read
+            # is about 1 ms slower per call than before the checkpoint store
+            # (cold and repeated reads aren't). Probably the collect leaves
+            # no decoded shots for it to hit; keeping them would cost memory.
             loaded = False
-            if self._nested_source_file is not None:
-                loaded = self._load_shot_from_checkpoint(shot_index)
-            elif self._checkpoint_dir is not None:
+            reader = self._shot_reader()
+            if reader is not None:
                 try:
-                    history = self._shot_store().get(shot_index)
+                    history = reader.get(shot_index)
                 except KeyError:
                     pass
                 else:
@@ -956,115 +855,3 @@ class ProgramResults(Displayable):
                 return None
 
             return self.shot_histories[shot_index]
-
-    def _resolve_shot_source_group(self, f: h5py.File) -> h5py.Group | None:
-        """Return the group set up by `_set_nested_shot_source`.
-
-        Parameters
-        ----------
-        f : h5py.File
-            An open HDF5 file.
-
-        Returns
-        -------
-        h5py.Group | None
-            The nested group, or None if the nested source isn't configured.
-        """
-        if (
-            self._nested_source_file is None
-            or self._nested_source_index is None
-        ):
-            return None
-        # get_dict_attr_group descends past any wrapper groups itself.
-        try:
-            return get_dict_attr_group(
-                f, "_program_results", self._nested_source_index
-            )
-        except (KeyError, TypeError):
-            return None
-
-    def _load_shot_from_checkpoint(self, shot_index: int) -> bool:
-        """Load a shot from this object's nested source file.
-
-        Parameters
-        ----------
-        shot_index:
-            Index of the shot to load.
-
-        Returns
-        -------
-        bool
-            True if the shot was loaded; always False without a nested
-            source (standalone shots are read through the checkpoint store).
-        """
-        if self._nested_source_file is None:
-            return False
-        return self._load_shot_from_single_file(
-            self._nested_source_file, shot_index
-        )
-
-    def _load_shot_from_single_file(
-        self, filename: Path, shot_index: int
-    ) -> bool:
-        """Load one shot from a nested source without decoding the rest.
-
-        Parameters
-        ----------
-        filename:
-            Path to the nested source file.
-        shot_index:
-            Index of the shot to load.
-
-        Returns
-        -------
-        bool
-            True if shot was successfully loaded, False otherwise.
-        """
-
-        def _load(f: h5py.File) -> bool:
-            # Re-point the persistent decode cache at this freshly-opened
-            # file handle (the previous one, if any, is already closed).
-            decode_cache = self._checkpoint_decode_cache
-            decode_cache._root = f
-
-            source_group = self._resolve_shot_source_group(f)
-            if source_group is None or len(source_group) == 0:
-                return False
-            # A nested dict entry holds the raw Serializable-encoded
-            # wrapper; unwrap it to reach the ProgramResults attributes.
-            actual_group = source_group[next(iter(source_group.keys()))]
-
-            # A KeyError propagates so the loop below can retry it as a
-            # possibly-transient "not visible yet" race.
-            history = get_dict_attr_value(
-                actual_group,
-                "shot_histories",
-                shot_index,
-                decode_cache=decode_cache,
-            )
-
-            if self._lazy_loading:
-                self._memory_cache[shot_index] = history
-            else:
-                self.shot_histories[shot_index] = history
-                # Remove from unwritten_shots since it's already checkpointed
-                if shot_index in self._unwritten_shots:
-                    self._unwritten_shots.remove(shot_index)
-
-            return True
-
-        # The file is reopened on each attempt, retrying only a stale
-        # KeyError. An open error is not retried and propagates.
-        max_attempts = 5
-        for attempt in range(max_attempts):
-            try:
-                with h5py.File(filename, "r") as f:
-                    return _load(f)
-            except ValueError:
-                return False
-            except KeyError:
-                if attempt == max_attempts - 1:
-                    return False
-                delay = 0.01 * (2**attempt)
-                time.sleep(delay + random.uniform(0, delay))
-        return False

@@ -22,20 +22,17 @@ import loqs.core.programresults as programresults_module
 import loqs.internal.swmrledger as swmrledger_module
 from loqs.core.programresults import ProgramResults
 from loqs.internal.checkpointstore import (
+    ITEM_LAYOUT,
     SHOT_LAYOUT,
     CheckpointReadError,
     CheckpointStore,
 )
 from loqs.internal.streamingmerge import (
     _resolve_checkpoint_object_group,
-    merge_dict_attr,
-    read_checkpoint_dict_attr_union,
-    read_checkpoint_dict_attr_union_keys,
 )
 from loqs.core.history import History
 from loqs.core import Frame, QuantumProgram
 from loqs.internal.serializable import Serializable
-from loqs.internal.encoder import HDF5Encoder
 from loqs.internal import worker_id as global_worker_id
 
 # Transient per-writer files in a checkpoint directory: SWMR ledgers and
@@ -44,79 +41,6 @@ _WORKER_FILE_GLOBS = (
     "worker_*_checkpoint.h5",
     "worker_*_shots_*_payload.h5",
 )
-
-
-def _build_reference_before_source_checkpoint(
-    path: Path, source_index: int, copy_index: int
-) -> None:
-    """Build a checkpoint-shaped HDF5 file (a `results.h5` or a
-    `worker_*_checkpoint.h5`) whose `shot_histories` holds two shots --
-    `source_index` and `copy_index` -- encoding the same `History`
-    instance, so the second becomes a `cache_type="reference"` (a plain
-    dict decode_cache can self-heal a "copy" node reached out of order,
-    but never a "reference" node, so this is the case that actually
-    needs `ResolvingDecodeCache`).
-
-    The copy's own HDF5 group is placed at physical index 0 and the
-    source's at index 1 regardless of `source_index`/`copy_index`, since
-    decoding a groups-format iterable walks ascending physical index --
-    forcing the reference to be decoded before its own source.
-    """
-    with h5py.File(path, "a") as f:
-        # Bootstrap a ProgramResults envelope like `_ensure_snapshot`, then
-        # drop its empty shot_histories so a custom one can be built.
-        Serializable.encode(
-            ProgramResults(shot_histories={}),
-            format="hdf5",
-            h5_group=f,
-            encode_cache={},
-        )
-        root_group = _resolve_checkpoint_object_group(f)
-        del root_group["shot_histories"]
-
-        dict_group = root_group.create_group("shot_histories")
-        dict_subgroup = dict_group.create_group("dict")
-        keys_group = dict_subgroup.create_group("keys")
-        values_group = dict_subgroup.create_group("values")
-        keys_iterable = keys_group.create_group("iterable", track_order=True)
-        values_iterable = values_group.create_group(
-            "iterable", track_order=True
-        )
-        keys_iterable.attrs["iterable_type"] = "list"
-        values_iterable.attrs["iterable_type"] = "list"
-        values_iterable.attrs["storage_format"] = "groups"
-
-        # Keys: dataset format, ordered to match values' physical index
-        # order (copy's key at index 0, source's key at index 1).
-        keys_iterable.attrs["storage_format"] = "dataset"
-        HDF5Encoder._encode_iterable_dataset(
-            keys_iterable, [copy_index, source_index], True
-        )
-
-        shared_history = History()
-        shared_history.append(Frame({"marker": "shared"}))
-
-        # Create both groups up front, independent of encode order below,
-        # so physical index order alone controls decode order.
-        copy_group = values_iterable.create_group("0", track_order=True)
-        source_group = values_iterable.create_group("1", track_order=True)
-
-        shared_encode_cache: dict = {}
-        # Encode the source first (registers the cache entry).
-        Serializable.encode(
-            shared_history,
-            format="hdf5",
-            h5_group=source_group,
-            encode_cache=shared_encode_cache,
-        )
-        # Encode the exact same instance again (finds the cache match by
-        # object identity, becoming a "reference" rather than a "copy").
-        Serializable.encode(
-            shared_history,
-            format="hdf5",
-            h5_group=copy_group,
-            encode_cache=shared_encode_cache,
-        )
 
 
 def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
@@ -145,20 +69,37 @@ def _results_with_shots(
     return results
 
 
+class _ItemParent(Serializable):
+    """A minimal item-level parent: the attributes of `ITEM_LAYOUT`."""
+
+    _SERIALIZE_ATTRS = [
+        "_reduced_results",
+        "item_wall_clock_times",
+        "shot_wall_clock_times",
+        "_program_results",
+    ]
+
+    def __init__(self):
+        self._reduced_results = {}
+        self.item_wall_clock_times = {}
+        self.shot_wall_clock_times = {}
+        self._program_results = {}
+
+
 def _write_nested_source(
-    path: Path, entries: dict[int, ProgramResults]
-) -> Path:
-    """Write a parent HDF5 file whose `_program_results` dict attribute holds
-    `entries`."""
-    with h5py.File(path, "w") as parent_f:
-        merge_dict_attr(
-            parent_f.create_group("container"),
-            "_program_results",
-            list(entries.items()),
-            key_use_dataset=True,
-            value_use_dataset=False,
+    directory: Path, entries: dict[int, ProgramResults]
+) -> CheckpointStore:
+    """Write an item-level canonical file in `directory` whose
+    `_program_results` attribute holds `entries`, returning its store."""
+    store = CheckpointStore(directory, ITEM_LAYOUT)
+    store.write_snapshot(_ItemParent())
+    for key, results in entries.items():
+        store.put_batch(
+            {key: {"results": key, "_program_results": results}},
+            worker_id=f"w_{key}",
         )
-    return path
+    store.consolidate()
+    return store
 
 
 @contextlib.contextmanager
@@ -1793,77 +1734,10 @@ class TestParentProgramFileWriting:
 class TestResumeCheckpointing:
     """Test resume functionality for checkpoint-enabled runs."""
 
-    def test_load_done_shots_returns_union_from_checkpoint_and_workers(self):
-        """read_checkpoint_dict_attr_union returns the union of shots
-        from results.h5 and all transient worker shot files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            checkpoint_dir.mkdir()
-
-            # Write to results.h5
-            results_main = ProgramResults(lazy_loading=False)
-            for i in range(3):
-                history = History()
-                history.append(Frame({"source": "main", "idx": i}))
-                results_main.add_shot(i, history)
-            results_main.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            # Write to worker files
-            for w in range(2):
-                results_w = ProgramResults(lazy_loading=False)
-                for i in range(3, 6):
-                    history = History()
-                    history.append(Frame({"source": f"worker{w}", "idx": i}))
-                    results_w.add_shot(i, history)
-                results_w.checkpoint(
-                    checkpoint_dir=checkpoint_dir, worker_id=f"w{w}"
-                )
-
-            # Load done shots
-            done = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                "results.h5",
-                _WORKER_FILE_GLOBS,
-                "shot_histories",
-            )
-            assert len(done) == 6
-            for i in range(6):
-                assert i in done
-
-    def test_load_done_shots_resolves_reference_before_source(self):
-        """read_checkpoint_dict_attr_union must decode with a
-        `ResolvingDecodeCache`, not a bare dict, so a "reference" node
-        physically stored before its own "source" node still resolves
-        correctly instead of raising `RuntimeError`.
-
-        Builds a results.h5-shaped file by hand whose two shots both encode
-        the exact same History instance (the second becomes a
-        `cache_type="reference"`), with the referencing shot's own HDF5
-        group placed at physical index 0 and the source shot's group at
-        index 1.
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-            _build_reference_before_source_checkpoint(
-                checkpoint_dir / "results.h5", source_index=1, copy_index=0
-            )
-
-            done = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                "results.h5",
-                _WORKER_FILE_GLOBS,
-                "shot_histories",
-            )
-
-            assert set(done.keys()) == {0, 1}
-            for shot_index, history in done.items():
-                assert isinstance(history, History)
-                assert history[0]["marker"] == "shared"
-
     def test_nested_source_load_shot(self, tmp_path):
         """Test loading a shot from a nested source within another file."""
-        parent_path = _write_nested_source(
-            tmp_path / "parent.h5",
+        store = _write_nested_source(
+            tmp_path,
             {
                 0: _results_with_shots(range(3), "nested"),
                 1: _results_with_shots(range(3, 6), "nested"),
@@ -1871,21 +1745,18 @@ class TestResumeCheckpointing:
         )
 
         nested_pr = ProgramResults(lazy_loading=True)
-        nested_pr._set_nested_shot_source(parent_path, 0)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
-        # Manually set checkpoint_dir so it looks in the right place
-        nested_pr._checkpoint_dir = tmp_path
-
-        # Load shot 1 from the nested source
-        assert nested_pr._load_shot_from_checkpoint(1) is True
-        assert 1 in nested_pr._memory_cache
-        history = nested_pr._memory_cache[1]
+        history = nested_pr.get_shot_history(1)
         assert history is not None
+        assert history[0]["nested"] == 1
+        assert 1 in nested_pr._memory_cache
+        assert nested_pr.get_shot_history(4) is None
 
     @pytest.mark.parametrize(
         "read",
         [
-            lambda nested_pr: nested_pr._load_shot_from_checkpoint(1),
+            lambda nested_pr: nested_pr.get_shot_history(1),
             lambda nested_pr: nested_pr.max_frame_limit,
         ],
         ids=["load_shot", "resolve_nested_attr"],
@@ -1893,28 +1764,24 @@ class TestResumeCheckpointing:
     def test_nested_source_open_error_propagates(
         self, tmp_path, monkeypatch, read
     ):
-        """A single open of the nested source that raises `BlockingIOError`
-        propagates, instead of silently reporting the shot as not found or
-        falling back to the `default` of `None` for a lazily resolved
-        attribute."""
-        parent_path = self._build_nested_source_with_name_and_parent(
+        """An open of the nested source that raises `BlockingIOError`
+        surfaces as a `CheckpointReadError` naming the file, instead of
+        silently reporting the shot as not found or falling back to a
+        default for a lazily resolved attribute."""
+        store = self._build_nested_source_with_name_and_parent(
             tmp_path, max_frame_limit=17
         )
 
         nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
-        nested_pr._set_nested_shot_source(parent_path, 0)
-
-        call_count = {"n": 0}
+        nested_pr._set_nested_shot_source(store.nested(0))
 
         def always_fails(path, mode, *args, **kwargs):
-            call_count["n"] += 1
             raise BlockingIOError("simulated lock")
 
         monkeypatch.setattr(h5py, "File", always_fails)
 
-        with pytest.raises(BlockingIOError):
+        with pytest.raises(CheckpointReadError, match="runner.h5"):
             read(nested_pr)
-        assert call_count["n"] == 1
 
     def test_get_shot_history_absent_shot_is_none_and_corrupt_raises(
         self, tmp_path
@@ -1998,13 +1865,12 @@ class TestResumeCheckpointing:
     def test_collect_shot_data_reads_a_lazy_nested_source(self, tmp_path):
         """A lazy nested `ProgramResults` with no shots in memory collects
         all its shots. Catches the nested branch returning `[]`."""
-        parent_path = _write_nested_source(
-            tmp_path / "parent.h5",
-            {0: _results_with_shots(range(4), "nested")},
+        store = _write_nested_source(
+            tmp_path, {0: _results_with_shots(range(4), "nested")}
         )
 
         nested = ProgramResults(lazy_loading=True)
-        nested._set_nested_shot_source(parent_path, 0)
+        nested._set_nested_shot_source(store.nested(0))
         assert not nested.shot_histories
         assert nested.collect_shot_data("nested", [0]) == [
             [0],
@@ -2013,31 +1879,15 @@ class TestResumeCheckpointing:
             [3],
         ]
 
-    def test_nested_source_resolve_group(self, tmp_path):
-        """Test that _resolve_shot_source_group correctly navigates nested groups."""
-        test_path = _write_nested_source(
-            tmp_path / "test.h5", {5: _results_with_shots([0], "test")}
-        )
-
-        with h5py.File(test_path, "r") as f:
-            nested_pr = ProgramResults()
-            nested_pr._set_nested_shot_source(test_path, 5)
-
-            source_group = nested_pr._resolve_shot_source_group(f)
-            assert source_group is not None
-            assert isinstance(source_group, h5py.Group)
-
     def test_nested_source_does_not_decode_all_shots(self, tmp_path):
         """Test that loading from nested source doesn't decode all shots."""
-        parent_path = _write_nested_source(
-            tmp_path / "parent.h5",
-            {0: _results_with_shots(range(20), "index")},
+        store = _write_nested_source(
+            tmp_path, {0: _results_with_shots(range(20), "index")}
         )
 
         # Load from nested source with decoding spy
         nested_pr = ProgramResults(lazy_loading=True)
-        nested_pr._set_nested_shot_source(parent_path, 0)
-        nested_pr._checkpoint_dir = tmp_path
+        nested_pr._set_nested_shot_source(store.nested(0))
 
         # Spy on Serializable.decode, capturing each group's path eagerly
         # (h5py.Group.name is None once the source file closes).
@@ -2053,7 +1903,7 @@ class TestResumeCheckpointing:
             Serializable, "decode", side_effect=spy_decode
         ):
             # Load just one shot
-            assert nested_pr._load_shot_from_checkpoint(5) is True
+            assert nested_pr.get_shot_history(5) is not None
 
         # Verify only shot 5's own subtree was decoded: every decoded
         # group must live at or below shot 5's own iterable entry.
@@ -2082,7 +1932,7 @@ class TestResumeCheckpointing:
             parent_program="RealProgram",
             max_frame_limit=max_frame_limit,
         )
-        return _write_nested_source(Path(temp_dir) / "parent.h5", {index: pr})
+        return _write_nested_source(Path(temp_dir), {index: pr})
 
     @pytest.mark.parametrize(
         "attr, expected",
@@ -2099,26 +1949,29 @@ class TestResumeCheckpointing:
         `.max_frame_limit` (constructed as `None`) to the real stored values
         on first access, instead of staying at their bare constructor
         defaults."""
-        parent_path = self._build_nested_source_with_name_and_parent(
+        store = self._build_nested_source_with_name_and_parent(
             tmp_path, max_frame_limit=17
         )
 
         nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
-        nested_pr._set_nested_shot_source(parent_path, 0)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
         assert getattr(nested_pr, attr) == expected
 
-    def test_set_nested_shot_source_preserves_non_none_max_frame_limit(self):
+    def test_set_nested_shot_source_preserves_non_none_max_frame_limit(
+        self, tmp_path
+    ):
         """A `ProgramResults` constructed with a real, non-`None`
         `max_frame_limit` keeps that value after `_set_nested_shot_source` is
         called, since the `is None` guard there only marks the field
         unresolved when it was never actually set."""
         results = ProgramResults(max_frame_limit=99)
-        # Deliberately points at a file that doesn't exist -- if the value
-        # were reset to _UNRESOLVED, resolution would fall through to the
-        # `default=None` case (a missing file) rather than raising, so a
-        # value of 99 surviving is real proof the guard skipped it.
-        results._set_nested_shot_source(Path("/never/written.h5"), 0)
+        # Deliberately a view over a directory with no file -- if the value
+        # were reset to _UNRESOLVED, resolution would raise on the missing
+        # entry, so a value of 99 surviving is real proof the guard skipped
+        # it.
+        store = CheckpointStore(tmp_path, ITEM_LAYOUT)
+        results._set_nested_shot_source(store.nested(0))
 
         assert results.max_frame_limit == 99
 
@@ -2126,17 +1979,14 @@ class TestResumeCheckpointing:
         self, tmp_path
     ):
         """Resolving `.name` alone must never decode `shot_histories` (its
-        own real, non-collapsed HDF5 subgroup) or invoke the streaming
-        per-shot decode helpers `_load_shot_from_single_file` itself uses.
-        Confirmed two ways: (1) `Serializable.decode` is never called with
-        the `shot_histories` group (or anything under it) as its source,
-        which a naive "just decode the whole nested object" implementation
-        would trip; (2) `get_dict_attr_value`, the per-shot streaming helper
-        actually reachable from this code path, is never called either."""
-        parent_path = self._build_nested_source_with_name_and_parent(tmp_path)
+        own real, non-collapsed HDF5 subgroup): `Serializable.decode` is
+        never called with the `shot_histories` group (or anything under it)
+        as its source, which a naive "just decode the whole nested object"
+        implementation would trip."""
+        store = self._build_nested_source_with_name_and_parent(tmp_path)
 
         nested_pr = ProgramResults(lazy_loading=True)
-        nested_pr._set_nested_shot_source(parent_path, 0)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
         real_decode = Serializable.decode
         decoded_source_names = []
@@ -2146,36 +1996,48 @@ class TestResumeCheckpointing:
                 decoded_source_names.append(source.name)
             return real_decode(source, *args, **kwargs)
 
-        with (
-            unittest.mock.patch.object(
-                Serializable, "decode", side_effect=spy_decode
-            ),
-            unittest.mock.patch.object(
-                programresults_module, "get_dict_attr_value"
-            ) as mock_get_value,
+        with unittest.mock.patch.object(
+            Serializable, "decode", side_effect=spy_decode
         ):
             assert nested_pr.name == "RealName"
 
         assert not any(
             "shot_histories" in name for name in decoded_source_names
         )
-        mock_get_value.assert_not_called()
 
     def test_lazy_name_resolution_reads_file_only_once(self, tmp_path):
         """A second read of an already-resolved lazy attribute must not
         re-open the nested source file."""
-        parent_path = self._build_nested_source_with_name_and_parent(tmp_path)
+        store = self._build_nested_source_with_name_and_parent(tmp_path)
 
         nested_pr = ProgramResults(lazy_loading=True)
-        nested_pr._set_nested_shot_source(parent_path, 0)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
         with _record_h5_opens() as open_calls:
             first = nested_pr.name
+            opens_after_first = len(open_calls)
             second = nested_pr.name
 
         assert first == "RealName"
         assert second == "RealName"
-        assert len(open_calls) == 1
+        assert opens_after_first > 0
+        assert len(open_calls) == opens_after_first
+
+    def test_lazy_nested_proxy_over_truncated_entry_raises(self, tmp_path):
+        """A lazy nested proxy whose `runner.h5` entry is damaged raises
+        `CheckpointReadError` from `name` and from `collect_shot_data`,
+        instead of returning the default name or no shots."""
+        store = self._build_nested_source_with_name_and_parent(tmp_path)
+        path = store.canonical_path
+        path.write_bytes(path.read_bytes()[:200])
+
+        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr._set_nested_shot_source(store.nested(0))
+
+        with pytest.raises(CheckpointReadError):
+            nested_pr.name
+        with pytest.raises(CheckpointReadError):
+            nested_pr.collect_shot_data("index", [0])
 
     def test_explicit_assignment_before_read_prevents_lazy_fetch(
         self, tmp_path
@@ -2183,12 +2045,12 @@ class TestResumeCheckpointing:
         """Explicitly assigning `.name`/`.parent_program` on a lazy proxy
         before ever reading them must prevent the lazy fetch from ever
         running -- the nested source file must never be opened."""
-        # A nonexistent file: if the lazy fetch ran, it would fail or
-        # silently return the default, either way showing assignment lost.
-        missing_path = tmp_path / "never_written.h5"
+        # A store with no file: if the lazy fetch ran, it would open or
+        # fail, either way showing the assignment lost.
+        store = CheckpointStore(tmp_path / "never_written", ITEM_LAYOUT)
 
         nested_pr = ProgramResults(lazy_loading=True)
-        nested_pr._set_nested_shot_source(missing_path, 0)
+        nested_pr._set_nested_shot_source(store.nested(0))
         nested_pr.name = "ExplicitName"
         nested_pr.parent_program = "ExplicitParent"
 
@@ -2199,14 +2061,8 @@ class TestResumeCheckpointing:
         assert len(open_calls) == 0
 
     def test_load_done_shot_indices_no_decoding_of_history_values(self):
-        """Verify read_checkpoint_dict_attr_union_keys never decodes History values.
-
-        This trap test ensures that read_checkpoint_dict_attr_union_keys uses
-        the cheap key-only scan (get_dict_attr_keys) and never attempts to
-        decode History values, even when the checkpoint file contains real
-        shot data that would normally be decoded. Uses the same technique as
-        test_count_done_shots_no_decoding_of_history_values.
-        """
+        """The shot store's `keys` never decodes History values, even when
+        the checkpoint file contains real shot data."""
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir)
 
@@ -2233,32 +2089,22 @@ class TestResumeCheckpointing:
                     # Recursive decode: a History value being decoded inside
                     # a parent. Should NOT happen here.
                     raise AssertionError(
-                        "read_checkpoint_dict_attr_union_keys should not decode "
-                        "History values; nested Serializable.decode detected"
+                        "keys() should not decode History values; "
+                        "nested Serializable.decode detected"
                     )
                 return original_decode(*args, **kwargs)
 
             with unittest.mock.patch.object(
                 Serializable, "decode", side_effect=decode_trap
             ):
-                indices = read_checkpoint_dict_attr_union_keys(
-                    checkpoint_dir,
-                    "results.h5",
-                    _WORKER_FILE_GLOBS,
-                    "shot_histories",
-                )
+                indices = CheckpointStore(checkpoint_dir, SHOT_LAYOUT).keys()
                 # If we get here without an AssertionError, the method
                 # successfully avoided decoding any History values.
-                assert indices == {0, 1, 2, 3, 4}
+                assert indices == [0, 1, 2, 3, 4]
 
     def test_load_done_shots_fresh_envelope_no_silent_failure(self):
-        """read_checkpoint_dict_attr_union finds fresh-envelope shots.
-
-        Tests that read_checkpoint_dict_attr_union correctly reports
-        already-checkpointed shots from a fresh-envelope file (created via
-        _ensure_snapshot), not silently returning an empty
-        dict due to a swallowed exception.
-        """
+        """The shot store finds the shots of a freshly written checkpoint,
+        rather than silently returning an empty dict."""
         from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2293,11 +2139,8 @@ class TestResumeCheckpointing:
 
             # A fresh-envelope checkpoint must report its shots as done, not
             # an empty dict (which would defeat resume).
-            done_shots = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                "results.h5",
-                _WORKER_FILE_GLOBS,
-                "shot_histories",
+            done_shots = dict(
+                CheckpointStore(checkpoint_dir, SHOT_LAYOUT).iter_items()
             )
             assert len(done_shots) == 3
             for i in range(3):

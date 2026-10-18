@@ -1082,7 +1082,9 @@ def test_shot_level_round_trip(tmp_path, histories):
 
 def test_item_level_round_trip(tmp_path, histories):
     runner = build_sweep_runner(tmp_path / "items", tmp_path / "shots")
-    store = CheckpointStore(tmp_path, ITEM_LAYOUT)
+    # The store sits in the runner's own item directory, which a read's lazy
+    # kept results are linked to.
+    store = CheckpointStore(tmp_path / "items", ITEM_LAYOUT)
     store.write_snapshot(runner)
     kept = {
         0: _shot_results(histories, [0, 1]),
@@ -1117,3 +1119,214 @@ def test_item_level_round_trip(tmp_path, histories):
     assert view.keys() == [2, 3]
     for key, history in view.iter_items():
         assert _seed(history) == BASE_SEED + key
+
+
+# -- keep-entries rewrite, config read and payload views -------------------
+
+
+def _kept_item_store(tmp_path, histories, items=(0, 1)):
+    """An item-layout canonical file holding `items`, each with two kept
+    shots, plus the runner that wrote it."""
+    runner = build_sweep_runner(tmp_path / "items", tmp_path / "shots")
+    runner.index_map = {"a": 0}
+    store = CheckpointStore(tmp_path / "store", ITEM_LAYOUT)
+    store.write_snapshot(runner)
+    for key in items:
+        store.put_batch(
+            {
+                key: {
+                    "results": histories[key],
+                    "item_wall_clock_times": 1.5 + key,
+                    "shot_wall_clock_times": {key: 0.25},
+                    "_program_results": _shot_results(
+                        histories, [2 * key, 2 * key + 1]
+                    ),
+                }
+            },
+            worker_id=f"w_{key}",
+        )
+    store.consolidate()
+    return runner, store
+
+
+def _snapshot_of(store) -> dict:
+    """Keys of every attr, one decoded value and the stored config."""
+    state = {attr.name: store.keys(attr.name) for attr in ITEM_LAYOUT.attrs}
+    state["seed"] = _seed(store.get(1))
+    state["index_map"] = store.read_config().index_map
+    return state
+
+
+def test_keep_entries_rewrite_interrupt_sweep(tmp_path, histories):
+    _, template = _kept_item_store(tmp_path / "t", histories)
+    new_runner = build_sweep_runner(tmp_path / "i2", tmp_path / "s2")
+    new_runner.index_map = {"a": 0, "b": 1}
+    probe_dir = tmp_path / "probe"
+    shutil.copytree(template.directory, probe_dir)
+    with record_h5_writes() as tap:
+        CheckpointStore(probe_dir, ITEM_LAYOUT).write_snapshot(
+            new_runner, keep_entries=True
+        )
+    session = sessions_in(tap.sessions, "runner")[0]
+    before = _snapshot_of(template)
+
+    failures = []
+    for event in range(len(session.events)):
+        copy_dir = tmp_path / f"e{event}"
+        shutil.copytree(template.directory, copy_dir)
+        store = CheckpointStore(copy_dir, ITEM_LAYOUT)
+        injection = injection_for(tap.sessions, "runner", 1, event_index=event)
+        with record_h5_writes(injection):
+            with pytest.raises(KeyboardInterrupt):
+                store.write_snapshot(new_runner, keep_entries=True)
+        names = sorted(p.name for p in copy_dir.glob("*"))
+        try:
+            ok = _snapshot_of(store) == before and names == ["runner.h5"]
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            names = [repr(exc)]
+        if not ok:
+            failures.append((event, session.events[event], names))
+    assert not failures, failures
+
+
+def test_keep_entries_rewrite_carries_committed_entries(tmp_path, histories):
+    _, store = _kept_item_store(tmp_path, histories)
+    old = {
+        attr.name: dict(store.iter_items(attr.name))
+        for attr in ITEM_LAYOUT.attrs
+    }
+    old_marker = _read_marker(store.canonical_path)
+    # An uncommitted tail beyond the marker must not be carried over.
+    with h5py.File(store.canonical_path, "a") as f:
+        merge_dict_attr(
+            _resolve_checkpoint_object_group(f),
+            "item_wall_clock_times",
+            [(9, 9.0)],
+            key_use_dataset=True,
+            value_use_dataset=True,
+        )
+    new_runner = build_sweep_runner(tmp_path / "i2", tmp_path / "s2")
+    new_runner.index_map = {"a": 0, "b": 1}
+    store.write_snapshot(new_runner, keep_entries=True)
+
+    assert store.read_config().index_map == {"a": 0, "b": 1}
+    assert _read_marker(store.canonical_path) == old_marker
+    assert store.keys("item_wall_clock_times") == [0, 1]
+    for name in ("item_wall_clock_times", "shot_wall_clock_times"):
+        assert dict(store.iter_items(name)) == old[name]
+    assert store.keys("_program_results") == [0, 1]
+    for key in (0, 1):
+        assert _seed(store.get(key)) == BASE_SEED + key
+        view = store.nested(key)
+        assert view.keys() == [2 * key, 2 * key + 1]
+        assert [_seed(h) for _, h in view.iter_items()] == [
+            BASE_SEED + 2 * key,
+            BASE_SEED + 2 * key + 1,
+        ]
+
+    store.put_batch(
+        {
+            2: {
+                "results": histories[2],
+                "_program_results": _shot_results(histories, [4, 5]),
+            }
+        },
+        worker_id="w_2",
+    )
+    store.consolidate()
+    assert store.keys() == [0, 1, 2]
+    assert store.nested(2).keys() == [4, 5]
+
+
+def test_keep_entries_refuses_a_missing_or_unmarked_file(tmp_path, histories):
+    runner = build_sweep_runner(tmp_path / "i", tmp_path / "s")
+    empty = CheckpointStore(tmp_path / "empty", ITEM_LAYOUT)
+    with pytest.raises(FileNotFoundError, match="runner.h5"):
+        empty.write_snapshot(runner, keep_entries=True)
+    assert not (tmp_path / "empty" / "runner.h5").exists()
+
+    _, store = _kept_item_store(tmp_path, histories)
+    _drop_marker(store.canonical_path)
+    before = store.canonical_path.read_bytes()
+    with pytest.raises(CheckpointReadError, match="runner.h5"):
+        store.write_snapshot(runner, keep_entries=True)
+    assert store.canonical_path.read_bytes() == before
+    assert sorted(p.name for p in store.directory.glob("*")) == ["runner.h5"]
+
+
+def test_read_config_rebuilds_without_decoding_kept_results(
+    tmp_path, histories, monkeypatch
+):
+    runner, store = _kept_item_store(tmp_path, histories)
+
+    def fail(cls, attrs):
+        raise AssertionError("a kept result was decoded")
+
+    monkeypatch.setattr(
+        ProgramResults, "_from_decoded_attrs", classmethod(fail)
+    )
+    config = store.read_config()
+    assert type(config) is type(runner)
+    assert config._mismatch_check_fields() == runner._mismatch_check_fields()
+    assert config.index_map == {"a": 0}
+    _drop_marker(store.canonical_path)
+    with pytest.raises(CheckpointReadError, match="runner.h5"):
+        store.read_config()
+
+
+def test_payload_view_reads_one_file(tmp_path, histories):
+    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    store.write_snapshot(_shot_results(histories, [0]))
+    store.put_batch(_shot_entries(histories, [1]), worker_id="w_a")
+    store.put_batch(_shot_entries(histories, [2]), worker_id="w_b")
+    path = store.payload_path("w_a", 1)
+    view = store.payload_view(path)
+    assert view.keys() == [1]
+    assert _seed(view.get(1)) == BASE_SEED + 1
+    for other in (0, 2):
+        with pytest.raises(KeyError):
+            view.get(other)
+    with pytest.raises(ValueError):
+        store.payload_view(store.canonical_path)
+    for call in (
+        lambda: view.put_batch({}),
+        lambda: view.consolidate(),
+        lambda: view.write_snapshot(ProgramResults()),
+        lambda: view.nested(0),
+        lambda: view.payload_view(path),
+    ):
+        with pytest.raises(TypeError):
+            call()
+    path.unlink()
+    assert view.keys(strict=False) == []
+    with pytest.raises(CheckpointReadError):
+        view.keys()
+
+
+def test_nested_read_attrs_is_lazy_and_strict(
+    tmp_path, histories, monkeypatch
+):
+    _, store = _kept_item_store(tmp_path, histories)
+    view = store.nested(1)
+    real_decode = Serializable.decode
+
+    def decode(*args, **kwargs):
+        value = real_decode(*args, **kwargs)
+        if isinstance(value, History):
+            raise AssertionError("a shot was decoded")
+        return value
+
+    monkeypatch.setattr(Serializable, "decode", staticmethod(decode))
+    attrs = view.read_attrs(("name", "parent_program"))
+    assert set(attrs) == {"name", "parent_program"}
+    # The trap does fire when a shot is read.
+    with pytest.raises(CheckpointReadError, match="a shot was decoded"):
+        view.get(3)
+    with pytest.raises(ValueError, match="streamed"):
+        view.read_attrs(("shot_histories",))
+    with pytest.raises(CheckpointReadError, match="runner.h5") as info:
+        store.nested(7).read_attrs(("name",))
+    assert info.value.path == str(store.canonical_path)
+    with pytest.raises(CheckpointReadError, match="runner.h5"):
+        view.read_attrs(("absent",))

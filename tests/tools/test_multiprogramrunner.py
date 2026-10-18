@@ -6,6 +6,7 @@ import gc
 import h5py
 import multiprocessing as mp
 import pickle
+import re
 import sys
 import time
 import unittest.mock
@@ -14,18 +15,27 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from _shared_checkpoint_test_helpers import (
+    build_program_interrupts_at,
+    build_sweep_runner,
+    record_h5_writes,
+    sessions_in,
+)
 from tqdm import tqdm as orig_tqdm
 
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.core import QuantumProgram
 from loqs.core.historydatacollector import HistoryDataCollector
+from loqs.core.programresults import ProgramResults
 from loqs.internal.streamingmerge import _resolve_checkpoint_object_group
 from loqs.internal import worker_id
-from loqs.internal.serializable import Serializable
-from loqs.internal.streamingmerge import (
-    iter_dict_attr_entries,
-    merge_dict_attr,
+from loqs.internal.checkpointstore import (
+    ITEM_LAYOUT,
+    CheckpointReadError,
+    CheckpointStore,
 )
+from loqs.internal.serializable import Serializable
+from loqs.tools.noisesweeptools import NoiseSweepRunner
 from loqs.tools.paralleltools import ParallelStrategy
 from loqs.tools.multiprogramrunner import (
     CheckpointConfig,
@@ -123,59 +133,6 @@ def _build_counter_program(
         patch_types={"Trivial": trivial_code},
         name=name,
     )
-
-
-def _write_worker_file(args):
-    """Helper for concurrent write test: each process writes entries to its worker file."""
-    checkpoint_dir, worker_id_base, num_entries = args
-
-    items_to_write = []
-    for i in range(num_entries):
-        items_to_write.append(
-            (worker_id_base * 100 + i, worker_id_base * 1000 + i)
-        )
-
-    # Simulate parallel worker file writes (like a real parallel run)
-    worker_file_path = Path(checkpoint_dir) / f"worker_{worker_id()}_runner.h5"
-    with h5py.File(worker_file_path, "a") as f:
-        for index, result in items_to_write:
-            merge_dict_attr(
-                f,
-                "results",
-                [(index, result)],
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-
-
-def _merge_into_file(
-    path, attr_name, entries, *, value_use_dataset=False, encode_cache=None
-):
-    """Append `entries` to the dict attribute `attr_name` of the HDF5 file
-    at `path` (created if absent), via `merge_dict_attr`."""
-    with h5py.File(path, "a") as f:
-        merge_dict_attr(
-            f,
-            attr_name,
-            entries,
-            encode_cache=encode_cache,
-            key_use_dataset=True,
-            value_use_dataset=value_use_dataset,
-        )
-
-
-def _write_bare_runner_h5(checkpoint_dir: Path) -> Path:
-    """Write a bare `runner.h5` with a valid object-group structure to
-    consolidate worker files into."""
-    runner_path = checkpoint_dir / "runner.h5"
-    _SimpleDoubleRunner(items=[]).write(runner_path, "hdf5")
-    return runner_path
-
-
-def _read_runner_dict_attr(runner_path: Path, attr_name: str) -> dict:
-    """Read the dict attribute `attr_name` back from a `runner.h5`."""
-    with h5py.File(runner_path, "r") as f:
-        return dict(iter_dict_attr_entries(f, attr_name))
 
 
 def _assert_wall_clock_times(runner, num_items, num_shots=None):
@@ -492,15 +449,10 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
 
         _crash_after_three_items(checkpoint_dir, items)
 
-        # After a crash, the worker file with partial results should still exist
+        # After a crash, the finished items' payloads stay in the store
         # (consolidation only happens on successful completion).
-        # Verify the partial results are in the worker file.
-        from loqs.tools.multiprogramrunner import _read_done_union
-
-        done = _read_done_union(
-            checkpoint_dir, runner_filename="runner.h5", attr_name="results"
-        )
-        assert len(done) == 3
+        store = CheckpointStore(checkpoint_dir, ITEM_LAYOUT)
+        assert store.keys() == [0, 1, 2]
 
         # Second run: resume with normal function on same checkpoint dir
         runner2 = _TrackingRunner(
@@ -606,11 +558,9 @@ def _resume_parallel_from_seeded_partial_run(
         parallel_strategy=strategy,
     )
 
-    # Manually create a partial completion scenario by manually seeding
-    # the worker files after creating runner.h5.
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    runner1.write(checkpoint_dir / "runner.h5")
-    _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 2, 4])
+    # Manually create a partial completion scenario by seeding payloads
+    # after creating runner.h5.
+    _seed_partial_run(checkpoint_dir, runner1, done_indices=[0, 2, 4])
 
     if tracked_indices is not None:
         del tracked_indices[:]
@@ -677,10 +627,8 @@ class TestMultiProgramRunnerParallel:
         assert sorted(recorded_indices) == [1, 3, 5, 6, 7, 8, 9]
         # Verify that all 10 items are now done (reading from consolidated
         # runner.h5, since worker files are deleted after consolidation)
-        from loqs.tools.multiprogramrunner import _read_done_union
-
-        done = _read_done_union(checkpoint_dir, attr_name="results")
-        assert len(done) == 10  # All 10 should be done now
+        store = CheckpointStore(checkpoint_dir, ITEM_LAYOUT)
+        assert store.keys() == list(range(10))
         # The important test is that the final results are correct
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
 
@@ -689,7 +637,7 @@ class TestMultiProgramRunnerParallel:
     ):
         """A parallel resumed run's `item_wall_clock_times`/
         `shot_wall_clock_times` must cover every item, including the ones
-        manually seeded as already-done via `_seed_partial_worker_file`
+        manually seeded as already-done via `_seed_partial_run`
         (mirroring the manual-seed-then-resume convention of
         `test_parallel_resume_from_partial_run` above, since no test in
         this file ever triggers a real mid-flight `loky` crash) and not
@@ -821,44 +769,6 @@ class TestItemAndShotWallClockTimes:
             assert {"0", "1", "2"} <= set(shot_values_iterable.keys())
 
 
-class TestConcurrentWorkerWrites:
-    """Tests for concurrent writing to worker files."""
-
-    def test_concurrent_workers_writing_simultaneously_lose_no_entries(
-        self, tmp_path
-    ):
-        """Several processes writing worker files concurrently must not corrupt."""
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-        num_workers = 4
-        entries_per_worker = 25
-
-        # Spawn multiple processes to write to the same checkpoint_dir
-        with mp.Pool(num_workers) as pool:
-            pool.map(
-                _write_worker_file,
-                [
-                    (str(checkpoint_dir), worker_id_base, entries_per_worker)
-                    for worker_id_base in range(num_workers)
-                ],
-            )
-
-        # Verify every entry was written
-        from loqs.internal.streamingmerge import (
-            read_checkpoint_dict_attr_union,
-        )
-
-        done = read_checkpoint_dict_attr_union(
-            checkpoint_dir, None, "worker_*_runner.h5", "results"
-        )
-        assert len(done) == num_workers * entries_per_worker
-        for worker_id_base in range(num_workers):
-            for i in range(entries_per_worker):
-                index = worker_id_base * 100 + i
-                assert index in done
-                assert done[index] == worker_id_base * 1000 + i
-
-
 class TestParallelToolsOnPollCallback:
     """Tests for on_poll callback in paralleltools."""
 
@@ -895,40 +805,28 @@ class TestParallelToolsOnPollCallback:
 # Helper functions
 
 
-def _seed_partial_worker_file(checkpoint_dir: Path, done_indices: list[int]):
-    """Seed a checkpoint directory with partial worker file results, plus
-    synthetic `item_wall_clock_times`/`shot_wall_clock_times` entries for
-    the same indices (mirroring
-    `test_consolidation_merges_item_and_shot_wall_clock_times`'s own
-    seeding style), so a resume test can confirm both timing attributes
-    cover a manually-seeded "already done" item, not just the ones the
-    resuming run actually processes."""
-    worker_file_path = checkpoint_dir / f"worker_{worker_id()}_runner.h5"
-    from loqs.internal.streamingmerge import merge_dict_attr
-
-    with h5py.File(worker_file_path, "a") as f:
-        for index in done_indices:
-            merge_dict_attr(
-                f,
-                "results",
-                [(index, index * 2)],
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-            merge_dict_attr(
-                f,
-                "item_wall_clock_times",
-                [(index, 0.5 + index)],
-                key_use_dataset=True,
-                value_use_dataset=True,
-            )
-            merge_dict_attr(
-                f,
-                "shot_wall_clock_times",
-                [(index, {0: 0.1 + index})],
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
+def _seed_partial_run(
+    checkpoint_dir: Path, runner: MultiProgramRunner, done_indices: list[int]
+):
+    """Seed a checkpoint directory as an interrupted run of `runner` leaves
+    it: its `runner.h5` plus one store payload per done index, holding a
+    result and synthetic `item_wall_clock_times`/`shot_wall_clock_times`
+    entries, so a resume test can confirm both timing attributes cover a
+    manually-seeded "already done" item, not just the ones the resuming run
+    actually processes."""
+    store = CheckpointStore(checkpoint_dir, ITEM_LAYOUT)
+    store.write_snapshot(runner)
+    for index in done_indices:
+        store.put_batch(
+            {
+                index: {
+                    "results": index * 2,
+                    "item_wall_clock_times": 0.5 + index,
+                    "shot_wall_clock_times": {0: 0.1 + index},
+                }
+            },
+            worker_id=worker_id(),
+        )
 
 
 # Regression tests for bugs fixed
@@ -1100,10 +998,8 @@ class TestParallelDispatchAndPollingRegressions:
             config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             parallel_strategy=strategy,
         )
-        runner_init.write(checkpoint_dir / "runner.h5")
-
         # Seed with 2 already-done items
-        _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 1])
+        _seed_partial_run(checkpoint_dir, runner_init, done_indices=[0, 1])
 
         # Now resume from the checkpoint
         runner = _TrackingRunner(
@@ -1222,120 +1118,87 @@ class TestParallelDispatchAndPollingRegressions:
         assert max(shots_bar_values) <= 10
         assert shots_bar_values[-1] == 10
 
-    def test_worker_file_reads_skip_keyerror_corruption(self, tmp_path):
-        """read_checkpoint_dict_attr_union, _consolidate_worker_files, and
-        _poll_one_worker_file each skip a worker file whose keys dataset
-        lists an entry (e.g. key "1") that has no corresponding value group
-        -- the shape a crash mid-append leaves behind -- rather than raising
-        KeyError, while still reading every healthy file normally."""
-        from loqs.tools.multiprogramrunner import (
-            _poll_one_worker_file,
-            _consolidate_worker_files,
+    def test_poll_reads_each_done_item_from_its_own_payload(self, tmp_path):
+        """A poll of a ledger whose worker ID contains underscores notifies
+        once per done index with that index's own payload result, and a
+        second poll adds nothing. A payload name rebuilt wrongly from the
+        ledger name would freeze live progress."""
+        from loqs.internal.swmrledger import (
+            mark_ledger_item_done,
+            open_swmr_writer,
         )
-        from loqs.internal.streamingmerge import (
-            read_checkpoint_dict_attr_union,
+        from loqs.tools.multiprogramrunner import _poll_one_worker_file
+
+        store = CheckpointStore(tmp_path / "ckpt", ITEM_LAYOUT)
+        store.directory.mkdir()
+        wid = "host_12_proc_7"
+        ledger_file, ledger_group = open_swmr_writer(
+            store.ledger_path(wid), fields=["done", "wall_clock_times"]
         )
+        try:
+            for i in (0, 1):
+                entry = {
+                    "results": f"result_{i}",
+                    "item_wall_clock_times": 0.5,
+                    "shot_wall_clock_times": {},
+                }
+                store.put_batch({i: entry}, worker_id=wid)
+                mark_ledger_item_done(ledger_group, i, 0.5)
 
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
+            calls: list[tuple[int, Any, Any]] = []
+            observed: set[int] = set()
 
-        # Create a corrupted worker file: write normally, then delete a value group
-        worker_file_corrupted = checkpoint_dir / "worker_0_runner.h5"
-        _merge_into_file(
-            worker_file_corrupted,
-            "results",
-            [(0, "value_0"), (1, "value_1")],
+            def poll(consumed: int) -> int:
+                return _poll_one_worker_file(
+                    store,
+                    store.ledger_path(wid),
+                    consumed,
+                    observed,
+                    {0: "item_0", 1: "item_1"},
+                    lambda *args: calls.append(args),
+                    None,
+                )
+
+            consumed = poll(0)
+            assert sorted(calls) == [
+                (0, "item_0", "result_0"),
+                (1, "item_1", "result_1"),
+            ]
+            assert poll(consumed) == consumed
+            assert len(calls) == 2
+        finally:
+            ledger_file.close()
+
+    def test_poll_skips_item_whose_payload_is_gone(self, tmp_path):
+        """A done index whose payload was consolidated away is left for a
+        later poll rather than raising."""
+        from loqs.internal.swmrledger import (
+            mark_ledger_item_done,
+            open_swmr_writer,
         )
+        from loqs.tools.multiprogramrunner import _poll_one_worker_file
 
-        # Corrupt: delete value group for key 1, simulating crash mid-append
-        with h5py.File(worker_file_corrupted, "a") as f:
-            del f["results/dict/values/iterable/1"]
-
-        # Create a healthy worker file for comparison
-        healthy_file = checkpoint_dir / "worker_1_runner.h5"
-        _merge_into_file(healthy_file, "results", [(2, "value_2")])
-
-        # read_checkpoint_dict_attr_union: the corrupted file's key 1 (missing
-        # value group) is skipped; the healthy file's key 2 is still read.
-        done = read_checkpoint_dict_attr_union(
-            checkpoint_dir, None, "worker_*_runner.h5", "results"
+        store = CheckpointStore(tmp_path / "ckpt", ITEM_LAYOUT)
+        store.directory.mkdir()
+        ledger_file, ledger_group = open_swmr_writer(
+            store.ledger_path("w"), fields=["done", "wall_clock_times"]
         )
-        assert 2 in done
-        assert 1 not in done
-
-        # _poll_one_worker_file: doesn't crash on the same corruption,
-        # consuming what it can before stopping.
-        observed_indices = set()
-        items_map = {0: "item_0"}
-        consumed = _poll_one_worker_file(
-            worker_file_corrupted,
-            consumed_count=0,
-            observed_indices=observed_indices,
-            items_map=items_map,
-            on_item_done=None,
-            pbar=None,
-        )
-        # Should consume first entry before hitting corruption
-        assert consumed == 1
-        assert 0 in observed_indices
-
-        # _consolidate_worker_files: corrupted file skipped, healthy merged.
-        _write_bare_runner_h5(checkpoint_dir)
-
-        # Should not raise; healthy file merged, corrupted skipped
-        _consolidate_worker_files(
-            checkpoint_dir, runner_filename="runner.h5", delete_originals=False
-        )
-
-        # Verify healthy file was merged into runner.h5
-        done_after = read_checkpoint_dict_attr_union(
-            checkpoint_dir, None, "worker_*_runner.h5", "results"
-        )
-        assert 2 in done_after
-
-    def test_consolidate_worker_files_skips_truncated_file(self, tmp_path):
-        """A truncated worker file (raw bytes cut off, so h5py itself
-        refuses to open it) alongside healthy worker files is skipped by
-        _consolidate_worker_files, which still completes successfully and
-        merges every healthy file."""
-        from loqs.tools.multiprogramrunner import _consolidate_worker_files
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Create a real worker file
-        worker_file_real = checkpoint_dir / "worker_0_runner.h5"
-        _merge_into_file(worker_file_real, "results", [(0, "value_0")])
-
-        # Create a second healthy worker file
-        worker_file_good = checkpoint_dir / "worker_1_runner.h5"
-        _merge_into_file(worker_file_good, "results", [(1, "value_1")])
-
-        # Now truncate the first file (simulate incomplete write/crash)
-        # Truncate to ~70% of original size
-        file_size = worker_file_real.stat().st_size
-        truncate_size = int(file_size * 0.7)
-        with open(worker_file_real, "r+b") as f:
-            f.truncate(truncate_size)
-
-        # Create runner.h5 to consolidate into
-        _write_bare_runner_h5(checkpoint_dir)
-
-        # Consolidation should complete without raising
-        _consolidate_worker_files(
-            checkpoint_dir, runner_filename="runner.h5", delete_originals=False
-        )
-
-        # Verify the good file was merged (can read from runner.h5)
-        from loqs.internal.streamingmerge import (
-            read_checkpoint_dict_attr_union,
-        )
-
-        done = read_checkpoint_dict_attr_union(
-            checkpoint_dir, None, "worker_*_runner.h5", "results"
-        )
-        assert 1 in done
-        assert done[1] == "value_1"
+        try:
+            mark_ledger_item_done(ledger_group, 0, 0.5)
+            calls: list[Any] = []
+            consumed = _poll_one_worker_file(
+                store,
+                store.ledger_path("w"),
+                0,
+                set(),
+                {0: "item_0"},
+                lambda *args: calls.append(args),
+                None,
+            )
+            assert consumed == 0
+            assert calls == []
+        finally:
+            ledger_file.close()
 
 
 # Module-level (not test-local): Serializable.read() resolves a decoded
@@ -1686,40 +1549,126 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
             runner2.run()
 
 
+class TestResumeRewrite:
+    """`run()` writes `runner.h5` once before dispatch and reads only the
+    config of a stored checkpoint."""
+
+    def test_resume_with_item_key_fn_rewrites_runner_h5_once(self, tmp_path):
+        """A resume of a runner with `item_key_fn` makes one `runner.h5`
+        write session before its first item runs, and keeps the finished
+        items' results. Catches a second rewrite for the index map, and a
+        rewrite that loses entries."""
+        ckpt = tmp_path / "ckpt"
+        config = CheckpointConfig(
+            item_checkpoint_dir=ckpt, show_progress=False
+        )
+        _KeyedRunner([1, 2], config=config).run()
+
+        resume_config = CheckpointConfig(
+            item_checkpoint_dir=ckpt, resume=True, show_progress=False
+        )
+        runner = _KeyedRunner([1, 2, 3, 4], config=resume_config)
+        real_build_program = runner.build_program
+        sessions_before_item = []
+
+        with record_h5_writes() as tap:
+
+            def build_program(index):
+                sessions_before_item.append(
+                    len(sessions_in(tap.sessions, "runner"))
+                )
+                return real_build_program(index)
+
+            runner.build_program = build_program
+            results = runner.run()
+
+        assert sessions_before_item == [1, 1]
+        assert results == [2, 4, 6, 8]
+        assert runner._reduced_results == {0: 2, 1: 4, 2: 6, 3: 8}
+
+    def test_mismatch_check_decodes_no_kept_results(
+        self, tmp_path, monkeypatch
+    ):
+        """A resume whose stored config differs still raises the "Cannot
+        resume" error while decoding any kept `ProgramResults` would raise.
+        Catches a mismatch check that decodes every item."""
+        item_dir, shot_dir = tmp_path / "items", tmp_path / "shots"
+        build_sweep_runner(item_dir, shot_dir).run()
+
+        def refuse(cls, attrs):
+            raise AssertionError("a kept ProgramResults was decoded")
+
+        monkeypatch.setattr(
+            ProgramResults, "_from_decoded_attrs", classmethod(refuse)
+        )
+        runner = build_sweep_runner(item_dir, shot_dir, resume=True)
+        runner.num_shots += 1
+
+        with pytest.raises(ValueError, match="Cannot resume.*num_shots"):
+            runner.run()
+
+
+class TestStrictItemAssembly:
+    """Resume and final assembly read the item store strictly and check
+    completeness in both the checkpointed and uncheckpointed branches."""
+
+    def test_resume_with_truncated_payload_raises_before_any_item(
+        self, tmp_path, monkeypatch
+    ):
+        """A corrupt payload raises `CheckpointReadError` naming it, instead
+        of the item being silently redone."""
+        item_dir, shot_dir = tmp_path / "items", tmp_path / "shots"
+        with build_program_interrupts_at(1):
+            with pytest.raises(KeyboardInterrupt):
+                build_sweep_runner(item_dir, shot_dir).run()
+
+        (payload,) = CheckpointStore(item_dir, ITEM_LAYOUT).payload_paths()
+        payload.write_bytes(payload.read_bytes()[:100])
+
+        built = []
+        real_build_program = NoiseSweepRunner.build_program
+        monkeypatch.setattr(
+            NoiseSweepRunner,
+            "build_program",
+            lambda self, i: built.append(i) or real_build_program(self, i),
+        )
+        runner = build_sweep_runner(item_dir, shot_dir, resume=True)
+        with pytest.raises(CheckpointReadError, match=payload.name):
+            runner.run()
+        assert built == []
+
+    def test_uncheckpointed_run_missing_an_item_raises(
+        self, tmp_path, monkeypatch
+    ):
+        """A dispatch that loses an item fails the completeness check
+        without checkpointing too."""
+        from loqs.tools import multiprogramrunner as mpr_module
+
+        real_run_serial = mpr_module._run_serial
+
+        def run_serial_dropping_item_1(*args, **kwargs):
+            results = real_run_serial(*args, **kwargs)
+            results.pop(1)
+            return results
+
+        monkeypatch.setattr(
+            mpr_module, "_run_serial", run_serial_dropping_item_1
+        )
+        runner = _SimpleDoubleRunner([1, 2, 3])
+        with pytest.raises(
+            RuntimeError, match="Item 1 is missing from final results"
+        ):
+            runner.run()
+
+
 class TestMergeReducedResult:
     """Tests for MultiProgramRunner._merge_reduced_result method."""
 
-    def test_merge_reduced_result_persists_to_runner_h5(self, tmp_path):
-        """_merge_reduced_result appends to _reduced_results in runner.h5."""
-        checkpoint_dir = tmp_path / "ckpt"
-        runner = _CountingRunner(
-            [1, 2, 3],
-            multiplier=2,
-            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
-        )
-        runner.run()
-
-        # Now merge in some reduced results for indices not yet in runner.h5
-        runner._merge_reduced_result(10, "reduced_10")
-        runner._merge_reduced_result(11, "reduced_11")
-
-        # Verify they were written to runner.h5 alongside the run results
-        reduced = _read_runner_dict_attr(
-            checkpoint_dir / "runner.h5", "_reduced_results"
-        )
-
-        # Should contain the run results (0=2, 1=4, 2=6) plus the merged ones
-        assert reduced[10] == "reduced_10"
-        assert reduced[11] == "reduced_11"
-        assert 0 in reduced  # From the run
-        assert 1 in reduced  # From the run
-        assert 2 in reduced  # From the run
-
-    def test_merge_reduced_result_second_call_same_index_is_noop(
+    def test_merge_reduced_result_updates_memory_only_and_keeps_first(
         self, tmp_path, monkeypatch
     ):
-        """A second _merge_reduced_result call with an already-present index
-        is a true no-op: no second disk write, and the first value is kept."""
+        """_merge_reduced_result touches no file (an item's payload is its
+        durable record), and a repeated index keeps the first value."""
         checkpoint_dir = tmp_path / "ckpt"
         runner = _CountingRunner(
             [1, 2, 3],
@@ -1728,31 +1677,20 @@ class TestMergeReducedResult:
         )
         runner.run()
 
-        import h5py as h5py_module
-
         open_calls = []
-        real_file_init = h5py_module.File.__init__
+        real_file_init = h5py.File.__init__
 
         def counting_file_init(self, *args, **kwargs):
-            # Only count genuine path-based opens; h5py itself may
-            # reflexively wrap an already-open low-level identifier in its
-            # own internal File(id) object (e.g. from a Dataset's `.file`
-            # property), which isn't a second disk open.
             if args and isinstance(args[0], (str, Path)):
                 open_calls.append(args)
             return real_file_init(self, *args, **kwargs)
 
-        monkeypatch.setattr(h5py_module.File, "__init__", counting_file_init)
+        monkeypatch.setattr(h5py.File, "__init__", counting_file_init)
 
         runner._merge_reduced_result(10, "reduced_10")
-        assert runner._reduced_results[10] == "reduced_10"
-        assert len(open_calls) == 1
-
-        # Second call with the SAME index but a DIFFERENT value must be a
-        # true no-op: no second h5py.File open, and the original value kept.
         runner._merge_reduced_result(10, "reduced_10_should_be_ignored")
         assert runner._reduced_results[10] == "reduced_10"
-        assert len(open_calls) == 1
+        assert open_calls == []
 
 
 class TestProcessAndCheckpointItemAtomicity:
@@ -1780,35 +1718,33 @@ class TestProcessAndCheckpointItemAtomicity:
             _process_and_checkpoint_item,
         )
 
-        item_checkpoint_dir = tmp_path / "ckpt"
-        item_checkpoint_dir.mkdir()
+        store = CheckpointStore(tmp_path / "ckpt", ITEM_LAYOUT)
+        store.directory.mkdir()
         _, ledger_group = open_swmr_writer(
-            item_checkpoint_dir / "worker_test_runner.h5",
+            store.ledger_path("test"),
             fields=_ITEM_LEDGER_FIELDS,
         )
-        payload_path = item_checkpoint_dir / "worker_test_item_0_payload.h5"
 
         def stub_process_item(
             item, index, *, shot_executor=None, n_shot_batches=None, **kwargs
         ):
-            aux = {
+            return {
                 "_reduced_results": item * 2,
                 "item_wall_clock_times": 0.001,
                 "shot_wall_clock_times": {0: 0.0005},
             }
-            if kwargs.get("keep_shot_results"):
-                # A real ProgramResults; the in-memory fallback (no
-                # shot_checkpoint_subdir) returns it as-is.
-                aux["program_results"] = _make_synthetic_program_results(
-                    index, shot_count=1
-                )
-            return aux
+
+        # The kept results come from the item's own shot checkpoint.
+        shot_dir = tmp_path / "shots"
+        kept = _make_synthetic_program_results(0, shot_count=1)
+        kept.num_shots = 1
+        kept.checkpoint(shot_dir)
 
         real_h5py_file = h5py.File
         open_count = {"n": 0}
 
         def counting_h5py_file(path, mode, *args, **kwargs):
-            if Path(path) == payload_path:
+            if Path(path).name.endswith("_payload.h5.tmp"):
                 open_count["n"] += 1
             return real_h5py_file(path, mode, *args, **kwargs)
 
@@ -1822,23 +1758,81 @@ class TestProcessAndCheckpointItemAtomicity:
             shot_executor=None,
             n_shot_batches=None,
             keep_shot_results=keep_shot_results,
-            shot_checkpoint_subdir=None,
+            shot_checkpoint_subdir=lambda index: shot_dir,
             ledger_group=ledger_group,
-            payload_path=payload_path,
+            item_store=store,
         )
 
         assert open_count["n"] == 1
 
-        with h5py.File(payload_path, "r") as f:
-            assert dict(iter_dict_attr_entries(f, "results")) == {0: 10}
-            assert dict(
-                iter_dict_attr_entries(f, "item_wall_clock_times")
-            ) == {0: pytest.approx(0.001)}
-            assert dict(
-                iter_dict_attr_entries(f, "shot_wall_clock_times")
-            ) == {0: {0: 0.0005}}
-            if keep_shot_results:
-                assert "_program_results" in f
+        (payload_path,) = store.payload_paths()
+        view = store.payload_view(payload_path)
+        assert dict(view.iter_items("results")) == {0: 10}
+        assert dict(view.iter_items("item_wall_clock_times")) == {
+            0: pytest.approx(0.001)
+        }
+        assert dict(view.iter_items("shot_wall_clock_times")) == {
+            0: {0: 0.0005}
+        }
+        assert view.keys("_program_results") == (
+            [0] if keep_shot_results else []
+        )
+
+    @pytest.mark.parametrize(
+        "shot_state", ["no_dir", "no_file", "no_num_shots", "missing_shot"]
+    )
+    def test_unloadable_kept_results_raise_and_write_nothing(
+        self, tmp_path, shot_state
+    ):
+        """Kept results come only from the item's shot checkpoint. When it
+        can't supply every shot, the item raises naming the directory and
+        writes no payload, rather than keeping partial results."""
+        from loqs.internal.swmrledger import open_swmr_writer
+        from loqs.tools.multiprogramrunner import (
+            _ITEM_LEDGER_FIELDS,
+            _process_and_checkpoint_item,
+        )
+
+        store = CheckpointStore(tmp_path / "ckpt", ITEM_LAYOUT)
+        store.directory.mkdir()
+        ledger_file, ledger_group = open_swmr_writer(
+            store.ledger_path("test"),
+            fields=_ITEM_LEDGER_FIELDS,
+        )
+        shot_dir = tmp_path / "shots"
+        shot_dir.mkdir()
+        if shot_state in ("no_num_shots", "missing_shot"):
+            kept = _make_synthetic_program_results(0, shot_count=1)
+            kept.num_shots = None if shot_state == "no_num_shots" else 2
+            kept.checkpoint(shot_dir)
+
+        def stub_process_item(item, index, **kwargs):
+            return {
+                "_reduced_results": item,
+                "item_wall_clock_times": 0.001,
+                "shot_wall_clock_times": {0: 0.0005},
+            }
+
+        match = None if shot_state == "no_dir" else re.escape(str(shot_dir))
+        try:
+            with pytest.raises(RuntimeError, match=match):
+                _process_and_checkpoint_item(
+                    stub_process_item,
+                    item=5,
+                    index=0,
+                    static_kwargs={},
+                    shot_executor=None,
+                    n_shot_batches=None,
+                    keep_shot_results=True,
+                    shot_checkpoint_subdir=lambda index: (
+                        None if shot_state == "no_dir" else shot_dir
+                    ),
+                    ledger_group=ledger_group,
+                    item_store=store,
+                )
+        finally:
+            ledger_file.close()
+        assert store.payload_paths() == []
 
 
 class TestItemCheckpointWithLedger:
@@ -1862,28 +1856,25 @@ class TestItemCheckpointWithLedger:
             _write_item_checkpoint_with_ledger,
         )
 
-        item_checkpoint_dir = tmp_path / "ckpt"
-        item_checkpoint_dir.mkdir()
+        store = CheckpointStore(tmp_path / "ckpt", ITEM_LAYOUT)
+        store.directory.mkdir()
         _, ledger_group = open_swmr_writer(
-            item_checkpoint_dir / "worker_test_runner.h5",
+            store.ledger_path("test"),
             fields=["done", "wall_clock_times"],
         )
-        payload_path = item_checkpoint_dir / "worker_test_item_3_payload.h5"
 
-        entries = [
-            ("results", 42, False),
-            ("item_wall_clock_times", 0.25, True),
-        ]
+        entry = {"results": 42, "item_wall_clock_times": 0.25}
         _write_item_checkpoint_with_ledger(
-            ledger_group, payload_path, 3, entries, wall_clock_time=0.25
+            store, ledger_group, 3, entry, wall_clock_time=0.25
         )
 
-        assert payload_path.exists()
-        with h5py.File(payload_path, "r") as f:
-            assert dict(iter_dict_attr_entries(f, "results")) == {3: 42}
-            assert dict(
-                iter_dict_attr_entries(f, "item_wall_clock_times")
-            ) == {3: pytest.approx(0.25)}
+        (payload_path,) = store.payload_paths()
+        assert payload_path == store.payload_path(worker_id(), 3)
+        view = store.payload_view(payload_path)
+        assert dict(view.iter_items("results")) == {3: 42}
+        assert dict(view.iter_items("item_wall_clock_times")) == {
+            3: pytest.approx(0.25)
+        }
 
         status = read_swmr_ledger_status(ledger_group)
         assert bool(status.done[3]) is True
@@ -1898,21 +1889,21 @@ class TestItemCheckpointWithLedger:
         ledger's `done` entry for that index stays False -- proving
         `mark_ledger_item_done` is never reached before the payload file is
         fully written."""
+        from loqs.internal import checkpointstore as store_module
         from loqs.internal.swmrledger import (
             open_swmr_writer,
             read_swmr_ledger_status,
         )
         from loqs.tools import multiprogramrunner as mpr_module
 
-        item_checkpoint_dir = tmp_path / "ckpt"
-        item_checkpoint_dir.mkdir()
+        store = CheckpointStore(tmp_path / "ckpt", ITEM_LAYOUT)
+        store.directory.mkdir()
         _, ledger_group = open_swmr_writer(
-            item_checkpoint_dir / "worker_test_runner.h5",
+            store.ledger_path("test"),
             fields=["done", "wall_clock_times"],
         )
-        payload_path = item_checkpoint_dir / "worker_test_item_5_payload.h5"
 
-        real_merge_dict_attr = mpr_module.merge_dict_attr
+        real_merge_dict_attr = store_module.merge_dict_attr
         call_count = {"n": 0}
 
         def flaky_merge_dict_attr(*args, **kwargs):
@@ -1922,19 +1913,20 @@ class TestItemCheckpointWithLedger:
             return real_merge_dict_attr(*args, **kwargs)
 
         monkeypatch.setattr(
-            mpr_module, "merge_dict_attr", flaky_merge_dict_attr
+            store_module, "merge_dict_attr", flaky_merge_dict_attr
         )
 
-        entries = [
-            ("results", 1, False),
-            ("item_wall_clock_times", 0.1, True),
-            ("shot_wall_clock_times", {0: 0.05}, False),
-        ]
+        entry = {
+            "results": 1,
+            "item_wall_clock_times": 0.1,
+            "shot_wall_clock_times": {0: 0.05},
+        }
 
         with pytest.raises(RuntimeError, match="simulated failure"):
             mpr_module._write_item_checkpoint_with_ledger(
-                ledger_group, payload_path, 5, entries, wall_clock_time=0.1
+                store, ledger_group, 5, entry, wall_clock_time=0.1
             )
+        assert store.payload_paths() == []
 
         assert call_count["n"] == 2
 
@@ -1970,7 +1962,10 @@ class TestItemCheckpointWithLedger:
         results = runner.run()
 
         assert results == [0, 2, 4, 6]
-        assert not list(checkpoint_dir.glob("worker_*"))
+        store = CheckpointStore(checkpoint_dir, ITEM_LAYOUT)
+        assert [p.name for p in checkpoint_dir.iterdir()] == [
+            store.canonical_path.name
+        ]
         resolved_dir = checkpoint_dir.resolve()
         assert not any(
             path.is_relative_to(resolved_dir)
@@ -2142,8 +2137,7 @@ class TestKeepShotResults:
             assert index in runner._program_results
             # Check that it's a lazy ProgramResults (has nested source set)
             pr = runner._program_results[index]
-            assert pr._nested_source_file is not None
-            assert pr._nested_source_index == index
+            assert pr._nested_store is not None
             # The lazy proxy's shot_wall_clock_times must resolve from the
             # runner's own per-item timing data, not its constructor default.
             assert pr.shot_wall_clock_times
@@ -2270,15 +2264,15 @@ class TestKeepShotResults:
         assert runner2.keep_shot_results is True
 
         # Lazy shot access must survive the round trip: each kept entry's
-        # nested-source pointer must relink to the on-disk checkpoint file.
+        # nested view must relink to the on-disk checkpoint store.
         assert len(runner2._program_results) == 2
         for index in [0, 1]:
             pr = runner2._program_results[index]
-            assert (
-                pr._nested_source_file
-                == runner2.item_checkpoint_dir / runner2.runner_filename
+            assert pr._nested_store is not None
+            assert pr._nested_store._parent.canonical_path == (
+                runner2.item_checkpoint_dir / runner2.runner_filename
             )
-            assert pr._nested_source_index == index
+            assert pr._nested_store._key == index
             assert pr.get_shot_history(0) is not None
             data = pr.collect_shot_data("counter", -1)
             assert len(data) == 3
@@ -2427,27 +2421,6 @@ class TestKeepShotResults:
         # comes from item 1's shots read live from its shot ledger.
         assert any(done == 1 and value > 5 for done, value in samples)
 
-    def test_resolve_kept_program_results_fallback_to_in_memory(self):
-        """_resolve_kept_program_results returns in_memory_pr when checkpoint is empty."""
-        from loqs.tools.multiprogramrunner import _resolve_kept_program_results
-
-        # Create in-memory PR with data
-        in_memory_pr = _make_synthetic_program_results(0, shot_count=5)
-
-        # Empty checkpoint directory (no file, or empty shot_histories)
-        def empty_checkpoint_subdir(index):
-            return Path("/tmp/nonexistent_dir")
-
-        # Calling with an empty checkpoint should return in_memory_pr.
-        result = _resolve_kept_program_results(
-            0, empty_checkpoint_subdir, in_memory_pr
-        )
-
-        # Should get in_memory_pr because checkpoint is empty/missing
-        assert result is not None
-        assert len(result.shot_histories) == 5
-        assert result.parent_program == "program_0"
-
     @pytest.mark.slow
     def test_keep_shot_results_parallel_forces_checkpoint_read_write_race(
         self, tmp_path
@@ -2506,30 +2479,38 @@ class TestShotProgressBar:
         self, tmp_path
     ):
         """Verify _read_worker_current_indices handles missing/unreadable files."""
-        from loqs.tools.multiprogramrunner import _read_worker_current_indices
+        from loqs.internal.swmrledger import (
+            open_swmr_writer,
+            update_ledger_in_flight,
+        )
+        from loqs.tools.multiprogramrunner import (
+            _ITEM_LEDGER_FIELDS,
+            _read_worker_current_indices,
+        )
 
-        checkpoint_dir = tmp_path / "checkpoint"
-        checkpoint_dir.mkdir()
+        store = CheckpointStore(tmp_path / "checkpoint", ITEM_LAYOUT)
+        store.directory.mkdir()
 
         # No workers yet, should return empty set
-        indices = _read_worker_current_indices(checkpoint_dir)
-        assert indices == set()
+        assert _read_worker_current_indices(store) == set()
 
-        # Create a worker file with current_item_index
-        worker_file = checkpoint_dir / "worker_test_runner.h5"
-        with h5py.File(worker_file, "a") as f:
-            f.attrs["current_item_index"] = 5
+        handles = []
+        try:
+            for worker, index in (("test", 5), ("test2", 7)):
+                handle = open_swmr_writer(
+                    store.ledger_path(worker), fields=_ITEM_LEDGER_FIELDS
+                )
+                handles.append(handle)
+                update_ledger_in_flight(handle[1], index)
+                expected = {5} if index == 5 else {5, 7}
+                assert _read_worker_current_indices(store) == expected
 
-        indices = _read_worker_current_indices(checkpoint_dir)
-        assert indices == {5}
-
-        # Create another worker file
-        worker_file2 = checkpoint_dir / "worker_test2_runner.h5"
-        with h5py.File(worker_file2, "a") as f:
-            f.attrs["current_item_index"] = 7
-
-        indices = _read_worker_current_indices(checkpoint_dir)
-        assert indices == {5, 7}
+            # A non-HDF5 file at a ledger name is skipped.
+            store.ledger_path("junk").write_bytes(b"not hdf5")
+            assert _read_worker_current_indices(store) == {5, 7}
+        finally:
+            for handle in handles:
+                handle[0].close()
 
     @pytest.mark.parametrize(
         "parallel, checkpoint_dirs, show_progress, hook_returns_none,"
@@ -2686,20 +2667,18 @@ class TestShotProgressBar:
             n_program_chunks=2,
         )
 
-        from loqs.tools import multiprogramrunner as mpr_module
-
         # Simulates 2 already-done items (a prior interrupted run) -- only
         # the tqdm init params computed before dispatch matter here.
-        def read_with_preseeded_done(checkpoint_dir, *args, **kwargs):
-            return {0: 0, 2: 4}
+        def read_with_preseeded_done(*args, **kwargs):
+            return iter([(0, 0), (2, 4)])
 
         with patch(
             "loqs.tools.multiprogramrunner.tqdm",
             side_effect=_make_tqdm_spy(on_init=record_init),
         ):
             with patch.object(
-                mpr_module,
-                "_read_done_union",
+                CheckpointStore,
+                "iter_items",
                 side_effect=read_with_preseeded_done,
             ):
                 runner = _ShotProgressTestRunner(
@@ -2756,8 +2735,9 @@ class TestWorkerFileConsolidation:
             assert result == i * 2
 
         # After completion, worker files should be deleted
-        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert len(worker_files) == 0
+        store = CheckpointStore(checkpoint_dir, ITEM_LAYOUT)
+        assert store.ledger_paths() == []
+        assert store.payload_paths() == []
 
         # All results should be consolidated into runner.h5
         runner_path = checkpoint_dir / "runner.h5"
@@ -2793,8 +2773,9 @@ class TestWorkerFileConsolidation:
                 results = runner.run()
 
         assert results == [0, 2, 4]
-        assert list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert list(checkpoint_dir.glob("worker_*_item_*_payload.h5"))
+        store = CheckpointStore(checkpoint_dir, ITEM_LAYOUT)
+        assert store.ledger_paths()
+        assert store.payload_paths()
 
     def test_resume_with_deleted_worker_files_reads_from_runner_h5(
         self, tmp_path
@@ -2815,8 +2796,8 @@ class TestWorkerFileConsolidation:
         assert results1 == [0, 2, 4, 6, 8, 10]
 
         # Verify worker files are gone
-        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert len(worker_files) == 0
+        store = CheckpointStore(checkpoint_dir, ITEM_LAYOUT)
+        assert store.ledger_paths() == []
 
         # Second run: resume from checkpoint where only runner.h5 exists
         # (no worker files). This tests that done-detection reads from
@@ -2865,13 +2846,9 @@ class TestWorkerFileConsolidation:
         with pytest.raises(RuntimeError, match="Simulated crash"):
             runner1.run()
 
-        # Verify partial results are persisted (either in worker file or
-        # runner.h5 via the union reader)
-        from loqs.tools.multiprogramrunner import _read_done_union
-
-        on_disk_after_crash1 = _read_done_union(
-            checkpoint_dir, attr_name="results"
-        )
+        # Verify partial results are persisted (in payloads or runner.h5)
+        store = CheckpointStore(checkpoint_dir, ITEM_LAYOUT)
+        on_disk_after_crash1 = dict(store.iter_items())
         assert len(on_disk_after_crash1) == 2
         assert on_disk_after_crash1 == {0: 0, 1: 2}
 
@@ -2891,8 +2868,8 @@ class TestWorkerFileConsolidation:
 
         # Verify results 0-3 are persisted (the original 0-1 aren't lost
         # or blanked out when runner.h5 was seeded before write)
-        on_disk_after_crash2 = _read_done_union(
-            checkpoint_dir, attr_name="results"
+        on_disk_after_crash2 = dict(
+            CheckpointStore(checkpoint_dir, ITEM_LAYOUT).iter_items()
         )
         assert len(on_disk_after_crash2) == 4
         assert on_disk_after_crash2 == {0: 0, 1: 2, 2: 4, 3: 6}
@@ -2918,13 +2895,13 @@ class TestWorkerFileConsolidation:
         assert len(final_on_disk) == 6
         assert final_on_disk == {0: 0, 1: 2, 2: 4, 3: 6, 4: 8, 5: 10}
 
-    def test_resume_seeds_reduced_results_before_first_write(self, tmp_path):
-        """A resuming run() seeds _reduced_results/_program_results from
-        stored state before its first write() call, not after -- otherwise
-        that write would briefly clobber runner.h5's on-disk
-        _reduced_results with a blank value. Uses _CountingRunner, whose
-        first run() completes fully and so genuinely leaves non-empty
-        on-disk state for the second run() to seed from.
+    def test_resume_rewrite_keeps_committed_results(
+        self, tmp_path, monkeypatch
+    ):
+        """A resuming run() rewrites runner.h5 with the finished items'
+        results still in it, so the rewrite never leaves a window in which
+        they are blank. Uses _CountingRunner, whose first run() completes
+        fully and so genuinely leaves non-empty on-disk state.
         """
         checkpoint_dir = tmp_path / "checkpoints"
         items = [1, 2, 3]
@@ -2947,9 +2924,8 @@ class TestWorkerFileConsolidation:
         assert on_disk_after_run1 == {0: 2, 1: 4, 2: 6}
 
         # Second run: resumes the same runner. Capture runner.h5's on-disk
-        # _reduced_results immediately after the *first* write() call inside
-        # run(), before any dispatch happens -- this is exactly the moment
-        # the seed-before-write ordering matters.
+        # results right after the rewrite inside run(), before any dispatch
+        # happens.
         runner2 = _CountingRunner(
             items,
             multiplier=2,
@@ -2958,274 +2934,43 @@ class TestWorkerFileConsolidation:
             ),
         )
 
-        captured_on_first_write = []
-        real_write = runner2.write
+        captured_after_rewrite = []
+        real_write_snapshot = CheckpointStore.write_snapshot
 
-        def capturing_write(path, *args, **kwargs):
-            real_write(path, *args, **kwargs)
-            if not captured_on_first_write:
-                from loqs.internal.streamingmerge import (
-                    iter_dict_attr_entries as _iter_entries,
-                )
-
-                with h5py.File(path, "r") as f:
-                    captured_on_first_write.append(
-                        dict(_iter_entries(f, "_reduced_results"))
-                    )
-
-        runner2.write = capturing_write
-        runner2.run()
-
-        # If seeding happened after this first write instead of before, this
-        # snapshot would be empty (a fresh instance's own blank
-        # _reduced_results, written before ever consulting stored state).
-        assert captured_on_first_write[0] == {0: 2, 1: 4, 2: 6}
-
-    def test_consolidate_worker_files_leaves_locked_worker_file_in_place(
-        self, tmp_path, monkeypatch
-    ):
-        """A worker file whose one open fails during
-        `_consolidate_worker_files` is opened once, not retried, and left in
-        place unmerged; final assembly's strict union read then still finds
-        its entry once the file can be opened.
-        """
-        from loqs.tools.multiprogramrunner import (
-            _consolidate_worker_files,
-            _read_done_union,
-        )
-        from loqs.internal.streamingmerge import (
-            get_dict_attr_keys,
-            merge_dict_attr,
-        )
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Bare runner.h5 with valid object-group structure to merge into.
-        runner = _SimpleDoubleRunner(items=[])
-        runner_path = checkpoint_dir / "runner.h5"
-        runner.write(runner_path, "hdf5")
-
-        # Three worker files, each with one "results"/"_program_results" pair.
-        worker_files = []
-        for i in range(3):
-            worker_file = checkpoint_dir / f"worker_{i}_runner.h5"
-            with h5py.File(worker_file, "a") as f:
-                merge_dict_attr(
-                    f,
-                    "results",
-                    [(i, f"result_{i}")],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-                merge_dict_attr(
-                    f,
-                    "_program_results",
-                    [(i, f"program_result_{i}")],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-            worker_files.append(worker_file)
-
-        # Only worker 1's first plain read-only open fails; the SWMR open
-        # from `is_swmr_ledger_file` passes through uncounted.
-        locked_worker_file = worker_files[1]
-        real_file = h5py.File
-        plain_read_opens = {"n": 0}
-
-        def flaky_file(path, mode="r", *args, **kwargs):
-            if (
-                Path(path) == locked_worker_file
-                and mode == "r"
-                and not kwargs.get("swmr", False)
-            ):
-                plain_read_opens["n"] += 1
-                if plain_read_opens["n"] == 1:
-                    raise BlockingIOError(
-                        "simulated lock held by another process"
-                    )
-            return real_file(path, mode, *args, **kwargs)
-
-        monkeypatch.setattr(h5py, "File", flaky_file)
-
-        # Single final-assembly consolidation pass, mirroring run()'s one-shot call.
-        _consolidate_worker_files(
-            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
-        )
-
-        # Worker 1 was opened once, not retried, and kept for a later read;
-        # workers 0 and 2 merged and were deleted.
-        assert locked_worker_file.exists()
-        assert plain_read_opens["n"] == 1
-        assert not worker_files[0].exists()
-        assert not worker_files[2].exists()
-        with real_file(runner_path, "r") as f:
-            merged_keys = set(
-                get_dict_attr_keys(
-                    _resolve_checkpoint_object_group(f), "_program_results"
-                )
-            )
-        assert 1 not in merged_keys
-
-        # Final assembly's strict read picks worker 1's entry up from the
-        # file left in place.
-        program_results = _read_done_union(
-            checkpoint_dir,
-            runner_filename="runner.h5",
-            attr_name="_program_results",
-            strict=True,
-        )
-        assert program_results == {
-            0: "program_result_0",
-            1: "program_result_1",
-            2: "program_result_2",
-        }
-
-    def test_read_done_union_strict_propagates_open_error(
-        self, tmp_path, monkeypatch
-    ):
-        """`_read_done_union` skips a worker file it can't open by default,
-        and lets the open error propagate with `strict=True`."""
-        from loqs.tools.multiprogramrunner import _read_done_union
-        from loqs.internal.streamingmerge import merge_dict_attr
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        worker_files = []
-        for i in range(2):
-            worker_file = checkpoint_dir / f"worker_{i}_runner.h5"
-            with h5py.File(worker_file, "a") as f:
-                merge_dict_attr(
-                    f,
-                    "_program_results",
-                    [(i, f"program_result_{i}")],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-            worker_files.append(worker_file)
-
-        locked_worker_file = worker_files[1]
-        real_file = h5py.File
-
-        def locked_file(path, mode="r", *args, **kwargs):
-            if (
-                Path(path) == locked_worker_file
-                and mode == "r"
-                and not kwargs.get("swmr", False)
-            ):
-                raise BlockingIOError("simulated lock held by another process")
-            return real_file(path, mode, *args, **kwargs)
-
-        monkeypatch.setattr(h5py, "File", locked_file)
-
-        assert _read_done_union(
-            checkpoint_dir,
-            runner_filename="runner.h5",
-            attr_name="_program_results",
-            strict=False,
-        ) == {0: "program_result_0"}
-
-        with pytest.raises(BlockingIOError):
-            _read_done_union(
-                checkpoint_dir,
-                runner_filename="runner.h5",
-                attr_name="_program_results",
-                strict=True,
-            )
-
-    def test_missing_program_results_entry_should_raise(
-        self, tmp_path, monkeypatch
-    ):
-        """Verify that the completeness check for `_program_results`
-        (mirroring the existing check for `results` in `run()`) correctly
-        raises `RuntimeError` naming the missing index if an entry is absent
-        from final assembly.
-        """
-        import loqs.tools.multiprogramrunner as multiprogramrunner_module
-
-        checkpoint_dir = tmp_path / "ckpt"
-        missing_index = 1
-
-        real_read_done_union = multiprogramrunner_module._read_done_union
-
-        def read_done_union_dropping_program_result(
-            ckpt_dir,
-            runner_filename="runner.h5",
-            attr_name="results",
-            **kwargs,
-        ):
-            """Drop one index from "_program_results" only; "results" is
-            read through unaffected and complete. Accepts and forwards
-            **kwargs so this stays robust to any additional keyword argument
-            the real `_read_done_union` gains."""
-            result = real_read_done_union(
-                ckpt_dir,
-                runner_filename=runner_filename,
-                attr_name=attr_name,
-                **kwargs,
-            )
-            if attr_name == "_program_results":
-                result.pop(missing_index, None)
-            return result
+        def capturing_write_snapshot(self, obj, **kwargs):
+            real_write_snapshot(self, obj, **kwargs)
+            captured_after_rewrite.append(dict(self.iter_items("results")))
 
         monkeypatch.setattr(
-            multiprogramrunner_module,
-            "_read_done_union",
-            read_done_union_dropping_program_result,
+            CheckpointStore, "write_snapshot", capturing_write_snapshot
         )
+        runner2.run()
 
-        runner = _SimpleDoubleRunner(
-            [1, 2, 3],
-            config=CheckpointConfig(
-                item_checkpoint_dir=checkpoint_dir,
-                shot_checkpoint_dir=tmp_path / "shot_ckpt",
-                keep_shot_results=True,
-                lazy_loading=False,
-            ),
-        )
+        # The runner's own blank _reduced_results must not have replaced
+        # the finished items' results.
+        assert captured_after_rewrite == [{0: 2, 1: 4, 2: 6}]
 
-        with pytest.raises(
-            RuntimeError,
-            match=f"Item {missing_index} is missing from.*_program_results",
-        ):
-            runner.run()
-
-    def test_missing_program_results_entry_should_raise_lazy_loading(
-        self, tmp_path, monkeypatch
+    @pytest.mark.parametrize("lazy_loading", [False, True])
+    def test_missing_program_results_entry_should_raise(
+        self, tmp_path, monkeypatch, lazy_loading
     ):
-        """Lazy-loading sibling of `test_missing_program_results_entry_should_raise`:
-        the same completeness check for `_program_results` should still raise
-        `RuntimeError` naming the missing index when `lazy_loading=True`.
-        """
-        import loqs.internal.streamingmerge as streamingmerge_module
-
+        """The completeness check for `_program_results` raises
+        `RuntimeError` naming the missing index if an entry is absent from
+        the item store at final assembly."""
         checkpoint_dir = tmp_path / "ckpt"
         missing_index = 1
+        real_keys = CheckpointStore.keys
 
-        real_get_dict_attr_keys = streamingmerge_module.get_dict_attr_keys
-
-        def get_dict_attr_keys_dropping_program_result(
-            parent_group, attr_name, decode_cache=None
-        ):
-            """Drop one key whenever `_program_results` is queried, to
-            simulate a genuinely-missing entry; any other attribute name is
-            read through unaffected. This patches
-            `streamingmerge.get_dict_attr_keys` directly, since that's where
-            `read_checkpoint_dict_attr_union_keys` (the helper
-            `_read_done_union_keys` delegates to) actually calls it.
-            """
-            keys = real_get_dict_attr_keys(
-                parent_group, attr_name, decode_cache=decode_cache
-            )
-            if attr_name == "_program_results":
+        def keys_dropping_program_result(self, attr=None, **kwargs):
+            """Drop one key from `_program_results` only; `results` is
+            read through unaffected and complete."""
+            keys = real_keys(self, attr, **kwargs)
+            if attr == "_program_results":
                 keys = [key for key in keys if key != missing_index]
             return keys
 
         monkeypatch.setattr(
-            streamingmerge_module,
-            "get_dict_attr_keys",
-            get_dict_attr_keys_dropping_program_result,
+            CheckpointStore, "keys", keys_dropping_program_result
         )
 
         runner = _SimpleDoubleRunner(
@@ -3234,7 +2979,7 @@ class TestWorkerFileConsolidation:
                 item_checkpoint_dir=checkpoint_dir,
                 shot_checkpoint_dir=tmp_path / "shot_ckpt",
                 keep_shot_results=True,
-                lazy_loading=True,
+                lazy_loading=lazy_loading,
             ),
         )
 
@@ -3243,279 +2988,6 @@ class TestWorkerFileConsolidation:
             match=f"Item {missing_index} is missing from.*_program_results",
         ):
             runner.run()
-
-    def test_consolidation_merges_item_and_shot_wall_clock_times(
-        self, tmp_path
-    ):
-        """`_consolidate_worker_files` must merge worker files'
-        `item_wall_clock_times`/`shot_wall_clock_times` entries into
-        `runner.h5`, the same way it already merges `results`/
-        `_program_results`. Writes synthetic worker files directly via
-        `merge_dict_attr` (bypassing `.run()` entirely) and calls
-        `_consolidate_worker_files` directly, then reads `runner.h5` back
-        to confirm both attributes actually made it across.
-        """
-        from loqs.tools.multiprogramrunner import _consolidate_worker_files
-        from loqs.internal.streamingmerge import merge_dict_attr
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Bare runner.h5 with valid object-group structure to merge into.
-        runner = _SimpleDoubleRunner(items=[])
-        runner_path = checkpoint_dir / "runner.h5"
-        runner.write(runner_path, "hdf5")
-
-        # Two worker files with synthetic timing data: item times as a plain
-        # float (dataset), shot times as a nested dict (groups).
-        for i in range(2):
-            worker_file = checkpoint_dir / f"worker_{i}_runner.h5"
-            with h5py.File(worker_file, "a") as f:
-                merge_dict_attr(
-                    f,
-                    "item_wall_clock_times",
-                    [(i, 0.5 + i)],
-                    key_use_dataset=True,
-                    value_use_dataset=True,
-                )
-                merge_dict_attr(
-                    f,
-                    "shot_wall_clock_times",
-                    [(i, {0: 0.1 + i, 1: 0.2 + i})],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-
-        # Single final-assembly consolidation pass, mirroring run()'s one-shot call.
-        _consolidate_worker_files(
-            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
-        )
-
-        with h5py.File(runner_path, "r") as f:
-            item_times = dict(
-                iter_dict_attr_entries(f, "item_wall_clock_times")
-            )
-            shot_times = dict(
-                iter_dict_attr_entries(f, "shot_wall_clock_times")
-            )
-
-        # Verify that both new attributes are correctly merged from the worker
-        # files into runner.h5.
-        assert item_times == {0: 0.5, 1: 1.5}
-        assert shot_times == {0: {0: 0.1, 1: 0.2}, 1: {0: 1.1, 1: 1.2}}
-
-    @pytest.mark.parametrize(
-        "merged_reduced, merged_item_times, merged_shot_times,"
-        " worker_item_time, worker_shot_times,"
-        " expected_reduced, expected_item_times, expected_shot_times",
-        [
-            pytest.param(
-                [(0, "canonical")],
-                [],
-                [],
-                9.9,
-                {0: 1.1, 1: 2.2},
-                {0: "canonical"},
-                {0: 9.9},
-                {0: {0: 1.1, 1: 2.2}},
-                id="results_first",
-            ),
-            pytest.param(
-                [],
-                [(0, 2.5)],
-                [(0, {0: 0.5, 1: 0.6})],
-                99.9,
-                {0: 9.1, 1: 9.2},
-                {0: "worker"},
-                {0: 2.5},
-                {0: {0: 0.5, 1: 0.6}},
-                id="wall_clock_times_first",
-            ),
-        ],
-    )
-    def test_consolidate_worker_files_recovers_out_of_lockstep_merge(
-        self,
-        tmp_path,
-        merged_reduced,
-        merged_item_times,
-        merged_shot_times,
-        worker_item_time,
-        worker_shot_times,
-        expected_reduced,
-        expected_item_times,
-        expected_shot_times,
-    ):
-        """`_consolidate_worker_files` recovers from a crash mid-merge.
-
-        `results`/`item_wall_clock_times`/`shot_wall_clock_times` are merged
-        independently, so item 0 may be merged into only some of them.
-        Seeds `runner.h5` that way and adds a worker file holding item 0 in
-        all three under different values. Already-merged entries must stay
-        untouched and the missing ones come from the worker file. Covers
-        both directions (reduced results first, or timings first).
-        """
-        from loqs.tools.multiprogramrunner import _consolidate_worker_files
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Bare runner.h5 with valid object-group structure to merge into.
-        runner_path = _write_bare_runner_h5(checkpoint_dir)
-
-        # Attributes with item 0 already merged; the others seeded empty
-        # (only entry presence distinguishes "not merged").
-        with h5py.File(runner_path, "a") as f:
-            out_root = _resolve_checkpoint_object_group(f)
-            merge_dict_attr(
-                out_root,
-                "_reduced_results",
-                merged_reduced,
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-            merge_dict_attr(
-                out_root,
-                "item_wall_clock_times",
-                merged_item_times,
-                key_use_dataset=True,
-                value_use_dataset=True,
-            )
-            merge_dict_attr(
-                out_root,
-                "shot_wall_clock_times",
-                merged_shot_times,
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-
-        # Worker file: item 0 present in all three attributes, worker values.
-        worker_file = checkpoint_dir / "worker_0_runner.h5"
-        _merge_into_file(worker_file, "results", [(0, "worker")])
-        _merge_into_file(
-            worker_file,
-            "item_wall_clock_times",
-            [(0, worker_item_time)],
-            value_use_dataset=True,
-        )
-        _merge_into_file(
-            worker_file, "shot_wall_clock_times", [(0, worker_shot_times)]
-        )
-
-        _consolidate_worker_files(
-            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
-        )
-
-        assert (
-            _read_runner_dict_attr(runner_path, "_reduced_results")
-            == expected_reduced
-        )
-        assert (
-            _read_runner_dict_attr(runner_path, "item_wall_clock_times")
-            == expected_item_times
-        )
-        assert (
-            _read_runner_dict_attr(runner_path, "shot_wall_clock_times")
-            == expected_shot_times
-        )
-
-    def test_read_done_union_and_consolidate_mixed_legacy_and_swmr_formats(
-        self, tmp_path
-    ):
-        """Backward-compat regression test for resuming a run that started
-        under pre-fix (legacy `worker_*_runner.h5`, dict attrs at file root)
-        code and continues under post-fix (SWMR ledger + dedicated per-item
-        payload file) code, with both formats present in the same
-        checkpoint directory at once. Item 0 lives entirely in a legacy
-        worker file; item 1 lives in a SWMR ledger file plus its own
-        payload file. Both `_read_done_union` (pre-consolidation) and
-        `_consolidate_worker_files` must account for entries living in
-        either format.
-        """
-        from loqs.internal.streamingmerge import merge_dict_attr
-        from loqs.internal.swmrledger import (
-            mark_ledger_item_done,
-            open_swmr_writer,
-        )
-        from loqs.tools.multiprogramrunner import (
-            _consolidate_worker_files,
-            _ITEM_LEDGER_FIELDS,
-            _read_done_union,
-        )
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Bare runner.h5 with valid object-group structure to merge into.
-        runner = _SimpleDoubleRunner(items=[])
-        runner_path = checkpoint_dir / "runner.h5"
-        runner.write(runner_path, "hdf5")
-
-        # Legacy-format leftover: item 0's dict attrs written directly at
-        # its worker file's own root.
-        legacy_file = checkpoint_dir / "worker_legacy_runner.h5"
-        with h5py.File(legacy_file, "a") as f:
-            merge_dict_attr(
-                f,
-                "results",
-                [(0, "legacy_result")],
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-            merge_dict_attr(
-                f,
-                "item_wall_clock_times",
-                [(0, 1.5)],
-                key_use_dataset=True,
-                value_use_dataset=True,
-            )
-
-        # New-format: item 1's SWMR ledger file plus its own payload file.
-        ledger_file, ledger_group = open_swmr_writer(
-            checkpoint_dir / "worker_new_runner.h5",
-            fields=_ITEM_LEDGER_FIELDS,
-        )
-        mark_ledger_item_done(ledger_group, 1, 2.5)
-
-        payload_path = checkpoint_dir / "worker_new_item_1_payload.h5"
-        with h5py.File(payload_path, "w") as f:
-            merge_dict_attr(
-                f,
-                "results",
-                [(1, "new_result")],
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-            merge_dict_attr(
-                f,
-                "item_wall_clock_times",
-                [(1, 2.5)],
-                key_use_dataset=True,
-                value_use_dataset=True,
-            )
-
-        # Pre-consolidation resume detection: both formats must be visible.
-        done = _read_done_union(
-            checkpoint_dir, runner_filename="runner.h5", attr_name="results"
-        )
-        assert done == {0: "legacy_result", 1: "new_result"}
-
-        # Consolidation folds both source formats into runner.h5 and deletes
-        # every source file (legacy worker file, ledger file, payload file).
-        # The writer closes its ledger first, as a real worker does when its
-        # task returns; an open ledger can't be deleted on Windows.
-        ledger_file.close()
-        _consolidate_worker_files(
-            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
-        )
-
-        consolidated = _read_done_union(
-            checkpoint_dir, runner_filename="runner.h5", attr_name="results"
-        )
-        assert consolidated == {0: "legacy_result", 1: "new_result"}
-
-        assert not legacy_file.exists()
-        assert not (checkpoint_dir / "worker_new_runner.h5").exists()
-        assert not payload_path.exists()
 
 
 # Module-level test classes for decode_cache regression tests.
@@ -3551,308 +3023,37 @@ class TestDecodeCache:
     (not a DeferredRef placeholder) when read via the fixed code paths.
     """
 
-    @pytest.mark.parametrize(
-        "scenario",
-        ["read_union", "consolidate", "poll"],
-    )
-    def test_shared_reference_decode_cache(self, tmp_path, scenario):
-        """Regression test for the decode_cache fixes in
-        `read_checkpoint_dict_attr_union`, `_consolidate_worker_files` and
-        `_poll_one_worker_file`: a Serializable value referenced by multiple
-        entries of a worker file's dict attributes decodes to a real object
-        (not a DeferredRef placeholder on its later occurrences) through
-        each of those code paths."""
-        from loqs.internal.serializable import DeferredRef
+    def test_shared_reference_decode_cache(self, tmp_path):
+        """Regression test for the store's consolidation: a Serializable
+        value referenced by multiple attributes of one item's payload
+        decodes to a real object (not a DeferredRef placeholder on its
+        later occurrences) after consolidation."""
+        store = CheckpointStore(tmp_path / "checkpoints", ITEM_LAYOUT)
+        store.write_snapshot(_SimpleDoubleRunner(items=[]))
 
-        scenario_fn = {
-            "read_union": self._read_union_scenario,
-            "consolidate": self._consolidate_scenario,
-            "poll": self._poll_scenario,
-        }[scenario]
-        result1, result2, parent_value, same_parent = scenario_fn(tmp_path)
-
-        assert not isinstance(result1, DeferredRef)
-        assert not isinstance(result2, DeferredRef)
-        assert isinstance(result1, _ItemWithParent)
-        assert isinstance(result2, _ItemWithParent)
-        assert result1.parent is not None
-        assert result2.parent is not None
-        if same_parent:
-            assert result1.parent is result2.parent
-        assert result1.parent.value == parent_value
-        assert result2.parent.value == parent_value
-
-    def _read_union_scenario(self, tmp_path):
-        """Two entries of one worker file's "results" sharing a parent,
-        read back via `read_checkpoint_dict_attr_union`."""
-        from loqs.internal.streamingmerge import (
-            read_checkpoint_dict_attr_union,
-        )
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Create a shared parent and two children that reference it
-        shared_parent = _SharedParent(value=99)
-        child1 = _ItemWithParent(item_id=1, parent=shared_parent)
-        child2 = _ItemWithParent(item_id=2, parent=shared_parent)
-
-        # Write both children to a worker file, sharing the same parent
-        worker_file = checkpoint_dir / "worker_0_runner.h5"
-        with h5py.File(worker_file, "a") as f:
-            from loqs.internal.streamingmerge import merge_dict_attr
-
-            # Use a shared encode_cache so the encoder knows about shared refs
-            merge_dict_attr(
-                f,
-                "results",
-                [(100, child1), (101, child2)],
-                encode_cache={},
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-
-        # Read them back via read_checkpoint_dict_attr_union (the fixed code path)
-        done = read_checkpoint_dict_attr_union(
-            checkpoint_dir, None, "worker_*_runner.h5", "results"
-        )
-
-        # Both entries should be present
-        assert 100 in done and 101 in done
-        return done[100], done[101], 99, True
-
-    def _consolidate_scenario(self, tmp_path):
-        """One worker file's "results" and "_program_results" entries
-        sharing a parent, consolidated into runner.h5 by the real
-        `_consolidate_worker_files` and read back from both attributes with
-        a shared decode_cache."""
-        from loqs.tools.multiprogramrunner import _consolidate_worker_files
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Create a minimal runner.h5 with valid structure via _SimpleDoubleRunner
-        runner = _SimpleDoubleRunner(
-            items=[],
-        )
-        runner_path = checkpoint_dir / "runner.h5"
-        runner.write(runner_path, "hdf5")
-
-        # Create shared parent and items
         shared_parent = _SharedParent(value=77)
         result_item = _ItemWithParent(item_id=10, parent=shared_parent)
         program_results_item = _ItemWithParent(
             item_id=20, parent=shared_parent
         )
-
-        # Create worker file with both "results" and "_program_results"
-        worker_file = checkpoint_dir / "worker_0_runner.h5"
-        with h5py.File(worker_file, "a") as f:
-            from loqs.internal.streamingmerge import merge_dict_attr
-
-            encode_cache = {}
-            merge_dict_attr(
-                f,
-                "results",
-                [(200, result_item)],
-                encode_cache=encode_cache,
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-            merge_dict_attr(
-                f,
-                "_program_results",
-                [(300, program_results_item)],
-                encode_cache=encode_cache,
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-
-        # Verify worker file exists before consolidation
-        assert worker_file.exists()
-
-        # Call the real _consolidate_worker_files function
-        _consolidate_worker_files(
-            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
+        store.put_batch(
+            {
+                200: {
+                    "results": result_item,
+                    "item_wall_clock_times": 0.5,
+                    "shot_wall_clock_times": {},
+                    "_program_results": program_results_item,
+                }
+            },
+            worker_id="0",
         )
+        store.consolidate()
+        assert store.payload_paths() == []
 
-        # Verify worker file was deleted (confirms real function executed)
-        assert not worker_file.exists()
-
-        # Read back both attributes using a shared decode_cache, mirroring
-        # how a real caller like _read_done_union reads them.
-        with h5py.File(runner_path, "r") as f:
-            runner_root = _resolve_checkpoint_object_group(f)
-            decode_cache = {}  # Shared across both branches
-            reduced_results = dict(
-                iter_dict_attr_entries(
-                    runner_root, "_reduced_results", decode_cache=decode_cache
-                )
-            )
-            program_results = dict(
-                iter_dict_attr_entries(
-                    runner_root, "_program_results", decode_cache=decode_cache
-                )
-            )
-
-        # Both entries should be present and successfully decoded
-        assert 200 in reduced_results
-        assert 300 in program_results
-        return reduced_results[200], program_results[300], 77, False
-
-    def _poll_scenario(self, tmp_path):
-        """Two entries of one worker file's "results" sharing a parent,
-        read back through `_poll_one_worker_file`'s `on_item_done`."""
-        from loqs.tools.multiprogramrunner import _poll_one_worker_file
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Create shared parent and items
-        shared_parent = _SharedParent(value=55)
-        item1 = _ItemWithParent(item_id=30, parent=shared_parent)
-        item2 = _ItemWithParent(item_id=31, parent=shared_parent)
-
-        # Write items to a worker file
-        worker_file = checkpoint_dir / "worker_0_runner.h5"
-        with h5py.File(worker_file, "a") as f:
-            from loqs.internal.streamingmerge import merge_dict_attr
-
-            merge_dict_attr(
-                f,
-                "results",
-                [(400, item1), (401, item2)],
-                encode_cache={},
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-
-        # Poll the worker file for entries starting at index 0
-        polled_items = []
-
-        def on_item_done(key, item, result):
-            polled_items.append((key, result))
-
-        final_count = _poll_one_worker_file(
-            worker_file,
-            consumed_count=0,
-            observed_indices=set(),
-            items_map={400: "item_400", 401: "item_401"},
-            on_item_done=on_item_done,
-            pbar=None,
-        )
-
-        # Should have polled both items
-        assert final_count == 2
-        assert len(polled_items) == 2
-
-        # Extract the results from the callback
-        return polled_items[0][1], polled_items[1][1], 55, True
-
-    def test_consolidate_worker_files_streaming_one_at_a_time(self, tmp_path):
-        """Trap test enforcing read-ahead bound: decoding doesn't race past writing.
-
-        Asserts that _consolidate_worker_files never decodes more than one entry
-        ahead of what has already been written to runner.h5, so the read and write
-        sides always advance in lockstep (decoded_count - written_count <= 1 at all
-        times) rather than fully materializing decoded entries before any write.
-        """
-        import unittest.mock
-        from loqs.tools.multiprogramrunner import _consolidate_worker_files
-        from loqs.internal.streamingmerge import (
-            iter_dict_attr_entries as real_iter_dict_attr_entries,
-            merge_dict_attr,
-        )
-        from loqs.internal import streamingmerge
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        # Create a minimal runner.h5 via _SimpleDoubleRunner
-        runner = _SimpleDoubleRunner(
-            items=[],
-        )
-        runner_path = checkpoint_dir / "runner.h5"
-        runner.write(runner_path, "hdf5")
-
-        # Create worker file with 3 results to merge
-        worker_file = checkpoint_dir / "worker_0_runner.h5"
-        with h5py.File(worker_file, "a") as f:
-            encode_cache = {}
-            for i in range(3):
-                merge_dict_attr(
-                    f,
-                    "results",
-                    [(100 + i, 1000 + i)],
-                    encode_cache=encode_cache,
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-
-        # Counters for read and write sides (mutable via closure)
-        decoded_count = [0]
-        written_count = [0]
-
-        def spy_iter_dict_attr_entries(
-            parent_group, attr_name, decode_cache=None, start_index=0
-        ):
-            """Spy on iter_dict_attr_entries: track decoded entries, enforce read-ahead bound."""
-            for key, value in real_iter_dict_attr_entries(
-                parent_group,
-                attr_name,
-                decode_cache=decode_cache,
-                start_index=start_index,
-            ):
-                decoded_count[0] += 1
-                # Enforce: read side never more than 1 ahead of write side for "results"
-                if attr_name == "results":
-                    ahead = decoded_count[0] - written_count[0]
-                    assert ahead <= 1
-                yield (key, value)
-
-        # Save real function reference before patching
-        real_stream_into_existing = (
-            streamingmerge._stream_into_existing_dict_attr
-        )
-
-        def spy_stream_into_existing_dict_attr(
-            parent_group, attr_name, entries, encode_cache
-        ):
-            """Spy on _stream_into_existing_dict_attr: stream one entry at a time, track writes."""
-            # Stream one entry at a time, calling real function per entry
-            for key, value in entries:
-                real_stream_into_existing(
-                    parent_group, attr_name, [(key, value)], encode_cache
-                )
-                # Increment write count only for _reduced_results
-                if attr_name == "_reduced_results":
-                    written_count[0] += 1
-
-        # Patch both iter_dict_attr_entries (read side) and _stream_into_existing_dict_attr
-        with (
-            unittest.mock.patch.object(
-                streamingmerge,
-                "iter_dict_attr_entries",
-                side_effect=spy_iter_dict_attr_entries,
-            ),
-            unittest.mock.patch.object(
-                streamingmerge,
-                "_stream_into_existing_dict_attr",
-                side_effect=spy_stream_into_existing_dict_attr,
-            ),
-        ):
-            _consolidate_worker_files(
-                checkpoint_dir,
-                runner_filename="runner.h5",
-                delete_originals=True,
-            )
-
-        # Assert both counters reached their expected values
-        assert decoded_count[0] == 3
-        assert written_count[0] == 3
-
-        # Verify worker file was deleted
-        assert not worker_file.exists()
+        for result in (store.get(200), store.get(200, "_program_results")):
+            assert isinstance(result, _ItemWithParent)
+            assert isinstance(result.parent, _SharedParent)
+            assert result.parent.value == 77
 
     @pytest.mark.parametrize(
         "runner_cls",
@@ -4440,9 +3641,10 @@ def _read_item_ledger_snapshot(item_checkpoint_dir):
         open_swmr_reader,
         read_swmr_ledger_status,
     )
-    from loqs.tools.multiprogramrunner import _item_ledger_path
+    from loqs.internal import worker_id
 
-    f, ledger_group = open_swmr_reader(_item_ledger_path(item_checkpoint_dir))
+    store = CheckpointStore(item_checkpoint_dir, ITEM_LAYOUT)
+    f, ledger_group = open_swmr_reader(store.ledger_path(worker_id()))
     try:
         return read_swmr_ledger_status(ledger_group)
     finally:
@@ -4563,7 +3765,13 @@ class TestLedgerShotProgress:
             run_kwargs={"progress_callback": user_callback},
         )
         results = mpr._run_serial(
-            [(4, "x")], process_item, {}, item_checkpoint_dir, None, None, None
+            [(4, "x")],
+            process_item,
+            {},
+            CheckpointStore(item_checkpoint_dir, ITEM_LAYOUT),
+            None,
+            None,
+            None,
         )
 
         assert results[4]["_reduced_results"] == 7
@@ -4603,12 +3811,15 @@ class TestDriverLiveItemReads:
             )
 
         opened = []
+        real_payload_view = CheckpointStore.payload_view
 
-        def recording_iter(f, *args, **kwargs):
-            opened.append(Path(f.filename).name)
-            return iter_dict_attr_entries(f, *args, **kwargs)
+        def recording_payload_view(self, path):
+            opened.append(Path(path).name)
+            return real_payload_view(self, path)
 
-        monkeypatch.setattr(mpr, "iter_dict_attr_entries", recording_iter)
+        monkeypatch.setattr(
+            CheckpointStore, "payload_view", recording_payload_view
+        )
 
         items_map = {i: f"item{i}" for i in range(4)}
         notified = []
@@ -4617,8 +3828,9 @@ class TestDriverLiveItemReads:
         def on_item_done(index, item, value):
             notified.append((index, item, value))
 
+        store = CheckpointStore(tmp_path, ITEM_LAYOUT)
         count = mpr._poll_one_new_format_worker_file(
-            worker_file, 0, observed, items_map, on_item_done, None
+            store, worker_file, 0, observed, items_map, on_item_done, None
         )
         assert sorted(opened) == [
             f"{prefix}_item_0_payload.h5",
@@ -4634,7 +3846,7 @@ class TestDriverLiveItemReads:
         opened.clear()
         notified.clear()
         again = mpr._poll_one_new_format_worker_file(
-            worker_file, count, observed, items_map, on_item_done, None
+            store, worker_file, count, observed, items_map, on_item_done, None
         )
         assert opened == []
         assert notified == []
@@ -4652,4 +3864,5 @@ class TestDriverLiveItemReads:
         write_item_ledger(
             tmp_path, pid=2, current_item=5, shots_done=1, shots_total=2
         )
-        assert mpr._read_worker_current_indices(tmp_path) == {3, 5}
+        store = CheckpointStore(tmp_path, ITEM_LAYOUT)
+        assert mpr._read_worker_current_indices(store) == {3, 5}

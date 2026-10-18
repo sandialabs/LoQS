@@ -34,7 +34,7 @@ from typing import Any, ContextManager
 import h5py
 import numpy as np
 
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.encoder.hdf5encoder import HDF5Encoder, _get_version
 from loqs.internal.serializable import ResolvingDecodeCache, Serializable
 from loqs.internal.streamingmerge import (
     _decode_group_entry,
@@ -204,8 +204,13 @@ class BaseCheckpointStore(ABC):
         """Merge every payload into the canonical file."""
 
     @abstractmethod
-    def write_snapshot(self, obj: Serializable) -> None:
-        """Atomically write the canonical file from `obj`."""
+    def write_snapshot(
+        self, obj: Serializable, *, keep_entries: bool = False
+    ) -> None:
+        """Atomically write the canonical file from `obj`.
+
+        With `keep_entries`, the committed entries of the existing file
+        replace `obj`'s own streamed entries."""
 
     @abstractmethod
     def nested(
@@ -424,8 +429,12 @@ class _Opened:
             return []
         keys_group = sides[0]
         fmt = keys_group.attrs.get("storage_format", "groups")
+        if self.limits is None:
+            n = side_length(keys_group)
+        else:
+            n = self.limits.get(streamed.canonical, 0)
         all_keys = _read_iterable_side(keys_group, fmt, None)
-        return [int(k) for k in all_keys[: self.count(streamed)]]
+        return [int(k) for k in all_keys[:n]]
 
     def read(self, streamed: StreamedAttr, pos: int) -> Any:
         """Decode the value at physical position `pos`."""
@@ -466,7 +475,11 @@ class _ReadableStore(BaseCheckpointStore):
 
     @contextlib.contextmanager
     def _opened(
-        self, source: _Source, *, wrap_body: bool = True
+        self,
+        source: _Source,
+        *,
+        wrap_body: bool = True,
+        validate: bool = True,
     ) -> Iterator[_Opened]:
         """Open and validate a source; any failure becomes a
         `CheckpointReadError` naming it. With `wrap_body=False`, errors
@@ -474,7 +487,8 @@ class _ReadableStore(BaseCheckpointStore):
         in_body = False
         try:
             with source.opener() as opened:
-                opened.validate(self.layout)
+                if validate:
+                    opened.validate(self.layout)
                 in_body = True
                 yield opened
         except CheckpointReadError:
@@ -788,20 +802,91 @@ class CheckpointStore(_ReadableStore):
 
     # -- writing ----------------------------------------------------------
 
-    def write_snapshot(self, obj: Serializable) -> None:
+    def write_snapshot(
+        self, obj: Serializable, *, keep_entries: bool = False
+    ) -> None:
         """Atomically write the canonical file from `obj`.
 
         Inside the temp file and before the rename, empty groups-format
         streamed attributes are removed, every fixed-size dataset side is
         made growable and the commit marker is written from the physical
         lengths.
+
+        With `keep_entries`, the existing canonical file must exist and be
+        readable. Its committed entries of every streamed attribute are
+        copied into the new file as stored, never decoded, in place of
+        whatever `obj` held. Any tail beyond the old marker is dropped.
         """
-        self.directory.mkdir(parents=True, exist_ok=True)
+        with contextlib.ExitStack() as stack:
+            old: tuple[h5py.Group, dict[str, int]] | None = None
+            if keep_entries:
+                old = self._open_for_rewrite(stack)
+            self.directory.mkdir(parents=True, exist_ok=True)
+            self._write_snapshot_file(obj, old)
+        self._canonical_decode_cache = None
+        self._canonical_identity = None
+
+    def _open_for_rewrite(
+        self, stack: contextlib.ExitStack
+    ) -> tuple[h5py.Group, dict[str, int]]:
+        """Open the canonical file read-only on `stack` and validate it;
+        returns its object group and committed lengths."""
+        path = self.canonical_path
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"The canonical file {path} does not exist; "
+                "write_snapshot creates it"
+            )
+        try:
+            f = stack.enter_context(open_h5(path, "r"))
+            limits = _parse_marker(f)
+            container = _resolve_checkpoint_object_group(f)
+            _Opened(container, limits, None, str(path), True, False).validate(
+                self.layout
+            )
+        except Exception as exc:
+            raise CheckpointReadError(
+                path, f"{type(exc).__name__}: {exc}"
+            ) from exc
+        return container, limits
+
+    def _carry_entries(
+        self,
+        container: h5py.Group,
+        old: tuple[h5py.Group, dict[str, int]],
+    ) -> None:
+        """Replace every streamed attr of `container` with a copy of the
+        old file's committed entries."""
+        old_container, limits = old
+        for streamed in self.layout.attrs:
+            name = streamed.canonical
+            if name in container:
+                del container[name]
+            committed = limits.get(name, 0)
+            if committed <= 0:
+                continue
+            # Called on the destination, which is the group written to.
+            container.copy(old_container[name], container, name=name)
+            _trim_attr(
+                container, streamed, committed, str(self.canonical_path)
+            )
+            sides = _iterable_groups(container, name)
+            assert sides is not None
+            for side in sides:
+                _make_side_growable(side)
+
+    def _write_snapshot_file(
+        self,
+        obj: Serializable,
+        old: tuple[h5py.Group, dict[str, int]] | None,
+    ) -> None:
         with atomic_h5_file(self.canonical_path) as f:
             obj.dump(f, "hdf5")
             for streamed in self.layout.attrs:
                 _reset_empty_groups_format_dict_attr(f, streamed.canonical)
             container = _resolve_checkpoint_object_group(f)
+            if old is not None:
+                self._carry_entries(container, old)
             lengths: dict[str, int] = {}
             for streamed in self.layout.attrs:
                 sides = _iterable_groups(container, streamed.canonical)
@@ -812,8 +897,6 @@ class CheckpointStore(_ReadableStore):
                     _make_side_growable(side)
                 lengths[streamed.canonical] = side_length(sides[0])
             f.attrs[COMMIT_MARKER_ATTR] = json.dumps(lengths)
-        self._canonical_decode_cache = None
-        self._canonical_identity = None
 
     def put_batch(
         self,
@@ -888,6 +971,43 @@ class CheckpointStore(_ReadableStore):
                     f"{name!r} is a streamed attribute; read it through "
                     "keys and get"
                 )
+        with self._committed_object(decode_cache) as (group, cache):
+            result = decode_object_attrs(group, wanted, cache)
+        absent = [name for name in wanted if name not in result]
+        if absent:
+            raise CheckpointReadError(
+                self.canonical_path, f"attributes {absent} are missing"
+            )
+        return result
+
+    def read_config(self) -> Serializable:
+        """The committed canonical file's object, rebuilt with its stored
+        class and without its streamed attributes.
+
+        Raises `CheckpointReadError` naming the file if the file or marker
+        is missing or decoding fails. The canonical decode cache is left
+        alone.
+        """
+        streamed_names = {s.canonical for s in self.layout.attrs}
+        with self._committed_object() as (group, cache):
+            cls = Serializable._import_class(
+                group.attrs["module"],
+                group.attrs["class"],
+                _get_version(group),
+            )
+            names = [
+                n for n in cls._SERIALIZE_ATTRS if n not in streamed_names
+            ]
+            attrs = decode_object_attrs(group, names, cache)
+            return cls._from_decoded_attrs(attrs)
+
+    @contextlib.contextmanager
+    def _committed_object(
+        self, decode_cache: Any = None
+    ) -> Iterator[tuple[h5py.Group, Any]]:
+        """Open the committed canonical file read-only and yield its object
+        group and a decode cache; any failure, in the body too, becomes a
+        `CheckpointReadError` naming the file."""
         path = self.canonical_path
         try:
             f = open_h5(path, "r")
@@ -897,19 +1017,13 @@ class CheckpointStore(_ReadableStore):
                     decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
                 else:
                     decode_cache._root = f
-                result = decode_object_attrs(
-                    _resolve_checkpoint_object_group(f), wanted, decode_cache
-                )
+                yield _resolve_checkpoint_object_group(f), decode_cache
             finally:
                 f.close()
         except Exception as exc:
             raise CheckpointReadError(
                 path, f"{type(exc).__name__}: {exc}"
             ) from exc
-        absent = [name for name in wanted if name not in result]
-        if absent:
-            raise CheckpointReadError(path, f"attributes {absent} are missing")
-        return result
 
     def _sources(self) -> list[_Source]:
         sources: list[_Source] = []
@@ -1143,20 +1257,66 @@ class CheckpointStore(_ReadableStore):
         key: int,
         attr: str = "_program_results",
         layout: StoreLayout = SHOT_LAYOUT,
-    ) -> BaseCheckpointStore:
+    ) -> _NestedStore:
         """A read-only store over the `ProgramResults` held at `key` in
         `attr`, located afresh on every read."""
         return _NestedStore(self, key, self._streamed(attr), layout)
 
+    def payload_view(self, path: str | os.PathLike) -> _PayloadView:
+        """A read-only store over the one payload file at `path`.
 
-class _NestedStore(_ReadableStore):
+        The file is read as the store reads payloads. Raises `ValueError`
+        if `path` is not one of this store's payload file names."""
+        name = os.path.basename(os.fspath(path))
+        if not self._name_patterns()[1].fullmatch(name):
+            raise ValueError(f"{name!r} is not a payload file name")
+        return _PayloadView(self, Path(path))
+
+
+class _ReadOnlyStore(_ReadableStore):
+    """A read-only view: every write, and further views, are refused."""
+
+    def put_batch(self, *args: Any, **kwargs: Any) -> BatchReceipt:
+        raise TypeError("a read-only view cannot be written")
+
+    def consolidate(self, *args: Any, **kwargs: Any) -> tuple[int, ...]:
+        raise TypeError("a read-only view cannot be consolidated")
+
+    def write_snapshot(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("a read-only view cannot be written")
+
+    def nested(self, *args: Any, **kwargs: Any) -> BaseCheckpointStore:
+        raise TypeError("a read-only view cannot be nested")
+
+    def payload_view(self, *args: Any, **kwargs: Any) -> _PayloadView:
+        raise TypeError("a read-only view has no payload views")
+
+
+class _PayloadView(_ReadOnlyStore):
+    """A read-only view of one payload file of a `CheckpointStore`."""
+
+    def __init__(self, parent: CheckpointStore, path: Path) -> None:
+        self._parent = parent
+        self._path = path
+        self.layout = parent.layout
+
+    def _sources(self) -> list[_Source]:
+        return [
+            _Source(
+                self._path,
+                functools.partial(self._parent._open_payload, self._path),
+            )
+        ]
+
+
+class _NestedStore(_ReadOnlyStore):
     """A read-only view of a `ProgramResults`-like object stored as one
     entry of an enclosing store. Every entry counts, because the enclosing
     entry is committed. It holds no open handle between calls."""
 
     def __init__(
         self,
-        parent: _ReadableStore,
+        parent: CheckpointStore,
         key: int,
         parent_attr: StreamedAttr,
         layout: StoreLayout,
@@ -1165,18 +1325,34 @@ class _NestedStore(_ReadableStore):
         self._key = key
         self._parent_attr = parent_attr
         self.layout = layout
+        self._positions: dict[str, dict[int, int]] = {}
 
     def _sources(self) -> list[_Source]:
         return [_Source(Path("<nested>"), self._open_nested)]
 
     @contextlib.contextmanager
     def _open_nested(self) -> Iterator[_Opened]:
+        # The first source holding the key wins, as in a key index; later
+        # sources are never opened.
         parent = self._parent
-        index = parent._key_index(self._parent_attr, True)
-        if self._key not in index:
-            raise KeyError(self._key)
-        source, pos = index[self._key]
-        with parent._opened(source) as outer:
+        with contextlib.ExitStack() as stack:
+            pos = -1
+            for source in parent._sources():
+                outer = stack.enter_context(
+                    parent._opened(source, validate=False)
+                )
+                try:
+                    keys = outer.keys(self._parent_attr)
+                except Exception as exc:
+                    raise CheckpointReadError(
+                        source.path, f"{type(exc).__name__}: {exc}"
+                    ) from exc
+                if self._key in keys:
+                    pos = keys.index(self._key)
+                    break
+                stack.close()
+            if pos < 0:
+                raise KeyError(self._key)
             sides = outer.sides(self._parent_attr)
             assert sides is not None
             group = _resolve_checkpoint_object_group(sides[1][str(pos)])
@@ -1196,17 +1372,63 @@ class _NestedStore(_ReadableStore):
                 require_primary=False,
             )
 
-    def put_batch(self, *args: Any, **kwargs: Any) -> BatchReceipt:
-        raise TypeError("a nested view is read-only")
+    def get(
+        self, key: int, attr: str | None = None, *, strict: bool = True
+    ) -> Any:
+        # One open of the enclosing file serves the lookup and the read.
+        # Nothing is validated on open: a cut-short entry fails on its read.
+        streamed = self._streamed(attr)
+        try:
+            with self._opened(self._sources()[0], validate=False) as opened:
+                # A committed entry never changes, so a position found
+                # once stays valid; a miss re-reads the keys.
+                positions = self._positions.setdefault(streamed.name, {})
+                if key not in positions:
+                    positions.clear()
+                    for pos, k in enumerate(opened.keys(streamed)):
+                        positions.setdefault(k, pos)
+                if key in positions:
+                    return opened.read(streamed, positions[key])
+        except CheckpointReadError as exc:
+            if strict:
+                raise
+            raise KeyError(key) from exc
+        raise KeyError(key)
 
-    def consolidate(self, *args: Any, **kwargs: Any) -> tuple[int, ...]:
-        raise TypeError("a nested view is read-only")
+    def read_attrs(
+        self, names: Iterable[str], *, decode_cache: Any = None
+    ) -> dict[str, Any]:
+        """Decode the named non-streamed attributes of the nested object,
+        with the enclosing file's decode cache.
 
-    def write_snapshot(self, obj: Serializable) -> None:
-        raise TypeError("a nested view is read-only")
-
-    def nested(self, *args: Any, **kwargs: Any) -> BaseCheckpointStore:
-        raise TypeError("a nested view cannot be nested further")
+        Streamed attributes are never touched: naming one raises
+        `ValueError`. A missing enclosing entry, a missing name or a decode
+        failure raises `CheckpointReadError` naming the enclosing file.
+        """
+        wanted = list(names)
+        streamed_names = {s.canonical for s in self.layout.attrs}
+        for name in wanted:
+            if name in streamed_names:
+                raise ValueError(
+                    f"{name!r} is a streamed attribute; read it through "
+                    "keys and get"
+                )
+        try:
+            with self._open_nested() as opened:
+                path = opened.path
+                result = decode_object_attrs(
+                    opened.container, wanted, opened.cache
+                )
+        except KeyError as exc:
+            raise CheckpointReadError(
+                self._parent.canonical_path,
+                f"entry {self._key} of {self._parent_attr.canonical!r} "
+                "is missing",
+            ) from exc
+        absent = [name for name in wanted if name not in result]
+        if absent:
+            raise CheckpointReadError(path, f"attributes {absent} are missing")
+        return result
 
 
 class MemoryCheckpointStore(BaseCheckpointStore):
@@ -1277,7 +1499,9 @@ class MemoryCheckpointStore(BaseCheckpointStore):
     ) -> tuple[int, ...]:
         return ()
 
-    def write_snapshot(self, obj: Serializable) -> None:
+    def write_snapshot(
+        self, obj: Serializable, *, keep_entries: bool = False
+    ) -> None:
         return None
 
     def nested(

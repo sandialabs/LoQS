@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from loqs.internal.serializable import IncorrectDecodableTypeError
 from _shared_checkpoint_test_helpers import (
     H5Session,
     InlineExecutor,
@@ -132,52 +131,7 @@ _SITES = {
 }
 
 
-# Rows that fail on 1ef75fd: the exception (or failed check) seen, and the
-# stage expected to flip each. The stage must drop the marker when it does.
-_XFAIL_REASONS: dict[str, tuple[type[BaseException], str]] = {
-    "item_serial_payload": (
-        RuntimeError,
-        "#144 item 4: a kill mid-payload leaves a partial payload that "
-        "counts as done, so resume raises RuntimeError 'Item 0 is "
-        "missing from final _program_results'; fixed in stage 4",
-    ),
-    "item_parallel_payload": (
-        RuntimeError,
-        "#144 item 4: a kill mid-payload leaves a partial payload that "
-        "counts as done, so resume raises RuntimeError 'Item 0 is "
-        "missing from final _program_results'; fixed in stage 4",
-    ),
-    "item_serial_consolidation": (
-        IncorrectDecodableTypeError,
-        "#144 items 1 and 3: a kill during consolidation leaves a "
-        "runner.h5 that resume can't read (IncorrectDecodableTypeError "
-        "from the runner's own read); fixed in stage 4",
-    ),
-    "item_parallel_consolidation": (
-        IncorrectDecodableTypeError,
-        "#144 items 1 and 3: a kill during consolidation leaves a "
-        "runner.h5 that resume can't read (IncorrectDecodableTypeError "
-        "from the runner's own read); fixed in stage 4",
-    ),
-    "runner_rewrite_on_resume": (
-        KeyError,
-        "#144 item 1: a kill in the runner.h5 rewrite at the start of a "
-        "resume leaves a file the next resume can't read (KeyError "
-        "'_quantum_program_values' in NoiseSweepRunner decoding); fixed "
-        "in stage 4",
-    ),
-}
-
-
-def _site_param(site_id: str) -> object:
-    if site_id not in _XFAIL_REASONS:
-        return pytest.param(site_id, id=site_id)
-    raises, reason = _XFAIL_REASONS[site_id]
-    mark = pytest.mark.xfail(strict=True, raises=raises, reason=reason)
-    return pytest.param(site_id, id=site_id, marks=mark)
-
-
-@pytest.mark.parametrize("site_id", [_site_param(s) for s in _SITES])
+@pytest.mark.parametrize("site_id", list(_SITES))
 def test_interrupted_write_resumes_to_reference(
     site_id: str, scenarios: dict[str, Scenario], tmp_path: Path
 ) -> None:

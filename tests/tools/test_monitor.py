@@ -8,6 +8,8 @@ import h5py
 import pytest
 from _shared_checkpoint_test_helpers import write_item_ledger
 
+from loqs.internal import worker_id
+from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
 from loqs.internal.swmrledger import open_swmr_writer
 from loqs.tools import multiprogramrunner
 from loqs.tools.monitor import (
@@ -291,7 +293,7 @@ def test_partial_visibility_and_empty_directories(tmp_path):
 
 
 def test_worker_name_matches_driver_ledger_path(tmp_path):
-    path = multiprogramrunner._item_ledger_path(tmp_path)
+    path = CheckpointStore(tmp_path, ITEM_LAYOUT).ledger_path(worker_id())
     f, _ = open_swmr_writer(path, multiprogramrunner._ITEM_LEDGER_FIELDS)
     f.close()
     snap = read_snapshot(tmp_path)

@@ -305,14 +305,6 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
 class TestFaultInjectionRunnerCheckpointing:
     """Checkpoint/resume and crash-recovery tests for FaultInjectionRunner."""
 
-    def _read_completed_indices(self, ckpt):
-        """Return set of indices completed so far, reading the union of
-        runner.h5's own consolidated state and any remaining worker files
-        (covers both a still-in-progress run and one already consolidated)."""
-        from loqs.tools.multiprogramrunner import _read_done_union
-
-        return set(_read_done_union(ckpt).keys())
-
     @pytest.mark.parametrize(
         "num_programs, resume_expected_outcomes",
         [(2, [1]), (1, (1,))],

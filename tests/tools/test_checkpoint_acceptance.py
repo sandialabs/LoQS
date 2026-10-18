@@ -2,9 +2,7 @@
 10), run against `QuantumProgram.run()` and `MultiProgramRunner.run()`.
 
 They use only public entry points plus the shared helpers, so they stay
-valid when the checkpoint writers are replaced. A test that fails today
-carries a strict `xfail` naming the item, the failure seen and the stage
-that flips it.
+valid when the checkpoint writers are replaced.
 """
 
 from __future__ import annotations
@@ -156,14 +154,6 @@ def test_consolidation_failure_at_every_event_resumes_correctly(
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="#144 item 8: kept results for item 1 fall back to the "
-    "in-memory object after its checkpoint files are gone, so run() "
-    "returns instead of raising RuntimeError (DID NOT RAISE); fixed in "
-    "stage 4",
-)
 def test_kept_results_do_not_fall_back_to_memory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -10,6 +10,7 @@ import pytest
 
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.backends.state import NumpyStatevectorQuantumState
+from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
 from loqs.tools import paralleltools
 from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.noisesweeptools import (
@@ -388,25 +389,12 @@ class TestRunParallel:
             with pytest.raises(RuntimeError):
                 runner.run()
 
-        # Read the partial state (indices 0 and 1) with the same glob pair
-        # as _read_done_union. The completed entries come from the per-item
-        # payload files; the worker ledgers hold no results, so the read
-        # skips them.
-        from loqs.internal.streamingmerge import (
-            read_checkpoint_dict_attr_union,
+        # The partial state (indices 0 and 1) comes from the per-item
+        # payload files, read through the item store.
+        completed = CheckpointStore(item_checkpoint_dir, ITEM_LAYOUT).keys(
+            strict=False
         )
-
-        completed = read_checkpoint_dict_attr_union(
-            item_checkpoint_dir,
-            None,
-            ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
-            "results",
-        )
-        assert len(completed) == 2  # Only 0 and 1 completed
-        assert 0 in completed
-        assert 1 in completed
-        assert 2 not in completed
-        assert 3 not in completed
+        assert completed == [0, 1]  # Only 0 and 1 completed
 
         # ParallelStrategy.make_chunks (in loqs.tools.paralleltools, not
         # noisesweeptools) is what actually calls chunk_round_robin now.
