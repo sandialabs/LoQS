@@ -406,7 +406,8 @@ keeps writing. Once every dispatched batch is confirmed done, `run()` runs
 one race-free, driver-side pass that streams every payload into the same
 canonical `results.h5` a serial run would have written directly, then
 deletes the payloads and ledgers -- callers never need to touch the
-per-worker files themselves.
+per-worker files themselves. Each payload references the parent program
+stored once in `results.h5` rather than embedding its own copy.
 
 The progress ledgers rely on SWMR, which needs a file system that preserves
 POSIX write ordering: a local disk, or a parallel file system such as Lustre
@@ -454,7 +455,12 @@ it stays fully populated in memory regardless of checkpointing.
 
 ### Resuming after a crash
 
-A checkpointing-enabled `run()` also supports genuine resume, regardless of whether the original call used a `shot_executor`: calling `run()` again with `checkpoint=True, resume=True` against the same `checkpoint_dir` only computes whatever wasn't already durably checkpointed, rather than starting over from shot 0. `run()` never returns leaving stray per-worker files (`worker_*_checkpoint.h5` or `worker_*_shots_*_payload.h5`) behind either -- a race-free consolidation pass into `results.h5` runs whenever any exist, even if the resuming call itself dispatches serially, so a parallel run that crashed mid-batch can always be finished off with a plain serial call.
+A checkpointing-enabled `run()` also supports genuine resume, regardless of whether the original call used a `shot_executor`: calling `run()` again with `checkpoint=True, resume=True` against the same `checkpoint_dir` only computes whatever wasn't already durably checkpointed, rather than starting over from shot 0.
+
+- A race-free consolidation pass into `results.h5` runs whenever any payload files exist, even if the resuming call itself dispatches serially, so a parallel run that crashed mid-batch can always be finished off with a plain serial call. It then deletes the merged payloads, the progress ledgers and any orphaned `worker_*.h5.tmp` files. A delete that fails (for example on a file another process still holds) warns and leaves that file in place, so `run()` can return with a stray file left behind.
+- Checkpoint writes are crash-safe: payload files and the `results.h5` snapshot are written to a temporary file and renamed into place, and a serial append to `results.h5` counts only once it's committed, so a resume never reads a half-written shot.
+- A resume that finds a damaged checkpoint file raises `CheckpointReadError` (a `RuntimeError`) naming it, rather than silently recomputing its shots.
+- If any shot is still missing at the end, `run()` raises a `RuntimeError` naming the missing shots rather than returning an incomplete result.
 
 ```{code-cell} ipython3
 with tempfile.TemporaryDirectory() as resume_checkpoint_dir:
@@ -493,7 +499,7 @@ This mechanism is scoped to `QuantumProgram`/`ProgramResults`'s own
 shot-level checkpointing. The program-level call sites ([EdesignRunner](api:EdesignRunner),
 [FaultInjectionRunner](api:FaultInjectionRunner), and
 [NoiseSweepRunner.run](api:NoiseSweepRunner.run)) use a separate, unified item-level
-checkpoint mechanism with per-worker HDF5 checkpoint files, crash recovery, and per-item completion tracking.
+checkpoint mechanism with per-worker HDF5 payload files, crash recovery, and per-item completion tracking.
 
 ### Watching workers live with loqs-monitor
 

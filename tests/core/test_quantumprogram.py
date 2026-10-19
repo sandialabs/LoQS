@@ -12,6 +12,7 @@ from loqs.backends import QSimQuantumState, STIMQuantumState
 from loqs.core import Instruction, QuantumProgram
 from loqs.core.frame import Frame
 from loqs.core.programresults import ProgramResults
+from loqs.internal.checkpointstore import SHOT_LAYOUT, CheckpointStore
 from loqs.core.history import History
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 
@@ -1313,12 +1314,9 @@ class TestResumeFromCheckpoint:
                     assert counter == shot_idx + 1
 
                 # Verify worker files were cleaned up
-                worker_files = [
-                    p
-                    for pattern in ProgramResults._WORKER_FILE_GLOBS
-                    for p in checkpoint_dir.glob(pattern)
-                ]
-                assert len(worker_files) == 0
+                leftovers = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
+                assert not leftovers.payload_paths()
+                assert not leftovers.ledger_paths()
 
                 # Verify consolidated results.h5 exists
                 assert (checkpoint_dir / "results.h5").exists()
@@ -1385,9 +1383,9 @@ class TestResumeFromCheckpoint:
             # Verify pre-condition: results.h5 exists but no consolidated data yet,
             # only worker files
             assert (checkpoint_dir / "results.h5").exists()
-            worker_files_before = list(
-                checkpoint_dir.glob("worker_*_checkpoint.h5")
-            )
+            worker_files_before = CheckpointStore(
+                checkpoint_dir, SHOT_LAYOUT
+            ).ledger_paths()
             assert len(worker_files_before) == 2
 
             # Run with checkpoint=True, resume=True: should detect all shots done,
@@ -1408,12 +1406,9 @@ class TestResumeFromCheckpoint:
                 counter = results.shot_histories[shot_idx][-1]["counter"]
                 assert counter == shot_idx + 1
             assert (checkpoint_dir / "results.h5").exists()
-            worker_files_after = [
-                p
-                for pattern in ProgramResults._WORKER_FILE_GLOBS
-                for p in checkpoint_dir.glob(pattern)
-            ]
-            assert len(worker_files_after) == 0
+            leftovers = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
+            assert not leftovers.payload_paths()
+            assert not leftovers.ledger_paths()
 
     def test_resume_true_without_checkpoint_raises(self):
         """resume=True requires checkpoint=True, raises ValueError."""
@@ -1510,102 +1505,156 @@ class TestResumeFromCheckpoint:
                     verbose=False,
                 )
 
-    def test_load_remaining_shots_lazy_loading_avoids_decode(self):
-        """Verify _load_remaining_shots with lazy_loading=True avoids History decoding.
+    def test_lazy_resume_of_complete_run_decodes_no_history(
+        self, tmp_path, monkeypatch
+    ):
+        """Resuming a finished checkpoint lazily decodes no History."""
+        from loqs.internal.serializable import Serializable
 
-        Tests that calling _load_remaining_shots(..., lazy_loading=True) uses
-        the cheap key-only scan and never decodes History values, using the
-        same trap-decode technique as other no-decoding tests in this suite.
-        """
-        import tempfile
-        import unittest.mock
+        program = self._build_seeded_counter_program()
+        program.run(num_shots=5, checkpoint=True, checkpoint_dir=tmp_path)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_dir = Path(tmpdir)
+        real_decode = Serializable.decode
 
-            # Create a checkpoint with several shots
-            pr = ProgramResults()
-            for i in range(5):
-                history = History()
-                history.append(Frame({"index": i}))
-                pr.add_shot(i, history)
-            pr.checkpoint(checkpoint_dir=checkpoint_dir)
+        def decode(*args, **kwargs):
+            value = real_decode(*args, **kwargs)
+            # A shot's history has frames; the parent program's own
+            # (empty) histories are fine to decode.
+            if isinstance(value, History) and len(value) > 0:
+                raise AssertionError("a shot History was decoded")
+            return value
 
-            # Patch Serializable.decode to trap any History decoding
-            from loqs.internal.serializable import Serializable
+        monkeypatch.setattr(Serializable, "decode", staticmethod(decode))
+        results = program.run(
+            num_shots=5,
+            checkpoint=True,
+            resume=True,
+            checkpoint_dir=tmp_path,
+            lazy_loading=True,
+        )
+        assert results.shot_histories == {}
+        assert len(results.shot_wall_clock_times) == 5
 
-            original_decode = Serializable.decode
+    def test_resume_seed_mismatch_raises_without_decoding_a_shot(
+        self, tmp_path, monkeypatch
+    ):
+        """The resume config check still compares `default_base_seed`, and
+        reads no shot to do it."""
+        from loqs.internal.serializable import Serializable
 
-            def decode_trap(*args, **kwargs):
-                import traceback
+        program = self._build_seeded_counter_program()
+        program.run(num_shots=3, checkpoint=True, checkpoint_dir=tmp_path)
+        other = self._build_seeded_counter_program()
+        other.default_base_seed = 7
 
-                stack = traceback.extract_stack()
-                # Count how many times Serializable.decode appears in the stack.
-                decode_frames = [
-                    f for f in stack if "Serializable.decode" in f.line
-                ]
-                if len(decode_frames) > 1:
-                    # Recursive decode: a History value being decoded inside
-                    # a parent. Should NOT happen in lazy mode.
-                    raise AssertionError(
-                        "_load_remaining_shots(lazy_loading=True) should not decode "
-                        "History values; nested Serializable.decode detected"
-                    )
-                return original_decode(*args, **kwargs)
+        real_decode = Serializable.decode
 
-            with unittest.mock.patch.object(
-                Serializable, "decode", side_effect=decode_trap
-            ):
-                remaining, num_done, done_data, done_wall_clock_times = (
-                    QuantumProgram._load_remaining_shots(
-                        checkpoint_dir, num_shots=5, lazy_loading=True
-                    )
-                )
-                # If we get here without an AssertionError, the method
-                # successfully avoided decoding any History values.
-                assert remaining == []
-                assert num_done == 5
-                assert done_data == {}
-                # No wall_clock_time was ever recorded for these shots.
-                assert done_wall_clock_times == {}
+        def decode(*args, **kwargs):
+            value = real_decode(*args, **kwargs)
+            if isinstance(value, History) and len(value) > 0:
+                raise AssertionError("a shot History was decoded")
+            return value
 
-    def test_load_remaining_shots_normal_mode_populates_done_data(self):
-        """Verify _load_remaining_shots with lazy_loading=False decodes History data.
-
-        Tests that calling _load_remaining_shots(..., lazy_loading=False)
-        fully decodes all History values and returns them in done_data,
-        matching the original behavior used for in-memory re-population.
-        """
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_dir = Path(tmpdir)
-
-            # Create a checkpoint with several shots
-            pr = ProgramResults()
-            for i in range(3):
-                history = History()
-                history.append(Frame({"index": i}))
-                pr.add_shot(i, history)
-            pr.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            # Call with lazy_loading=False
-            remaining, num_done, done_data, done_wall_clock_times = (
-                QuantumProgram._load_remaining_shots(
-                    checkpoint_dir, num_shots=5, lazy_loading=False
-                )
+        monkeypatch.setattr(Serializable, "decode", staticmethod(decode))
+        with pytest.raises(ValueError, match="default_base_seed"):
+            other.run(
+                num_shots=3,
+                checkpoint=True,
+                resume=True,
+                checkpoint_dir=tmp_path,
             )
 
-            # Should have correct remaining shots and decoded data
-            assert remaining == [3, 4]
-            assert num_done == 3
-            assert len(done_data) == 3
-            assert set(done_data.keys()) == {0, 1, 2}
-            # Each value should be a History object
-            for idx in [0, 1, 2]:
-                assert isinstance(done_data[idx], History)
-            # No wall_clock_time was ever recorded for these shots.
-            assert done_wall_clock_times == {}
+    def test_parallel_non_lazy_run_returns_histories_from_the_store(
+        self, tmp_path
+    ):
+        """Workers return receipts, so a non-lazy parallel run reads every
+        history back from the store."""
+        loky = pytest.importorskip("loky")
+        program = self._build_seeded_counter_program()
+        executor = loky.get_reusable_executor(max_workers=2)
+        results = program.run(
+            num_shots=4,
+            checkpoint=True,
+            checkpoint_dir=tmp_path,
+            shot_executor=executor,
+            n_shot_batches=2,
+            lazy_loading=False,
+            verbose=False,
+        )
+        assert sorted(results.shot_histories) == [0, 1, 2, 3]
+        for i in range(4):
+            assert results.shot_histories[i][-1]["counter"] == i + 1
+
+    def test_parallel_run_with_custom_results_filename_leaves_one_file(
+        self, tmp_path
+    ):
+        """Workers find the run's own canonical file, so a parallel run with
+        a custom `results_filename` writes no stray `results.h5`."""
+        loky = pytest.importorskip("loky")
+        program = self._build_seeded_counter_program()
+        executor = loky.get_reusable_executor(max_workers=2)
+        program.run(
+            num_shots=4,
+            checkpoint=True,
+            checkpoint_dir=tmp_path,
+            shot_executor=executor,
+            n_shot_batches=2,
+            results_filename="custom.h5",
+            verbose=False,
+        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["custom.h5"]
+
+    def test_resume_over_a_corrupt_payload_raises_before_any_shot(
+        self, tmp_path, monkeypatch
+    ):
+        """Resume lists the stored keys strictly, so a truncated payload
+        raises naming it before any shot is computed."""
+        import re
+
+        from loqs.internal.checkpointstore import CheckpointReadError
+
+        program = self._build_seeded_counter_program()
+        program.run(num_shots=2, checkpoint=True, checkpoint_dir=tmp_path)
+        extra = ProgramResults(lazy_loading=False)
+        history = History()
+        history.append(Frame({"counter": 3}))
+        extra.add_shot(2, history)
+        receipt = extra.checkpoint(checkpoint_dir=tmp_path, worker_id="w")
+        assert receipt.path is not None
+        payload = Path(receipt.path)
+        data = payload.read_bytes()
+        payload.write_bytes(data[: len(data) // 2])
+
+        def no_shot(*args, **kwargs):
+            raise AssertionError("a shot ran")
+
+        monkeypatch.setattr(QuantumProgram, "_run_shot", staticmethod(no_shot))
+        with pytest.raises(CheckpointReadError, match=re.escape(payload.name)):
+            program.run(
+                num_shots=4,
+                checkpoint=True,
+                resume=True,
+                force_resume=True,
+                checkpoint_dir=tmp_path,
+            )
+
+    def test_non_lazy_resume_loads_stored_shots_from_the_store(self, tmp_path):
+        """Resuming with lazy_loading=False brings the stored histories into
+        memory and computes only the missing shots."""
+        program = self._build_seeded_counter_program()
+        program.run(num_shots=3, checkpoint=True, checkpoint_dir=tmp_path)
+        # A resume with more shots needs force_resume (num_shots differs).
+        results = program.run(
+            num_shots=5,
+            checkpoint=True,
+            resume=True,
+            force_resume=True,
+            checkpoint_dir=tmp_path,
+            lazy_loading=False,
+        )
+        assert sorted(results.shot_histories) == [0, 1, 2, 3, 4]
+        for i in range(5):
+            assert results.shot_histories[i][-1]["counter"] == i + 1
 
 
 class TestResolveShotBatching:
@@ -1884,9 +1933,9 @@ class TestCheckResumeAndResolveCheckpointDir:
         pr = ProgramResults(
             parent_program="this_is_a_string_not_a_quantumprogram",
             num_shots=100,
+            checkpoint_dir=checkpoint_dir,
         )
-        results_path = checkpoint_dir / "results.h5"
-        pr.write(results_path)
+        pr._ensure_snapshot()
 
         trivial_code = trivial_codepack.create_qec_code()
         qubits = ["Q0"]

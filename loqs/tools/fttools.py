@@ -452,7 +452,12 @@ class FaultInjectionRunner(MultiProgramRunner[QuantumProgram]):
             self.collect_shot_data_args, self.expected_outcomes
         ):
             outs = HistoryDataCollector.from_raw(args).collect(program_results)
-            for out in outs[-self.num_shots :]:
+            if len(outs) != self.num_shots:
+                raise RuntimeError(
+                    f"Collected {len(outs)} shot outcomes but expected "
+                    f"num_shots={self.num_shots}."
+                )
+            for out in outs:
                 if out != expected:
                     return False
         return True

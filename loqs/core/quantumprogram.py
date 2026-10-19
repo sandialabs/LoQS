@@ -46,9 +46,10 @@ from loqs.core.recordables.patchlayout import PatchLayoutLike
 from loqs.core.programresults import ProgramResults, _held_shot_ledger
 from loqs.internal import Displayable, pin_worker_threads, worker_id
 from loqs.internal.legacy import legacy_name_hint
-from loqs.internal.streamingmerge import (
-    read_checkpoint_dict_attr_union,
-    read_checkpoint_dict_attr_union_keys,
+from loqs.internal.checkpointstore import (
+    SHOT_LAYOUT,
+    BatchReceipt,
+    CheckpointStore,
 )
 
 T = TypeVar("T", bound="QuantumProgram")
@@ -443,9 +444,12 @@ class QuantumProgram(Displayable):
             else Path("./checkpoints")
         )
         results_path = resolved_checkpoint_dir / results_filename
-        has_content = resolved_checkpoint_dir.exists() and any(
-            resolved_checkpoint_dir.iterdir()
+        store = CheckpointStore(
+            resolved_checkpoint_dir,
+            SHOT_LAYOUT,
+            canonical_filename=results_filename,
         )
+        has_content = store.has_content()
 
         # Case (a): no on-disk state, resume=False -> free to create and start
         if not has_content:
@@ -476,17 +480,20 @@ class QuantumProgram(Displayable):
 
         # From here on: on-disk state exists AND resume=True (case c)
 
-        stored = cast(ProgramResults, ProgramResults.read(results_path))
+        # Only the config attributes are read; no shot is decoded.
+        stored = store.read_attrs(
+            ("num_shots", "max_frame_limit", "parent_program")
+        )
+        stored_parent = stored["parent_program"]
         mismatches = []
-        if stored.num_shots != num_shots:
+        if stored["num_shots"] != num_shots:
             mismatches.append("num_shots")
-        if stored.max_frame_limit != max_frame_limit:
+        if stored["max_frame_limit"] != max_frame_limit:
             mismatches.append("max_frame_limit")
         if (
-            stored.parent_program is not None
-            and isinstance(stored.parent_program, QuantumProgram)
-            and stored.parent_program.default_base_seed
-            != self.default_base_seed
+            stored_parent is not None
+            and isinstance(stored_parent, QuantumProgram)
+            and stored_parent.default_base_seed != self.default_base_seed
         ):
             mismatches.append("default_base_seed")
         if mismatches and not force_resume:
@@ -496,72 +503,6 @@ class QuantumProgram(Displayable):
                 "resume anyway."
             )
         return resolved_checkpoint_dir
-
-    @staticmethod
-    def _load_remaining_shots(
-        checkpoint_dir: Path,
-        num_shots: int,
-        results_filename: str = "results.h5",
-        lazy_loading: bool = True,
-    ) -> tuple[list[int], int, dict, dict[int, float]]:
-        """Scan `checkpoint_dir` for already-checkpointed shots and return
-        missing indices, done count, and optionally the decoded History data.
-
-        When lazy_loading=True, uses a cheap key-only scan (read_checkpoint_dict_attr_union_keys)
-        to avoid decoding any History values since the decoded data would be
-        discarded immediately (lazy loading evicts checkpointed shots from
-        memory anyway). When lazy_loading=False, fully decodes all History data
-        so the caller can re-populate the in-memory result.
-
-        Parameters
-        ----------
-        checkpoint_dir : Path
-            Directory to scan for checkpoint files.
-        num_shots : int
-            Total number of shots expected.
-        results_filename : str
-            Filename for the canonical results checkpoint file.
-            Defaults to "results.h5".
-        lazy_loading : bool
-            Whether to use cheap key-only scan (True) or full decode (False).
-            Defaults to True.
-
-        Returns
-        -------
-        tuple[list[int], int, dict, dict[int, float]]
-            remaining: sorted list of shot indices still needing computation.
-            num_done: count of already-checkpointed shots.
-            done_data: {index: History} dict (empty if lazy_loading=True,
-                otherwise the decoded History for each checkpointed shot).
-            done_wall_clock_times: {index: float} dict of wall-clock times,
-                populated in both branches regardless of lazy_loading.
-        """
-        done_wall_clock_times = read_checkpoint_dict_attr_union(
-            checkpoint_dir,
-            results_filename,
-            ProgramResults._WORKER_FILE_GLOBS,
-            "shot_wall_clock_times",
-        )
-        if lazy_loading:
-            # Cheap path: scan keys without decoding History values
-            done_indices = read_checkpoint_dict_attr_union_keys(
-                checkpoint_dir,
-                results_filename,
-                ProgramResults._WORKER_FILE_GLOBS,
-                "shot_histories",
-            )
-            remaining = sorted(set(range(num_shots)) - done_indices)
-            return remaining, len(done_indices), {}, done_wall_clock_times
-        else:
-            # Full decode path: recover History data for in-memory re-population
-            done = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                results_filename,
-                ProgramResults._WORKER_FILE_GLOBS,
-                "shot_histories",
-            )
-            remaining = sorted(set(range(num_shots)) - done.keys())
-            return remaining, len(done), done, done_wall_clock_times
 
     def _run_serial_checkpointed(
         self,
@@ -646,19 +587,18 @@ class QuantumProgram(Displayable):
                     for i in batch_indices
                 ],
                 checkpoint_dir,
+                program_results._results_filename,
             ): batch_indices
             for batch_indices in batches
         }
         for future in as_completed(futures_to_batch):
-            batch_shots, batch_wall_clock_times = future.result()
-            for shot_index, history in batch_shots.items():
-                program_results.add_shot(
-                    shot_index,
-                    history,
-                    wall_clock_time=batch_wall_clock_times.get(shot_index),
-                )
-            program_results.mark_shots_checkpointed(list(batch_shots.keys()))
-            progress.update(len(batch_shots))
+            receipt, batch_wall_clock_times = future.result()
+            receipt = cast(BatchReceipt, receipt)
+            program_results.shot_wall_clock_times.update(
+                batch_wall_clock_times
+            )
+            program_results.mark_shots_checkpointed(list(receipt.keys))
+            progress.update(len(receipt.keys))
 
     def _resolve_shot_batching(
         self,
@@ -992,7 +932,10 @@ class QuantumProgram(Displayable):
                         pbar, num_shots, progress_callback
                     )
                     for future in as_completed(futures_to_batch):
-                        batch_shots, batch_wall_clock_times = future.result()
+                        batch_result, batch_wall_clock_times = future.result()
+                        batch_shots = cast(
+                            "dict[int, HistoryLike]", batch_result
+                        )
                         for shot_index, history in batch_shots.items():
                             program_results.add_shot(
                                 shot_index,
@@ -1012,17 +955,13 @@ class QuantumProgram(Displayable):
         # resumed call redoes only unfinished shots.
         assert resolved_checkpoint_dir is not None
         assert checkpoint_batch_size is not None
-        remaining, num_done, done_data, done_wall_clock_times = (
-            self._load_remaining_shots(
-                resolved_checkpoint_dir,
-                num_shots,
-                results_filename,
-                lazy_loading,
-            )
-        )
-        if not lazy_loading:
-            program_results.shot_histories.update(done_data)
-        program_results.shot_wall_clock_times.update(done_wall_clock_times)
+        # `keys()` reads strictly, so a corrupt file raises here naming it.
+        # Nothing is decoded until the end of the run.
+        store = program_results._shot_store()
+        expected = set(range(num_shots))
+        done = set(store.keys())
+        remaining = sorted(expected - done)
+        num_done = len(expected & done)
 
         with tqdm(
             total=num_shots, desc=f"Program {self.name}", disable=not verbose
@@ -1050,20 +989,40 @@ class QuantumProgram(Displayable):
                     progress,
                 )
 
-            # A race-free, driver-side, streaming (bounded-memory)
-            # consolidation pass -- runs whenever any worker file is left
-            # to merge, regardless of whether *this* call itself dispatched
-            # anything in parallel, so a crashed parallel run resumed via a
-            # serial call still gets its leftover worker files cleaned up.
-            # After a serial run, the only file left is the run's shot
-            # ledger, which this pass deletes.
-            if any(
-                any(resolved_checkpoint_dir.glob(pattern))
-                for pattern in ProgramResults._WORKER_FILE_GLOBS
-            ):
+            # Consolidate whenever a payload or ledger is left, even after a
+            # serial call, so a resumed crashed parallel run is cleaned up.
+            if store.payload_paths() or store.ledger_paths():
                 program_results.consolidate_checkpoints(
                     checkpoint_dir=resolved_checkpoint_dir
                 )
+
+        missing = store.missing(expected)
+        if missing:
+            raise RuntimeError(
+                f"{len(missing)} of {num_shots} shots are missing from the "
+                f"checkpoint after the run (first missing: {missing[:10]}) "
+                f"in {resolved_checkpoint_dir}."
+            )
+
+        # Bring the stored wall-clock times, and with `lazy_loading=False`
+        # the histories, into memory, skipping what is already there.
+        new_times = [
+            k
+            for k in store.keys("shot_wall_clock_times")
+            if k not in program_results.shot_wall_clock_times
+        ]
+        program_results._merge_loaded_entries(
+            (), store.iter_items("shot_wall_clock_times", keys=new_times)
+        )
+        if not lazy_loading:
+            new_shots = [
+                k
+                for k in store.keys()
+                if k not in program_results.shot_histories
+            ]
+            program_results._merge_loaded_entries(
+                store.iter_items(keys=new_shots), ()
+            )
 
         return program_results
 
@@ -1077,13 +1036,15 @@ class QuantumProgram(Displayable):
         max_frame_limit: int,
         shot_specs: list[tuple[int | None, int]],
         checkpoint_dir: str | Path | None,
-    ) -> tuple[dict[int, HistoryLike], dict[int, float]]:
+        results_filename: str = "results.h5",
+    ) -> tuple[dict[int, HistoryLike] | BatchReceipt, dict[int, float]]:
         pin_worker_threads()
 
-        # A throwaway ProgramResults scoped to just this batch -- lazy
-        # loading is disabled so checkpoint() doesn't evict the shots we're
-        # about to return to the driver.
-        batch_results = ProgramResults(lazy_loading=False)
+        # Non-lazy, so checkpoint() keeps the shots; named after the run's
+        # canonical file, so checkpoint() finds the driver's snapshot.
+        batch_results = ProgramResults(
+            lazy_loading=False, results_filename=results_filename
+        )
         for seed, shot_index in shot_specs:
             start_time = time.perf_counter()
             history = QuantumProgram._run_shot(
@@ -1097,9 +1058,12 @@ class QuantumProgram(Displayable):
         # Only checkpoint if a checkpoint_dir was provided; when None, this
         # is the non-checkpointed parallel path and no disk I/O happens.
         if checkpoint_dir is not None:
-            batch_results.checkpoint(
+            # Only the receipt and the timings travel back; the histories
+            # are on disk.
+            receipt = batch_results.checkpoint(
                 checkpoint_dir=checkpoint_dir, worker_id=worker_id()
             )
+            return receipt, dict(batch_results.shot_wall_clock_times)
 
         return (
             dict(batch_results.shot_histories),

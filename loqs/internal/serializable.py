@@ -258,9 +258,12 @@ class ResolvingDecodeCache(dict):
         re-pointed (e.g. to a fresh file handle) after construction.
     _format : {'hdf5', 'json'}
         The format of `_root`.
+    _fallback : Callable[[], Mapping[int, Any]] | None
+        A loader of objects whose sources live outside `_root`, consulted
+        on a miss before `_root` is scanned.
     """
 
-    def __init__(self, root, format):
+    def __init__(self, root, format, fallback=None):
         """Initialize the cache with a root structure to search.
 
         Parameters
@@ -269,10 +272,16 @@ class ResolvingDecodeCache(dict):
             The root structure (HDF5 file/group or JSON dict) to search for sources.
         format : {'hdf5', 'json'}
             The format of the root structure.
+        fallback : Callable[[], Mapping[int, Any]] | None
+            A loader of objects whose sources live outside `root`, by cache
+            ID. It is called on each miss, so it should be cheap after its
+            first call. A missing ID found in its mapping is stored and
+            returned without scanning `root`; otherwise `root` is scanned.
         """
         super().__init__()
         self._root = root
         self._format = format
+        self._fallback = fallback
 
     def resolve(self, cache_id):
         """Return the cached object, or locate and decode its source if missing.
@@ -294,6 +303,12 @@ class ResolvingDecodeCache(dict):
         """
         if cache_id in self:
             return self[cache_id]
+
+        if self._fallback is not None:
+            external = self._fallback()
+            if cache_id in external:
+                self[cache_id] = external[cache_id]
+                return self[cache_id]
 
         # Search for the source node
         if self._format == "hdf5":
@@ -669,6 +684,14 @@ class Serializable:
                     obj.flatten().tolist(), _visited
                 )
                 return hash((shape_id, data_id))
+            elif isinstance(obj, (set, frozenset)):
+                # Order-free: equal sets can iterate in different orders
+                return hash(
+                    frozenset(
+                        Serializable._serial_hash(item, _visited)
+                        for item in obj
+                    )
+                )
             else:
                 # Base case: hash the object itself
                 try:
@@ -875,6 +898,12 @@ class Serializable:
                 root_group = f["root"]
                 assert isinstance(root_group, h5py.Group)
 
+                # A canonical checkpoint file may hold entries past its
+                # commit marker; refuse to decode those as results.
+                from loqs.internal.checkpointstore import raise_if_uncommitted
+
+                raise_if_uncommitted(f)
+
                 # Create ResolvingDecodeCache after getting the root group
                 if use_caching:
                     if decode_cache is None:
@@ -935,6 +964,10 @@ class Serializable:
         ------
         ValueError
             If the format cannot be determined from the file extension.
+        CheckpointReadError
+            If an HDF5 checkpoint file holds entries past its commit marker,
+            as an interrupted write leaves. Resume the run to read only the
+            committed entries.
         """
         if format is None:
             if str(path).endswith(".json"):
@@ -959,15 +992,16 @@ class Serializable:
         else:
             raise ValueError("Cannot write format")
 
-        loaded = cls.load(
-            f,
-            format,
-            use_caching=use_caching,
-            decode_cache=decode_cache,
-            migrate_legacy_fns=migrate_legacy_fns,
-        )
-
-        f.close()
+        try:
+            loaded = cls.load(
+                f,
+                format,
+                use_caching=use_caching,
+                decode_cache=decode_cache,
+                migrate_legacy_fns=migrate_legacy_fns,
+            )
+        finally:
+            f.close()
 
         return loaded
 
@@ -981,6 +1015,7 @@ class Serializable:
         use_caching: bool = True,
         encode_cache: EncodeCache = None,
         json_format_kwargs: Mapping | None = None,
+        reset_encode_id: bool = True,
     ) -> None:
         """
         Serializes and writes this object to a given output stream.
@@ -1002,6 +1037,11 @@ class Serializable:
             Additional arguments specific to the JSON format.
             For example, the JSON format accepts `indent` as an argument
             because `json.dump` does.
+
+        reset_encode_id : bool, optional
+            If True (default), the encoder's cache ID counter restarts at 0.
+            If False, encoding continues from the current counter, so the
+            new IDs do not repeat ones minted earlier in the same file.
 
         Returns
         -------
@@ -1039,7 +1079,10 @@ class Serializable:
                 )
 
             encoded = Serializable.encode(
-                self, "json", encode_cache=encode_cache, reset_encode_id=True
+                self,
+                "json",
+                encode_cache=encode_cache,
+                reset_encode_id=reset_encode_id,
             )
 
             import json
@@ -1059,7 +1102,7 @@ class Serializable:
                 self,
                 "hdf5",
                 encode_cache=encode_cache,
-                reset_encode_id=True,
+                reset_encode_id=reset_encode_id,
                 h5_group=root_group,
             )
         else:

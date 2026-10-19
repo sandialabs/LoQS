@@ -1,5 +1,6 @@
 """Tester for loqs.core.programresults"""
 
+import contextlib
 import json
 import multiprocessing as mp
 import os
@@ -10,101 +11,29 @@ import sys
 import tempfile
 import unittest.mock
 
+from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import Any
 import pytest
 import h5py
 import numpy as np
 
 import loqs.core.programresults as programresults_module
 import loqs.internal.swmrledger as swmrledger_module
-from loqs.core.programresults import (
-    ProgramResults,
-    _resolve_checkpoint_object_group,
+from loqs.core.programresults import ProgramResults
+from loqs.internal.checkpointstore import (
+    ITEM_LAYOUT,
+    SHOT_LAYOUT,
+    CheckpointReadError,
+    CheckpointStore,
 )
 from loqs.internal.streamingmerge import (
-    iter_dict_attr_entries,
-    read_checkpoint_dict_attr_union,
-    read_checkpoint_dict_attr_union_keys,
+    _resolve_checkpoint_object_group,
 )
 from loqs.core.history import History
 from loqs.core import Frame, QuantumProgram
 from loqs.internal.serializable import Serializable
-from loqs.internal.encoder import HDF5Encoder
 from loqs.internal import worker_id as global_worker_id
-
-
-def _build_reference_before_source_checkpoint(
-    path: Path, source_index: int, copy_index: int
-) -> None:
-    """Build a checkpoint-shaped HDF5 file (a `results.h5` or a
-    `worker_*_checkpoint.h5`) whose `shot_histories` holds two shots --
-    `source_index` and `copy_index` -- encoding the same `History`
-    instance, so the second becomes a `cache_type="reference"` (a plain
-    dict decode_cache can self-heal a "copy" node reached out of order,
-    but never a "reference" node, so this is the case that actually
-    needs `ResolvingDecodeCache`).
-
-    The copy's own HDF5 group is placed at physical index 0 and the
-    source's at index 1 regardless of `source_index`/`copy_index`, since
-    decoding a groups-format iterable walks ascending physical index --
-    forcing the reference to be decoded before its own source.
-    """
-    with h5py.File(path, "a") as f:
-        # Bootstrap a valid ProgramResults envelope, mirroring
-        # `_write_streamed_dict_entries`'s own bootstrap, then drop its empty
-        # shot_histories skeleton so a custom one can be built by hand.
-        Serializable.encode(
-            ProgramResults(shot_histories={}),
-            format="hdf5",
-            h5_group=f,
-            encode_cache={},
-        )
-        root_group = _resolve_checkpoint_object_group(f)
-        del root_group["shot_histories"]
-
-        dict_group = root_group.create_group("shot_histories")
-        dict_subgroup = dict_group.create_group("dict")
-        keys_group = dict_subgroup.create_group("keys")
-        values_group = dict_subgroup.create_group("values")
-        keys_iterable = keys_group.create_group("iterable", track_order=True)
-        values_iterable = values_group.create_group(
-            "iterable", track_order=True
-        )
-        keys_iterable.attrs["iterable_type"] = "list"
-        values_iterable.attrs["iterable_type"] = "list"
-        values_iterable.attrs["storage_format"] = "groups"
-
-        # Keys: dataset format, ordered to match values' physical index
-        # order (copy's key at index 0, source's key at index 1).
-        keys_iterable.attrs["storage_format"] = "dataset"
-        HDF5Encoder._encode_iterable_dataset(
-            keys_iterable, [copy_index, source_index], True
-        )
-
-        shared_history = History()
-        shared_history.append(Frame({"marker": "shared"}))
-
-        # Create both groups up front, independent of encode order below,
-        # so physical index order alone controls decode order.
-        copy_group = values_iterable.create_group("0", track_order=True)
-        source_group = values_iterable.create_group("1", track_order=True)
-
-        shared_encode_cache: dict = {}
-        # Encode the source first (registers the cache entry).
-        Serializable.encode(
-            shared_history,
-            format="hdf5",
-            h5_group=source_group,
-            encode_cache=shared_encode_cache,
-        )
-        # Encode the exact same instance again (finds the cache match by
-        # object identity, becoming a "reference" rather than a "copy").
-        Serializable.encode(
-            shared_history,
-            format="hdf5",
-            h5_group=copy_group,
-            encode_cache=shared_encode_cache,
-        )
 
 
 def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
@@ -119,6 +48,126 @@ def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
         history.append(Frame({"worker_id": worker_id, "local_shot": i}))
         results.add_shot(worker_id * shots_per_worker + i, history)
     results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id=str(worker_id))
+
+
+def _results_with_shots(
+    indices: Iterable[int], frame_key: str = "shot", **kwargs: Any
+) -> ProgramResults:
+    """A non-lazy `ProgramResults` holding one single-frame shot per index."""
+    results = ProgramResults(lazy_loading=False, **kwargs)
+    for i in indices:
+        history = History()
+        history.append(Frame({frame_key: i}))
+        results.add_shot(i, history)
+    return results
+
+
+class _ItemParent(Serializable):
+    """A minimal item-level parent: the attributes of `ITEM_LAYOUT`."""
+
+    _SERIALIZE_ATTRS = [
+        "_reduced_results",
+        "item_wall_clock_times",
+        "shot_wall_clock_times",
+        "_program_results",
+    ]
+
+    def __init__(self):
+        self._reduced_results = {}
+        self.item_wall_clock_times = {}
+        self.shot_wall_clock_times = {}
+        self._program_results = {}
+
+
+def _write_nested_source(
+    directory: Path, entries: dict[int, ProgramResults]
+) -> CheckpointStore:
+    """Write an item-level canonical file in `directory` whose
+    `_program_results` attribute holds `entries`, returning its store."""
+    store = CheckpointStore(directory, ITEM_LAYOUT)
+    store.write_snapshot(_ItemParent())
+    for key, results in entries.items():
+        store.put_batch(
+            {key: {"results": key, "_program_results": results}},
+            worker_id=f"w_{key}",
+        )
+    store.consolidate()
+    return store
+
+
+@contextlib.contextmanager
+def _record_h5_opens() -> Iterator[list]:
+    """Record the arguments of every `h5py.File` open inside the block."""
+    real_h5py_file = h5py.File
+    open_calls: list = []
+
+    def spy_file(*args, **kwargs):
+        open_calls.append((args, kwargs))
+        return real_h5py_file(*args, **kwargs)
+
+    with unittest.mock.patch.object(h5py, "File", side_effect=spy_file):
+        yield open_calls
+
+
+def _consolidate_spying_on_decode(
+    checkpoint_dir: Path,
+) -> tuple[list[int], int]:
+    """Consolidate `checkpoint_dir`, returning the number of shots each
+    `Serializable.decode` call materialized (1 per `History`, the shot count
+    per `ProgramResults`) and the number of `History` decodes."""
+    real_decode = Serializable.decode
+    decoded_shot_counts: list[int] = []
+    history_decodes = [0]
+
+    def spy_decode(encoded, format="hdf5", decode_cache=None):
+        result = real_decode(encoded, format=format, decode_cache=decode_cache)
+        if isinstance(result, History):
+            decoded_shot_counts.append(1)
+            history_decodes[0] += 1
+        elif isinstance(result, ProgramResults):
+            decoded_shot_counts.append(len(result.shot_histories))
+        return result
+
+    with unittest.mock.patch.object(
+        Serializable, "decode", side_effect=spy_decode
+    ):
+        ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
+    return decoded_shot_counts, history_decodes[0]
+
+
+def _trivial_quantum_program(
+    name: str, stack_depth: int = 3
+) -> QuantumProgram:
+    """A minimal `QuantumProgram` with a QSim state; `stack_depth` keeps that
+    many of its three initialization instructions."""
+    from loqs.backends import QSimQuantumState
+    from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+
+    qubits = ["Q0"]
+    stack: list[dict[str, Any]] = [
+        {
+            "instruction": "Init State",
+            "state": len(qubits),
+            "qubit_labels": qubits,
+        },
+        {
+            "instruction": "Init Patch Trivial",
+            "new_patch_label": "L0",
+            "qubits": qubits,
+        },
+        {
+            "instruction": "Init Counter",
+            "patch_label": "L0",
+            "initial_value": 0,
+        },
+    ]
+    return QuantumProgram(
+        stack[:stack_depth],
+        default_noise_model=trivial_codepack.create_ideal_model(qubits),
+        state_type=QSimQuantumState,
+        patch_types={"Trivial": trivial_codepack.create_qec_code()},
+        name=name,
+    )
 
 
 class TestProgramResults:
@@ -174,31 +223,28 @@ class TestProgramResults:
         assert results.shot_wall_clock_times[2] == 1.23
         assert len(results.shot_wall_clock_times) == 1
 
-    def test_collect_shot_data(self):
+    @pytest.mark.parametrize(
+        "key, expected",
+        [
+            ("counter", [[0], [1], [2]]),
+            ("test", [["value_0"], ["value_1"], ["value_2"]]),
+        ],
+    )
+    def test_collect_shot_data(self, key, expected):
         """Test collecting data from multiple shots."""
         results = ProgramResults()
 
-        # Create multiple histories with test data
         for i in range(3):
             history = History()
             frame = Frame({"counter": i, "test": f"value_{i}"})
             history.append(frame)
             results.add_shot(i, history)
 
-        # Test collecting counter data - use "all" instead of None
-        counter_data = results.collect_shot_data(
-            "counter", "all", strip_none_entries=False
-        )
-        assert len(counter_data) == 3
-        # collect_data returns a list of results per shot, each shot has one frame with the counter value
-        assert counter_data == [[0], [1], [2]]
-
-        # Test collecting test data
-        test_data = results.collect_shot_data(
-            "test", "all", strip_none_entries=False
-        )
-        assert len(test_data) == 3
-        assert test_data == [["value_0"], ["value_1"], ["value_2"]]
+        # collect_data returns a list of results per shot, each shot has one
+        # frame with the key's value
+        data = results.collect_shot_data(key, "all", strip_none_entries=False)
+        assert len(data) == 3
+        assert data == expected
 
     def test_collect_shot_data_frame_filter_and_strip_none_entries(self):
         """`frame_filter`/`strip_none_entries` are forwarded to each shot's
@@ -225,14 +271,16 @@ class TestProgramResults:
         )
         assert stripped == [[0], [1], [2]]
 
-    def test_mark_shots_as_written(self):
-        """Test marking shots as written to checkpoint."""
+    @pytest.fixture
+    def three_shot_results(self) -> ProgramResults:
         results = ProgramResults()
-
-        # Add some shots
         for i in range(3):
-            history = History()
-            results.add_shot(i, history)
+            results.add_shot(i, History())
+        return results
+
+    def test_mark_shots_as_written(self, three_shot_results):
+        """Test marking shots as written to checkpoint."""
+        results = three_shot_results
 
         assert len(results._unwritten_shots) == 3
 
@@ -243,14 +291,9 @@ class TestProgramResults:
         assert 0 not in results._unwritten_shots
         assert 2 not in results._unwritten_shots
 
-    def test_get_unwritten_shots(self):
+    def test_get_unwritten_shots(self, three_shot_results):
         """Test getting list of unwritten shots."""
-        results = ProgramResults()
-
-        # Add some shots
-        for i in range(3):
-            history = History()
-            results.add_shot(i, history)
+        results = three_shot_results
 
         unwritten = results.get_unwritten_shots()
         assert len(unwritten) == 3
@@ -262,117 +305,95 @@ class TestProgramResults:
         assert len(unwritten) == 2
         assert set(unwritten) == {0, 2}
 
-    def test_serialization(self):
-        """Test ProgramResults serialization and deserialization."""
-        results = ProgramResults(name="Test Serialization")
+    @pytest.mark.parametrize("format_name", ["json", "hdf5"])
+    def test_serialization_round_trip_preserves_properties_and_wall_clock_times(
+        self, tmp_path, format_name
+    ):
+        """An ordinary (non-lazy-proxy) ProgramResults' `name`/
+        `parent_program` and `shot_wall_clock_times` round-trip through a
+        whole-object `Serializable.encode`/`.decode` cycle, staying fully
+        compatible with the generic `_SERIALIZE_ATTRS` machinery."""
+        results = ProgramResults(
+            name="RoundTripName", parent_program="RoundTripProgram"
+        )
+        for i in range(3):
+            history = History()
+            history.append(Frame({"marker": i}))
+            results.add_shot(i, history, wall_clock_time=float(i) + 0.5)
 
-        # Add some shots
+        if format_name == "hdf5":
+            with h5py.File(tmp_path / "roundtrip.h5", "w") as h5_file:
+                encoded = Serializable.encode(
+                    results,
+                    format=format_name,
+                    h5_group=h5_file.create_group("root"),
+                    reset_encode_id=True,
+                )
+                decoded = Serializable.decode(encoded, format=format_name)
+        else:
+            encoded = Serializable.encode(
+                results, format=format_name, reset_encode_id=True
+            )
+            decoded = Serializable.decode(encoded, format=format_name)
+
+        assert isinstance(decoded, ProgramResults)
+        assert decoded.name == "RoundTripName"
+        assert decoded.parent_program == "RoundTripProgram"
+        assert len(decoded.shot_wall_clock_times) == 3
+        for i in range(3):
+            assert i in decoded.shot_wall_clock_times
+            value = decoded.shot_wall_clock_times[i]
+            assert isinstance(value, float)
+            assert abs(value - (float(i) + 0.5)) < 1e-9
+
+    def test_checkpoint_on_a_fresh_directory_goes_through_the_store(
+        self, tmp_path
+    ):
+        """A first `checkpoint()` bootstraps a committed snapshot and
+        appends through the store, so `read` and `load_checkpoint` both see
+        the shots and the file carries the marker. Catches a write path
+        that bypasses the store or skips the bootstrap snapshot."""
+        from loqs.internal.checkpointstore import COMMIT_MARKER_ATTR
+
+        results = ProgramResults(name="fresh", lazy_loading=False)
         for i in range(2):
             history = History()
-            frame = Frame({"test": f"value_{i}"})
-            history.append(frame)
+            history.append(Frame({"shot": i}))
             results.add_shot(i, history)
+        receipt = results.checkpoint(checkpoint_dir=tmp_path)
 
-        # Test encoding using Serializable.encode
-        encoded = Serializable.encode(
-            results, format="json", reset_encode_id=True
-        )
-        assert "shot_histories" in encoded
-        assert "_unwritten_shots" in encoded
-        assert "name" in encoded
+        assert receipt.keys == (0, 1)
+        canonical = tmp_path / "results.h5"
+        with h5py.File(canonical, "r") as f:
+            assert COMMIT_MARKER_ATTR in f.attrs
+        assert set(ProgramResults.read(canonical).shot_histories) == {0, 1}
+        loaded = ProgramResults()
+        loaded.load_checkpoint(checkpoint_dir=tmp_path)
+        assert set(loaded.shot_histories) == {0, 1}
+        assert _shot_store(tmp_path).keys() == [0, 1]
 
-        # Test decoding using Serializable.decode
-        decoded_results = Serializable.decode(encoded, format="json")
-        assert isinstance(decoded_results, ProgramResults)
-        assert decoded_results.name == "Test Serialization"
-        assert len(decoded_results.shot_histories) == 2
-        assert len(decoded_results._unwritten_shots) == 2
-
-    def test_checkpoint_writes_all_unwritten_shots(self):
-        """`checkpoint()` always flushes every currently-unwritten shot in
-        one call -- there is no separate "batch index" concept that could
-        get out of sync with actual completion order."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            results = ProgramResults(name="Checkpoint Test")
-
-            for i in range(5):
-                history = History()
-                frame = Frame({"shot_id": i, "data": f"data_{i}"})
-                history.append(frame)
-                results.add_shot(i, history)
-
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-
-            checkpoint_file = checkpoint_dir / "worker_w0_checkpoint.h5"
-            assert checkpoint_file.exists()
-            assert len(results._unwritten_shots) == 0
-
-            new_results = ProgramResults()
-            new_results.load_checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
-            )
-
-            assert len(new_results.shot_histories) == 5
-            history_1 = new_results.shot_histories[1]
-            assert len(history_1) == 1
-            assert history_1[0]["shot_id"] == 1
-            assert history_1[0]["data"] == "data_1"
-
-    def test_checkpoint_round_trip_shot_wall_clock_times(self):
-        """`shot_wall_clock_times` survives a full checkpoint write/read
-        cycle exactly like `shot_histories` already does -- correct `int`
-        keys and `float` values after `load_checkpoint`."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            results = ProgramResults(name="Wall Clock Checkpoint Test")
-
-            for i in range(5):
-                history = History()
-                frame = Frame({"shot_id": i})
-                history.append(frame)
-                results.add_shot(i, history, wall_clock_time=float(i) * 0.1)
-
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-
-            new_results = ProgramResults()
-            new_results.load_checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
-            )
-
-            assert len(new_results.shot_wall_clock_times) == 5
-            assert all(
-                isinstance(k, int) for k in new_results.shot_wall_clock_times
-            )
-            for i in range(5):
-                value = new_results.shot_wall_clock_times[i]
-                assert isinstance(value, float)
-                assert abs(value - float(i) * 0.1) < 1e-9
-
-    def test_checkpoint_with_no_worker_id_uses_canonical_filename(self):
-        """`worker_id=None` (the single-writer case) writes the canonical
-        `results.h5` directly, with no payload file, and records the shot
-        in a ledger named after `loqs.internal.worker_id()`."""
-        from loqs.internal import worker_id as global_worker_id
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            results = ProgramResults(name="No Worker ID Test")
+    def test_checkpoint_with_worker_id_returns_a_receipt_without_values(
+        self, tmp_path
+    ):
+        """The receipt of a worker's batch names the shots and the payload
+        file and holds no `History`. Catches a receipt that drags values
+        along."""
+        results = ProgramResults(lazy_loading=False)
+        for i in (3, 4):
             history = History()
-            history.append(Frame({"shot": 0}))
-            results.add_shot(0, history)
+            history.append(Frame({"shot": i}))
+            results.add_shot(i, history)
+        receipt = results.checkpoint(checkpoint_dir=tmp_path, worker_id="w")
 
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            results.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            wid = global_worker_id()
-            assert (checkpoint_dir / "results.h5").exists()
-            assert (checkpoint_dir / f"worker_{wid}_checkpoint.h5").exists()
-            assert not list(checkpoint_dir.glob("worker_*_shots_*_payload.h5"))
-            assert ProgramResults._count_live_done_shots(checkpoint_dir) == 1
-
-            new_results = ProgramResults()
-            new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert list(new_results.shot_histories.keys()) == [0]
+        assert receipt.keys == (3, 4)
+        assert receipt.path == str(tmp_path / "worker_w_shots_3_payload.h5")
+        assert not any(
+            isinstance(v, History) for v in (*receipt.keys, receipt.path)
+        )
+        assert (
+            results.checkpoint(checkpoint_dir=tmp_path, worker_id="w").keys
+            == ()
+        )
 
     def test_checkpoint_consolidation(self):
         """Test consolidating multiple per-worker checkpoint files into one."""
@@ -398,11 +419,12 @@ class TestProgramResults:
 
             consolidated_results = ProgramResults()
             output_file = consolidated_results.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=False
+                checkpoint_dir=checkpoint_dir
             )
 
             final_results = ProgramResults()
-            final_results._load_single_checkpoint_file(output_file)
+            final_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert output_file == checkpoint_dir / "results.h5"
 
             assert len(final_results.shot_histories) == 6
             for i in range(6):
@@ -426,6 +448,7 @@ class TestProgramResults:
 
             checkpoint_dir = Path(temp_dir) / "checkpoints"
             results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             # Clear in-memory shots (simulate lazy loading scenario)
             results.shot_histories.clear()
@@ -444,10 +467,6 @@ class TestProgramResults:
             assert shot_0 is not None
             assert shot_4 is not None
 
-            # Consolidating through this object forgets its deleted
-            # payload, and later reloads read results.h5 instead.
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
-            assert results._payload_batches == []
             shot_2 = results.get_shot_history(2)
             assert shot_2 is not None
             assert shot_2[0]["shot_id"] == 2
@@ -475,54 +494,12 @@ class TestProgramResults:
             assert len(results._unwritten_shots) == 0
 
             new_results = ProgramResults()
-            new_results.load_checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
-            )
+            new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
             assert set(new_results.shot_histories.keys()) == set(range(6))
             for i in range(6):
                 history = new_results.shot_histories[i]
                 assert history[0]["batch"] == i // 2
                 assert history[0]["shot"] == i % 2
-
-    def test_checkpoint_with_multiple_workers(self):
-        """Simulates multiple concurrent writers (sequentially, in one
-        process -- see TestConcurrentCheckpointing below for a real
-        multi-process version) each checkpointing to their own
-        worker-keyed file, then consolidating."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            checkpoint_dir.mkdir()
-
-            num_workers = 2
-            shots_per_worker = 3
-
-            for worker_id in range(num_workers):
-                results = ProgramResults(name=f"Worker {worker_id}")
-                for shot_idx in range(shots_per_worker):
-                    global_shot_idx = worker_id * shots_per_worker + shot_idx
-                    history = History()
-                    frame = Frame(
-                        {"worker": worker_id, "shot": global_shot_idx}
-                    )
-                    history.append(frame)
-                    results.add_shot(global_shot_idx, history)
-                results.checkpoint(
-                    checkpoint_dir=checkpoint_dir, worker_id=str(worker_id)
-                )
-
-            consolidated_results = ProgramResults()
-            consolidated_results.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=False
-            )
-            consolidated_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
-
-            total_shots = num_workers * shots_per_worker
-            assert len(consolidated_results.shot_histories) == total_shots
-            for global_shot_idx in range(total_shots):
-                history = consolidated_results.shot_histories[global_shot_idx]
-                expected_worker = global_shot_idx // shots_per_worker
-                assert history[0]["worker"] == expected_worker
-                assert history[0]["shot"] == global_shot_idx
 
     def test_checkpoint_file_formats(self):
         """Test different checkpoint file formats and data types."""
@@ -547,9 +524,7 @@ class TestProgramResults:
             results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
 
             new_results = ProgramResults()
-            new_results.load_checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
-            )
+            new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
 
             assert len(new_results.shot_histories) == 3
 
@@ -588,93 +563,15 @@ class TestProgramResults:
             reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
             assert len(reloaded.shot_histories) == 0
 
-    def test_checkpoint_appending(self):
-        """Test appending to an existing checkpoint file across multiple calls."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            results = ProgramResults(name="Appending Test")
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-
-            for i in range(3):
-                history = History()
-                frame = Frame({"batch": 1, "shot": i})
-                history.append(frame)
-                results.add_shot(i, history)
-
-            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-
-            for i in range(3, 6):
-                history = History()
-                frame = Frame({"batch": 2, "shot": i})
-                history.append(frame)
-                results.add_shot(i, history)
-
-            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-
-            new_results = ProgramResults()
-            new_results.load_checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
-            )
-
-            # Every shot from both calls is present -- no batch-index
-            # exclusion left to exclude anything.
-            assert set(new_results.shot_histories.keys()) == set(range(6))
-            for i in range(6):
-                history = new_results.shot_histories[i]
-                expected_batch = 1 if i < 3 else 2
-                assert history[0]["batch"] == expected_batch
-                assert history[0]["shot"] == i
-
-    def test_checkpoint_append_structure_survives_array_free_shots(self):
-        """`shot_histories` must keep its real dict/keys/values/iterable HDF5
-        structure (one group per shot) even when every shot's content is
-        entirely array-free, since the checkpoint-append path above
-        navigates directly into that structure by name rather than through
-        a normal recursive decode -- HDF5's array-free-subtree collapse
-        would otherwise fold it into a single blob and break that lookup."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            results = ProgramResults(name="All-classical")
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-
-            for i in range(3):
-                history = History()
-                history.append(Frame({"shot": i}))
-                results.add_shot(i, history)
-
-            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
-
-            checkpoint_file = checkpoint_dir / "results.h5"
-            with h5py.File(checkpoint_file, "r") as f:
-                root_group = f[list(f.keys())[0]]
-                assert isinstance(root_group["shot_histories"], h5py.Group)
-                dict_group = root_group["shot_histories"]["dict"]
-                values_iterable = dict_group["values"]["iterable"]
-                assert values_iterable.attrs["storage_format"] == "groups"
-                assert {"0", "1", "2"} <= set(values_iterable.keys())
-
-            # Append a second, also array-free batch to confirm the fast
-            # append path works end to end, not just on the first checkpoint:
-            # the second consolidation appends into the existing structure.
-            for i in range(3, 6):
-                history = History()
-                history.append(Frame({"shot": i}))
-                results.add_shot(i, history)
-
-            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
-
-            new_results = ProgramResults()
-            new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert set(new_results.shot_histories.keys()) == set(range(6))
-
     def test_checkpoint_append_structure_survives_array_free_shots_for_wall_clock_times(
         self,
     ):
         """`shot_wall_clock_times` must keep its real dict/keys/values/iterable
         HDF5 structure -- not folded into HDF5's array-free-subtree collapse
         blob -- even though every entry is a plain float with no array
-        anywhere, mirroring `test_checkpoint_append_structure_survives_array_free_shots`
-        above but for `shot_wall_clock_times` instead of `shot_histories`."""
+        anywhere, since the checkpoint-append path navigates directly into
+        that structure by name rather than through a normal recursive
+        decode."""
         with tempfile.TemporaryDirectory() as temp_dir:
             results = ProgramResults(name="All-classical")
             checkpoint_dir = Path(temp_dir) / "checkpoints"
@@ -689,7 +586,7 @@ class TestProgramResults:
 
             checkpoint_file = checkpoint_dir / "results.h5"
             with h5py.File(checkpoint_file, "r") as f:
-                root_group = f[list(f.keys())[0]]
+                root_group = _resolve_checkpoint_object_group(f)
                 assert isinstance(
                     root_group["shot_wall_clock_times"], h5py.Group
                 )
@@ -731,264 +628,153 @@ class TestProgramResults:
             results.checkpoint(checkpoint_dir=checkpoint_dir)
 
             # Verify no checkpoint files were created
-            assert (
-                not checkpoint_dir.exists()
-                or len(list(checkpoint_dir.glob("*.h5"))) == 0
+            assert not checkpoint_dir.exists() or not any(
+                checkpoint_dir.iterdir()
             )
 
             # Load from empty checkpoint - should not raise errors
             results.load_checkpoint(checkpoint_dir=checkpoint_dir)
             assert len(results.shot_histories) == 0
 
-    def test_checkpoint_deletion_after_consolidation(self):
-        """Test that original checkpoint files are deleted after consolidation when requested."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            checkpoint_dir.mkdir()
-
-            for worker_id in range(2):
-                results = ProgramResults(name=f"Worker {worker_id}")
-                for i in range(2):
-                    global_shot_idx = worker_id * 2 + i
-                    history = History()
-                    frame = Frame(
-                        {"worker": worker_id, "shot": global_shot_idx}
-                    )
-                    history.append(frame)
-                    results.add_shot(global_shot_idx, history)
-                results.checkpoint(
-                    checkpoint_dir=checkpoint_dir, worker_id=str(worker_id)
-                )
-
-            worker_files = list(checkpoint_dir.glob("worker_*_checkpoint.h5"))
-            assert len(worker_files) == 2
-
-            consolidated_results = ProgramResults()
-            output_file = consolidated_results.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=True
-            )
-
-            remaining_worker_files = [
-                p
-                for pattern in ProgramResults._WORKER_FILE_GLOBS
-                for p in checkpoint_dir.glob(pattern)
-            ]
-            assert len(remaining_worker_files) == 0
-
-            assert output_file.exists()
-
-            consolidated_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert len(consolidated_results.shot_histories) == 4
-
-    def test_comprehensive_serialization(self, make_temp_path):
-        """Test comprehensive ProgramResults serialization with different formats and edge cases."""
-
-        def test_serialization_format(format_name):
-            """Test serialization for a specific format."""
-            results = ProgramResults(name="Comprehensive Serialization Test")
-
-            # Add shots with various data types to test complex serialization
-            for i in range(3):
-                history = History()
-                frame = Frame(
-                    {
-                        "int_data": i,
-                        "float_data": float(i) * 1.5,
-                        "string_data": f"test_string_{i}",
-                        "bool_data": i % 2 == 0,
-                        "list_data": [i, i + 1, i + 2],
-                        "dict_data": {"nested": f"value_{i}", "number": i},
-                    }
-                )
-                history.append(frame)
-                results.add_shot(i, history)
-
-            # Mark some shots as written to test _unwritten_shots serialization
-            results.mark_shots_as_written([1])
-
-            if format_name == "hdf5":
-                # For HDF5, handle everything in one file context
-                with make_temp_path(suffix=".h5") as temp_path:
-                    with h5py.File(temp_path, "w") as h5_file:
-                        root_group = h5_file.create_group("root")
-
-                        # Test encoding
-                        encoded = Serializable.encode(
-                            results,
-                            format=format_name,
-                            h5_group=root_group,
-                            reset_encode_id=True,
-                        )
-
-                        # Verify all expected attributes are present
-                        assert isinstance(encoded, h5py.Group)
-                        assert "encode_type" in encoded.attrs
-                        assert encoded.attrs["encode_type"] == "Serializable"
-                        assert "class" in encoded.attrs
-                        assert encoded.attrs["class"] == "ProgramResults"
-
-                        # Test decoding
-                        decoded_results = Serializable.decode(
-                            encoded, format=format_name
-                        )
-                        assert isinstance(decoded_results, ProgramResults)
-
-                        # Verify decoded object has correct properties
-                        assert (
-                            decoded_results.name
-                            == "Comprehensive Serialization Test"
-                        )
-                        assert len(decoded_results.shot_histories) == 3
-                        assert (
-                            len(decoded_results._unwritten_shots) == 2
-                        )  # Only shots 0 and 2 should be unwritten
-                        assert 0 in decoded_results._unwritten_shots
-                        assert 2 in decoded_results._unwritten_shots
-                        assert 1 not in decoded_results._unwritten_shots
-
-                        # Verify shot data is preserved correctly
-                        for i in range(3):
-                            assert i in decoded_results.shot_histories
-                            history = decoded_results.shot_histories[i]
-                            assert len(history) == 1
-                            frame = history[0]
-
-                            assert frame["int_data"] == i
-                            assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6  # type: ignore
-                            assert frame["string_data"] == f"test_string_{i}"
-                            assert frame["bool_data"] == (i % 2 == 0)
-                            assert frame["list_data"] == [i, i + 1, i + 2]
-                            assert frame["dict_data"] == {
-                                "nested": f"value_{i}",
-                                "number": i,
-                            }
-
-                        # Test round-trip serialization
-                        re_encoded = Serializable.encode(
-                            decoded_results,
-                            format=format_name,
-                            h5_group=root_group,
-                            reset_encode_id=False,
-                        )  # False to avoid key collision
-                        re_decoded = Serializable.decode(
-                            re_encoded, format=format_name
-                        )
-                        assert isinstance(re_decoded, ProgramResults)
-
-                        assert (
-                            re_decoded.name
-                            == "Comprehensive Serialization Test"
-                        )
-                        assert len(re_decoded.shot_histories) == 3
-                        assert len(re_decoded._unwritten_shots) == 2
-            else:
-                # Test encoding
-                encoded = Serializable.encode(
-                    results, format=format_name, reset_encode_id=True
-                )
-
-                # Verify all expected attributes are present
-                assert "shot_histories" in encoded
-                assert "_unwritten_shots" in encoded
-                assert "name" in encoded
-
-                # Verify the data structure
-                assert isinstance(encoded, dict)
-                assert encoded["encode_type"] == "Serializable"
-                assert encoded["class"] == "ProgramResults"
-                assert encoded["module"] == "loqs.core.programresults"
-
-                # Test decoding
-                decoded_results = Serializable.decode(
-                    encoded, format=format_name
-                )
-                assert isinstance(decoded_results, ProgramResults)
-
-                # Verify decoded object has correct properties
-                assert (
-                    decoded_results.name == "Comprehensive Serialization Test"
-                )
-                assert len(decoded_results.shot_histories) == 3
-                assert (
-                    len(decoded_results._unwritten_shots) == 2
-                )  # Only shots 0 and 2 should be unwritten
-                assert 0 in decoded_results._unwritten_shots
-                assert 2 in decoded_results._unwritten_shots
-                assert 1 not in decoded_results._unwritten_shots
-
-                # Verify shot data is preserved correctly
-                for i in range(3):
-                    assert i in decoded_results.shot_histories
-                    history = decoded_results.shot_histories[i]
-                    assert len(history) == 1
-                    frame = history[0]
-
-                    assert frame["int_data"] == i
-                    assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6  # type: ignore
-                    assert frame["string_data"] == f"test_string_{i}"
-                    assert frame["bool_data"] == (i % 2 == 0)
-                    assert frame["list_data"] == [i, i + 1, i + 2]
-                    assert frame["dict_data"] == {
-                        "nested": f"value_{i}",
-                        "number": i,
-                    }
-
-                # Test round-trip serialization
-                re_encoded = Serializable.encode(
-                    decoded_results, format=format_name, reset_encode_id=True
-                )
-                re_decoded = Serializable.decode(
-                    re_encoded, format=format_name
-                )
-                assert isinstance(re_decoded, ProgramResults)
-
-                assert re_decoded.name == "Comprehensive Serialization Test"
-                assert len(re_decoded.shot_histories) == 3
-                assert len(re_decoded._unwritten_shots) == 2
-
-        test_serialization_format("json")
-        test_serialization_format("hdf5")
-
-    def test_serialization_edge_cases(self):
-        """Test serialization edge cases and error conditions."""
-
-        # Test empty ProgramResults
-        empty_results = ProgramResults()
-        encoded = Serializable.encode(
-            empty_results, format="json", reset_encode_id=True
-        )
-        decoded = Serializable.decode(encoded, format="json")
+    @staticmethod
+    def _assert_comprehensive_decoded(decoded):
         assert isinstance(decoded, ProgramResults)
-
-        assert decoded.name == "(Unnamed program results)"
-        assert len(decoded.shot_histories) == 0
-        assert len(decoded._unwritten_shots) == 0
-
-        # Test ProgramResults with only unwritten shots
-        results = ProgramResults(name="Unwritten Only")
-        for i in range(2):
-            history = History()
-            history.append(Frame({"test": i}))
-            results.add_shot(i, history)
-
-        encoded = Serializable.encode(
-            results, format="json", reset_encode_id=True
-        )
-        decoded = Serializable.decode(encoded, format="json")
-        assert isinstance(decoded, ProgramResults)
-
+        assert decoded.name == "Comprehensive Serialization Test"
+        assert len(decoded.shot_histories) == 3
+        # Only shots 0 and 2 should be unwritten
         assert len(decoded._unwritten_shots) == 2
         assert 0 in decoded._unwritten_shots
-        assert 1 in decoded._unwritten_shots
+        assert 2 in decoded._unwritten_shots
+        assert 1 not in decoded._unwritten_shots
 
-        # Test ProgramResults with only written shots (all marked as written)
-        results = ProgramResults(name="Written Only")
-        for i in range(2):
+        for i in range(3):
+            assert i in decoded.shot_histories
+            history = decoded.shot_histories[i]
+            assert len(history) == 1
+            frame = history[0]
+
+            assert frame["int_data"] == i
+            assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6  # type: ignore
+            assert frame["string_data"] == f"test_string_{i}"
+            assert frame["bool_data"] == (i % 2 == 0)
+            assert frame["list_data"] == [i, i + 1, i + 2]
+            assert frame["dict_data"] == {
+                "nested": f"value_{i}",
+                "number": i,
+            }
+
+    @pytest.mark.parametrize("format_name", ["json", "hdf5"])
+    def test_comprehensive_serialization(self, make_temp_path, format_name):
+        """Test comprehensive ProgramResults serialization with different formats and edge cases."""
+        results = ProgramResults(name="Comprehensive Serialization Test")
+
+        # Add shots with various data types to test complex serialization
+        for i in range(3):
             history = History()
-            history.append(Frame({"test": i}))
+            frame = Frame(
+                {
+                    "int_data": i,
+                    "float_data": float(i) * 1.5,
+                    "string_data": f"test_string_{i}",
+                    "bool_data": i % 2 == 0,
+                    "list_data": [i, i + 1, i + 2],
+                    "dict_data": {"nested": f"value_{i}", "number": i},
+                }
+            )
+            history.append(frame)
             results.add_shot(i, history)
 
-        results.mark_shots_as_written([0, 1])
+        # Mark some shots as written to test _unwritten_shots serialization
+        results.mark_shots_as_written([1])
+
+        if format_name == "hdf5":
+            # For HDF5, handle everything in one file context
+            with make_temp_path(suffix=".h5") as temp_path:
+                with h5py.File(temp_path, "w") as h5_file:
+                    root_group = h5_file.create_group("root")
+
+                    encoded = Serializable.encode(
+                        results,
+                        format=format_name,
+                        h5_group=root_group,
+                        reset_encode_id=True,
+                    )
+
+                    assert isinstance(encoded, h5py.Group)
+                    assert "encode_type" in encoded.attrs
+                    assert encoded.attrs["encode_type"] == "Serializable"
+                    assert "class" in encoded.attrs
+                    assert encoded.attrs["class"] == "ProgramResults"
+
+                    decoded_results = Serializable.decode(
+                        encoded, format=format_name
+                    )
+                    self._assert_comprehensive_decoded(decoded_results)
+
+                    # Test round-trip serialization
+                    re_encoded = Serializable.encode(
+                        decoded_results,
+                        format=format_name,
+                        h5_group=root_group,
+                        reset_encode_id=False,
+                    )  # False to avoid key collision
+                    re_decoded = Serializable.decode(
+                        re_encoded, format=format_name
+                    )
+                    assert isinstance(re_decoded, ProgramResults)
+
+                    assert (
+                        re_decoded.name == "Comprehensive Serialization Test"
+                    )
+                    assert len(re_decoded.shot_histories) == 3
+                    assert len(re_decoded._unwritten_shots) == 2
+        else:
+            encoded = Serializable.encode(
+                results, format=format_name, reset_encode_id=True
+            )
+
+            assert "shot_histories" in encoded
+            assert "_unwritten_shots" in encoded
+            assert "name" in encoded
+
+            assert isinstance(encoded, dict)
+            assert encoded["encode_type"] == "Serializable"
+            assert encoded["class"] == "ProgramResults"
+            assert encoded["module"] == "loqs.core.programresults"
+
+            decoded_results = Serializable.decode(encoded, format=format_name)
+            self._assert_comprehensive_decoded(decoded_results)
+
+            # Test round-trip serialization
+            re_encoded = Serializable.encode(
+                decoded_results, format=format_name, reset_encode_id=True
+            )
+            re_decoded = Serializable.decode(re_encoded, format=format_name)
+            assert isinstance(re_decoded, ProgramResults)
+
+            assert re_decoded.name == "Comprehensive Serialization Test"
+            assert len(re_decoded.shot_histories) == 3
+            assert len(re_decoded._unwritten_shots) == 2
+
+    @pytest.mark.parametrize(
+        "name, written, expected_unwritten",
+        [
+            pytest.param("(Unnamed program results)", None, set(), id="empty"),
+            pytest.param("Unwritten Only", [], {0, 1}, id="only_unwritten"),
+            pytest.param("Written Only", [0, 1], set(), id="only_written"),
+        ],
+    )
+    def test_serialization_edge_cases(self, name, written, expected_unwritten):
+        """Test serialization edge cases and error conditions."""
+        if written is None:
+            results = ProgramResults()
+        else:
+            results = ProgramResults(name=name)
+            for i in range(2):
+                history = History()
+                history.append(Frame({"test": i}))
+                results.add_shot(i, history)
+            results.mark_shots_as_written(written)
 
         encoded = Serializable.encode(
             results, format="json", reset_encode_id=True
@@ -996,238 +782,97 @@ class TestProgramResults:
         decoded = Serializable.decode(encoded, format="json")
         assert isinstance(decoded, ProgramResults)
 
-        assert len(decoded._unwritten_shots) == 0
-        assert len(decoded.shot_histories) == 2
+        assert decoded.name == name
+        assert len(decoded.shot_histories) == len(results.shot_histories)
+        assert len(decoded._unwritten_shots) == len(expected_unwritten)
+        assert all(i in decoded._unwritten_shots for i in expected_unwritten)
 
-    def test_serialization_with_file_io(self):
+    @pytest.mark.parametrize(
+        "format_name, file_extension",
+        [("json", "json"), ("json.gz", "json.gz"), ("hdf5", "h5")],
+    )
+    def test_serialization_with_file_io(
+        self, tmp_path, format_name, file_extension
+    ):
         """Test serialization using file I/O methods."""
+        results = ProgramResults(name="File IO Test")
 
-        def test_file_io_format(format_name, file_extension):
-            """Test file I/O for a specific format."""
-            results = ProgramResults(name="File IO Test")
+        for i in range(2):
+            history = History()
+            frame = Frame({"file_test": f"value_{i}"})
+            history.append(frame)
+            results.add_shot(i, history)
 
-            # Add some test data
-            for i in range(2):
-                history = History()
-                frame = Frame({"file_test": f"value_{i}"})
-                history.append(frame)
-                results.add_shot(i, history)
+        file_path = tmp_path / f"test_results.{file_extension}"
 
-            with tempfile.TemporaryDirectory() as temp_dir:
-                file_path = Path(temp_dir) / f"test_results.{file_extension}"
+        results.write(file_path, format=format_name)
+        assert file_path.exists()
 
-                # Write to file
-                results.write(file_path, format=format_name)
+        loaded_results = Serializable.read(file_path, format=format_name)
+        assert isinstance(loaded_results, ProgramResults)
 
-                # Verify file exists
-                assert file_path.exists()
+        assert loaded_results.name == "File IO Test"
+        assert len(loaded_results.shot_histories) == 2
+        assert len(loaded_results._unwritten_shots) == 2
 
-                # Read from file
-                loaded_results = Serializable.read(
-                    file_path, format=format_name
-                )
-                assert isinstance(loaded_results, ProgramResults)
+        for i in range(2):
+            history = loaded_results.shot_histories[i]
+            assert history[0]["file_test"] == f"value_{i}"
 
-                # Verify loaded data
-                assert loaded_results.name == "File IO Test"
-                assert len(loaded_results.shot_histories) == 2
-                assert len(loaded_results._unwritten_shots) == 2
-
-                for i in range(2):
-                    history = loaded_results.shot_histories[i]
-                    assert history[0]["file_test"] == f"value_{i}"
-
-        # Test different file formats
-        test_file_io_format("json", "json")
-        test_file_io_format("json.gz", "json.gz")
-        test_file_io_format("hdf5", "h5")
-
-    def test_consolidate_checkpoints_memory_bounded_decode(self):
-        """Consolidating a worker file must decode its shots one at a time
-        via `Serializable.decode`, never once for the whole worker file's
+    @pytest.mark.parametrize(
+        "prior_shots, new_shots",
+        [(0, 55), (15, 20)],
+        ids=["fresh_output", "populated_output"],
+    )
+    def test_consolidate_checkpoints_memory_bounded_decode(
+        self, tmp_path, prior_shots, new_shots
+    ):
+        """Consolidating a worker file, into a fresh or an already-populated
+        `results.h5`, must decode its shots one at a time via
+        `Serializable.decode`, never once for the whole worker file's
         `shot_histories` dict -- i.e. no single decode call may return a
         `ProgramResults` holding more than one shot."""
-        num_shots = 55
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
+        checkpoint_dir = tmp_path / "checkpoints"
 
+        def checkpoint_shots(indices, worker_id):
             results = ProgramResults(name="Memory Test", lazy_loading=False)
-            for i in range(num_shots):
+            for i in indices:
                 history = History()
                 history.append(
                     Frame({"shot_id": i, "array": np.array([i, i + 1])})
                 )
                 results.add_shot(i, history)
-            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-
-            real_decode = Serializable.decode
-            decoded_shot_counts = []
-
-            def spy_decode(encoded, format="hdf5", decode_cache=None):
-                result = real_decode(
-                    encoded, format=format, decode_cache=decode_cache
-                )
-                if isinstance(result, History):
-                    decoded_shot_counts.append(1)
-                elif isinstance(result, ProgramResults):
-                    decoded_shot_counts.append(len(result.shot_histories))
-                return result
-
-            consolidator = ProgramResults()
-            with unittest.mock.patch.object(
-                Serializable, "decode", side_effect=spy_decode
-            ):
-                consolidator.consolidate_checkpoints(
-                    checkpoint_dir=checkpoint_dir, delete_originals=False
-                )
-
-            # Every decode call must materialize at most one shot's History
-            # at a time, never the whole file's shot_histories dict at once.
-            assert (
-                decoded_shot_counts
-            ), "Serializable.decode was never spied on"
-            assert max(decoded_shot_counts) == 1, (
-                f"Expected every decode call to materialize at most one "
-                f"shot at a time, but saw counts {decoded_shot_counts} -- "
-                f"consolidation is not entry-level memory-bounded."
-            )
-            assert decoded_shot_counts.count(1) >= num_shots, (
-                f"Expected at least {num_shots} single-shot decode calls, "
-                f"got {decoded_shot_counts.count(1)}"
+            results.checkpoint(
+                checkpoint_dir=checkpoint_dir, worker_id=worker_id
             )
 
-            reloaded = ProgramResults()
-            reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert set(reloaded.shot_histories.keys()) == set(range(num_shots))
-
-    def test_consolidate_checkpoints_with_dedup_lazily_pulls_entries(self):
-        """Consolidation with deduplication (crash-recovery retry case) must
-        pull `shot_histories` entries from `iter_dict_attr_entries` one at a
-        time and write each as soon as it's decoded, never decoding the
-        whole worker file's shots before writing any of them.
-
-        Scoped specifically to `shot_histories`: this test's fixture never
-        passes `wall_clock_time` to `add_shot`, so `shot_wall_clock_times`
-        stays empty throughout and the shared `_write_streamed_dict_entries`
-        spy below only wraps its one-at-a-time counting behavior for
-        `shot_histories`, passing straight through to the real method for
-        any other attr.
-
-        Uses 10 shots with a strict duplicate/new alternation (evens already
-        merged into the output, odds new) so a single `next()` pull can never
-        silently burn through the whole worker file: a genuinely lazy
-        implementation decodes exactly 2 raw entries (1 duplicate skip + 1
-        new write) between each write, giving the deterministic sequence
-        [2, 4, 6, 8, 10]. An eager implementation that decodes everything
-        before writing anything would instead show [10, 10, 10, 10, 10].
-        """
-        import loqs.internal.streamingmerge as streamingmerge_module
-
-        num_shots = 10
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-
-            # First worker: only the even-indexed shots. Consolidating these
-            # first makes them the "already merged" entries in results.h5.
-            results_w0 = ProgramResults(name="Worker 0", lazy_loading=False)
-            for i in range(0, num_shots, 2):
-                history = History()
-                history.append(Frame({"shot_id": i}))
-                results_w0.add_shot(i, history)
-            results_w0.checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
+        if prior_shots:
+            checkpoint_shots(range(prior_shots), "w0")
+            ProgramResults().consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir
             )
 
-            consolidator = ProgramResults()
-            consolidator.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=True
+            assert (checkpoint_dir / "results.h5").exists()
+            reloaded_prior = ProgramResults()
+            reloaded_prior.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert set(reloaded_prior.shot_histories.keys()) == set(
+                range(prior_shots)
             )
 
-            # Second worker: all 10 shots -- the even ones duplicate what's
-            # already in results.h5, the odd ones are new.
-            results_w1 = ProgramResults(name="Worker 1", lazy_loading=False)
-            for i in range(num_shots):
-                history = History()
-                history.append(Frame({"shot_id": i}))
-                results_w1.add_shot(i, history)
-            results_w1.checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w1"
-            )
+        checkpoint_shots(range(prior_shots, prior_shots + new_shots), "w1")
+        decoded_shot_counts, _ = _consolidate_spying_on_decode(checkpoint_dir)
 
-            real_iter_dict_attr_entries = (
-                streamingmerge_module.iter_dict_attr_entries
-            )
-            decoded_count = [0]
+        # Every decode call must materialize at most one shot's History
+        # at a time, never the whole file's shot_histories dict at once.
+        assert decoded_shot_counts
+        assert max(decoded_shot_counts) == 1
+        assert decoded_shot_counts.count(1) >= new_shots
 
-            def spy_iter_dict_attr_entries(
-                parent_group, attr_name, decode_cache=None, start_index=0
-            ):
-                """Count every raw entry decoded off the worker file, before
-                dedup filtering discards the duplicates."""
-                for key, value in real_iter_dict_attr_entries(
-                    parent_group,
-                    attr_name,
-                    decode_cache=decode_cache,
-                    start_index=start_index,
-                ):
-                    decoded_count[0] += 1
-                    yield key, value
-
-            real_write_streamed_dict_entries = (
-                ProgramResults._write_streamed_dict_entries
-            )
-            decoded_count_at_write = []
-
-            def spy_write_streamed_dict_entries(
-                self, h5_file, attr_name, value_use_dataset, entries
-            ):
-                """For shot_histories specifically, manually pull entries one
-                at a time (never a bulk for-loop over a pre-materialized
-                list), writing each via its own single-item real
-                _write_streamed_dict_entries call and recording
-                decoded_count at the moment of each write. Any other attr
-                (shot_wall_clock_times, empty in this test's fixture) passes
-                straight through to the real method unmodified."""
-                if attr_name != "shot_histories":
-                    real_write_streamed_dict_entries(
-                        self, h5_file, attr_name, value_use_dataset, entries
-                    )
-                    return
-                for entry in entries:
-                    real_write_streamed_dict_entries(
-                        self, h5_file, attr_name, value_use_dataset, [entry]
-                    )
-                    decoded_count_at_write.append(decoded_count[0])
-
-            with (
-                unittest.mock.patch.object(
-                    streamingmerge_module,
-                    "iter_dict_attr_entries",
-                    spy_iter_dict_attr_entries,
-                ),
-                unittest.mock.patch.object(
-                    ProgramResults,
-                    "_write_streamed_dict_entries",
-                    spy_write_streamed_dict_entries,
-                ),
-            ):
-                consolidator2 = ProgramResults()
-                consolidator2.consolidate_checkpoints(
-                    checkpoint_dir=checkpoint_dir, delete_originals=True
-                )
-
-            assert decoded_count_at_write == [2, 4, 6, 8, 10], (
-                f"Expected exactly 2 raw entries decoded between each write "
-                f"(1 duplicate skip + 1 new write), giving [2, 4, 6, 8, 10], "
-                f"but got {decoded_count_at_write} -- this indicates entries "
-                f"are not being pulled one at a time from "
-                f"iter_dict_attr_entries as they're written."
-            )
-
-            # Verify the consolidation actually worked (all shots present)
-            reloaded = ProgramResults()
-            reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert set(reloaded.shot_histories.keys()) == set(range(num_shots))
+        reloaded = ProgramResults()
+        reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+        assert set(reloaded.shot_histories.keys()) == set(
+            range(prior_shots + new_shots)
+        )
 
     def test_consolidate_checkpoints_shot_wall_clock_times_no_extra_history_decodes(
         self,
@@ -1284,25 +929,9 @@ class TestProgramResults:
                     checkpoint_dir=checkpoint_dir, worker_id="w0"
                 )
 
-                real_decode = Serializable.decode
-                history_decode_count = [0]
-
-                def spy_decode(encoded, format="hdf5", decode_cache=None):
-                    result = real_decode(
-                        encoded, format=format, decode_cache=decode_cache
-                    )
-                    if isinstance(result, History):
-                        history_decode_count[0] += 1
-                    return result
-
-                consolidator = ProgramResults()
-                with unittest.mock.patch.object(
-                    Serializable, "decode", side_effect=spy_decode
-                ):
-                    consolidator.consolidate_checkpoints(
-                        checkpoint_dir=checkpoint_dir,
-                        delete_originals=False,
-                    )
+                _, history_decodes = _consolidate_spying_on_decode(
+                    checkpoint_dir
+                )
 
                 if add_wall_clock_time:
                     reloaded = ProgramResults()
@@ -1319,7 +948,7 @@ class TestProgramResults:
                             < 1e-9
                         )
 
-                return history_decode_count[0]
+                return history_decodes
 
         baseline_count = _consolidate_and_count_history_decodes(
             add_wall_clock_time=False
@@ -1328,13 +957,7 @@ class TestProgramResults:
             add_wall_clock_time=True
         )
 
-        assert wall_clock_count == baseline_count, (
-            f"Expected merging shot_wall_clock_times to add zero extra "
-            f"History decode calls relative to a shot_histories-only "
-            f"baseline of {baseline_count}, but saw {wall_clock_count} -- "
-            f"merging shot_wall_clock_times must not add any extra "
-            f"History decodes."
-        )
+        assert wall_clock_count == baseline_count
 
     def test_load_checkpoint_restores_metadata_fields(self):
         """When loading from a checkpoint file, metadata fields (name,
@@ -1345,7 +968,7 @@ class TestProgramResults:
             checkpoint_dir.mkdir()
 
             # Create a ProgramResults with custom metadata and write the
-            # metadata snapshot (via _write_results_snapshot_if_fresh)
+            # metadata snapshot (via _ensure_snapshot)
             original = ProgramResults(
                 name="Custom Results Name",
                 num_shots=42,
@@ -1356,7 +979,7 @@ class TestProgramResults:
             # checkpoint_enabled=True and parent_program is a QuantumProgram;
             # we call it manually to test the restore path)
             original._checkpoint_dir = checkpoint_dir
-            original._write_results_snapshot_if_fresh()
+            original._ensure_snapshot()
 
             # Add shots and checkpoint
             for i in range(5):
@@ -1377,129 +1000,76 @@ class TestProgramResults:
             # Verify shot histories were also loaded
             assert len(loaded.shot_histories) == 5
 
+            # Fields the caller set are kept, not overwritten.
+            preset = ProgramResults(
+                name="Mine", num_shots=7, max_frame_limit=3
+            )
+            preset.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert preset.name == "Mine"
+            assert preset.num_shots == 7
+            assert preset.max_frame_limit == 3
+
 
 class TestShotCheckpointBatchWithLedger:
-    """`_write_shot_checkpoint_batch_with_ledger` writes one batch of
-    shots' checkpoint entries to a dedicated payload file and marks every
-    shot in the batch done in the SWMR ledger only once that payload write
-    has fully completed."""
+    """`checkpoint()` marks a batch's shots done in the SWMR ledger only
+    once the store has committed the batch."""
 
-    def test_write_shot_checkpoint_batch_with_ledger_does_not_mark_done_on_failure(
-        self, tmp_path, monkeypatch
+    @pytest.mark.parametrize("worker", ["w0", None], ids=["id", "serial"])
+    def test_checkpoint_does_not_mark_done_on_failure(
+        self, tmp_path, monkeypatch, worker
     ):
-        """If `merge_dict_attr` raises partway through a multi-shot batch's
-        payload write, the exception propagates out of
-        `_write_shot_checkpoint_batch_with_ledger` and none of the batch's
-        shots show `done=True` in the ledger afterward -- not even shots
-        whose own entries were already "written" into the payload file
-        before the mocked failure, since the ledger mark loop only runs
-        after the whole `with` block succeeds."""
-        from loqs.internal.swmrledger import (
-            open_swmr_writer,
-            read_swmr_ledger_status,
-        )
-        from loqs.core.programresults import (
-            _write_shot_checkpoint_batch_with_ledger,
-        )
-
+        """A failed `put_batch` leaves every shot unwritten and none done,
+        so a retry rewrites the batch. On the retry, each ledger mark comes
+        after the write is closed, renamed into place and committed. Catches
+        a mark made before or regardless of the write, or between the write
+        and its commit."""
         checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-        _, ledger_group = open_swmr_writer(
-            checkpoint_dir / "worker_test_checkpoint.h5",
-            fields=["done", "wall_clock_times"],
-        )
-        payload_path = checkpoint_dir / "worker_test_shots_0_payload.h5"
-
-        real_merge_dict_attr = programresults_module.merge_dict_attr
-        call_count = {"n": 0}
-
-        def flaky_merge_dict_attr(*args, **kwargs):
-            call_count["n"] += 1
-            if call_count["n"] == 2:
-                raise RuntimeError("simulated failure partway through")
-            return real_merge_dict_attr(*args, **kwargs)
-
-        monkeypatch.setattr(
-            programresults_module, "merge_dict_attr", flaky_merge_dict_attr
-        )
-
-        shot_indices = [0, 1, 2]
-        attr_entries = [
-            (
-                "shot_histories",
-                False,
-                [(0, History()), (1, History()), (2, History())],
-            ),
-            (
-                "shot_wall_clock_times",
-                True,
-                [(0, 0.1), (1, 0.2), (2, 0.3)],
-            ),
-        ]
-        wall_clock_times = {0: 0.1, 1: 0.2, 2: 0.3}
-
-        with pytest.raises(RuntimeError, match="simulated failure"):
-            _write_shot_checkpoint_batch_with_ledger(
-                ledger_group,
-                payload_path,
-                shot_indices,
-                attr_entries,
-                wall_clock_times,
-            )
-
-        assert call_count["n"] == 2
-
-        status = read_swmr_ledger_status(ledger_group)
-        for shot_index in shot_indices:
-            done = (
-                bool(status.done[shot_index])
-                if status.done is not None and len(status.done) > shot_index
-                else False
-            )
-            assert done is False
-
-
-class TestSerialShotCheckpoint:
-    """A `worker_id=None` checkpoint appends straight to the canonical
-    `results.h5` and marks its shots done in the ledger only afterwards."""
-
-    def test_serial_checkpoint_marks_ledger_after_results_closed(
-        self, tmp_path, monkeypatch
-    ):
-        """Every ledger mark happens after `results.h5` is closed and already
-        holds the shot being marked, and no payload file is written."""
-        from loqs.internal.streamingmerge import get_dict_attr_keys
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        results_path = (checkpoint_dir / "results.h5").resolve()
         results = ProgramResults(lazy_loading=False)
-        for shot_index in range(3):
+        for i in range(3):
             history = History()
-            history.append(Frame({"shot": shot_index}))
-            results.add_shot(
-                shot_index, history, wall_clock_time=0.1 * (shot_index + 1)
-            )
+            history.append(Frame({"shot": i}))
+            results.add_shot(i, history, wall_clock_time=0.1)
+
+        def failing_put_batch(self, *args, **kwargs):
+            raise RuntimeError("simulated failure")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(CheckpointStore, "put_batch", failing_put_batch)
+            with pytest.raises(RuntimeError, match="simulated failure"):
+                results.checkpoint(
+                    checkpoint_dir=checkpoint_dir, worker_id=worker
+                )
+
+        assert sorted(results.get_unwritten_shots()) == [0, 1, 2]
+        assert ProgramResults._count_live_done_shots(checkpoint_dir) == 0
 
         real_mark = programresults_module.mark_ledger_item_done
         marked: list[int] = []
 
         def spy_mark(ledger_group, index, *args, **kwargs):
-            assert results_path not in _open_hdf5_file_paths()
-            assert results_path.exists()
-            with h5py.File(results_path, "r") as f:
-                assert index in get_dict_attr_keys(f, "shot_histories")
+            store = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
+            open_paths = _open_hdf5_file_paths()
+            for path in [store.canonical_path, *store.payload_paths()]:
+                assert path.resolve() not in open_paths
+            assert not list(checkpoint_dir.glob("*.tmp"))
+            assert index in store.keys()
             marked.append(index)
             return real_mark(ledger_group, index, *args, **kwargs)
 
         monkeypatch.setattr(
             programresults_module, "mark_ledger_item_done", spy_mark
         )
+        results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id=worker)
 
-        results.checkpoint(checkpoint_dir=checkpoint_dir)
-
-        assert sorted(marked) == [0, 1, 2]
-        assert not list(checkpoint_dir.glob("worker_*_shots_*_payload.h5"))
+        assert marked == [0, 1, 2]
         assert ProgramResults._count_live_done_shots(checkpoint_dir) == 3
+        payloads = CheckpointStore(checkpoint_dir, SHOT_LAYOUT).payload_paths()
+        assert len(payloads) == (0 if worker is None else 1)
+
+
+def _shot_store(checkpoint_dir: Path) -> CheckpointStore:
+    """The shot-level store of a checkpoint directory."""
+    return CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
 
 
 def _open_hdf5_file_paths() -> set[Path]:
@@ -1510,43 +1080,17 @@ def _open_hdf5_file_paths() -> set[Path]:
     }
 
 
-def _write_prefix_worker_file(
-    path: Path,
-    histories: dict[int, History],
-    wall_clock_times: dict[int, float] | None = None,
-) -> None:
-    """Write a pre-fix shot worker data file, in the layout the pre-SWMR
-    `checkpoint(worker_id=...)` wrote: both streamed dict attrs written by
-    `_write_streamed_dict_entries` into a fresh file."""
-    writer = ProgramResults(lazy_loading=False)
-    with h5py.File(path, "w") as f:
-        writer._write_streamed_dict_entries(
-            f, "shot_histories", False, histories.items()
-        )
-        writer._write_streamed_dict_entries(
-            f, "shot_wall_clock_times", True, (wall_clock_times or {}).items()
-        )
-
-
 class TestMixedFormatShotCheckpoints:
-    """Shot-level reads and consolidation handle pre-fix data files, SWMR
-    ledgers and per-batch payload files side by side in one directory."""
+    """Shot-level reads and consolidation handle SWMR ledgers, per-batch
+    payload files and the canonical file side by side in one directory."""
 
     def test_consolidate_unlinks_only_after_output_closed(self, tmp_path):
-        """`consolidate_checkpoints` merges a pre-fix worker data file and
-        a live writer's payload, then deletes both and the writer's ledger
-        -- but only once the output file is closed, so no source
-        disappears while its merged entries could still be lost."""
+        """`consolidate_checkpoints` merges a live writer's payload, then
+        deletes it and the writer's ledger -- but only once the output file
+        is closed, so no source disappears while its merged entries could
+        still be lost."""
         checkpoint_dir = tmp_path / "checkpoints"
         checkpoint_dir.mkdir()
-
-        legacy_histories = {}
-        for i in range(2):
-            history = History()
-            history.append(Frame({"shot_id": i}))
-            legacy_histories[i] = history
-        legacy_file = checkpoint_dir / "worker_legacy_checkpoint.h5"
-        _write_prefix_worker_file(legacy_file, legacy_histories)
 
         live = ProgramResults(lazy_loading=False)
         for i in range(2, 4):
@@ -1581,11 +1125,12 @@ class TestMixedFormatShotCheckpoints:
                 checkpoint_dir=checkpoint_dir
             )
 
-        for source in (legacy_file, ledger_file, payload_file):
+        for source in (ledger_file, payload_file):
             assert not source.exists()
             assert source.resolve() in unlinked
-        for pattern in ProgramResults._WORKER_FILE_GLOBS:
-            assert not list(checkpoint_dir.glob(pattern))
+        assert list(checkpoint_dir.iterdir()) == [
+            _shot_store(checkpoint_dir).canonical_path
+        ]
         assert not any(
             path.is_relative_to(resolved_dir)
             for path in _open_hdf5_file_paths()
@@ -1593,8 +1138,8 @@ class TestMixedFormatShotCheckpoints:
 
         consolidated = ProgramResults(lazy_loading=False)
         consolidated.load_checkpoint(checkpoint_dir=checkpoint_dir)
-        assert set(consolidated.shot_histories) == {0, 1, 2, 3}
-        for i in range(4):
+        assert set(consolidated.shot_histories) == {2, 3}
+        for i in (2, 3):
             assert consolidated.shot_histories[i][0]["shot_id"] == i
 
     _KILLED_WRITER_SCRIPT = """
@@ -1604,26 +1149,22 @@ from pathlib import Path
 
 from loqs.core import Frame
 from loqs.core.history import History
-from loqs.core.programresults import _write_shot_checkpoint_batch_with_ledger
-from loqs.internal.swmrledger import open_swmr_writer
+from loqs.internal.checkpointstore import SHOT_LAYOUT, CheckpointStore
+from loqs.internal.swmrledger import mark_ledger_item_done, open_swmr_writer
 
 checkpoint_dir = Path(sys.argv[1])
+store = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
 _, ledger_group = open_swmr_writer(
-    checkpoint_dir / "worker_killed_checkpoint.h5",
-    fields=["done", "wall_clock_times"],
+    store.ledger_path("killed"), fields=["done", "wall_clock_times"]
 )
-entries = []
+entries = {}
 for i in (6, 7):
     history = History()
     history.append(Frame({"shot_id": i}))
-    entries.append((i, history))
-_write_shot_checkpoint_batch_with_ledger(
-    ledger_group,
-    checkpoint_dir / "worker_killed_shots_6_payload.h5",
-    [6, 7],
-    [("shot_histories", False, entries)],
-    {},
-)
+    entries[i] = {"shot_histories": history}
+store.put_batch(entries, worker_id="killed")
+for i in (6, 7):
+    mark_ledger_item_done(ledger_group, i, float("nan"))
 print("ready", flush=True)
 time.sleep(600)
 """
@@ -1661,33 +1202,26 @@ time.sleep(600)
             expected_returncode = -signal.SIGKILL
         assert proc.returncode == expected_returncode
 
-    def test_mixed_legacy_and_swmr_shot_checkpoints(self, tmp_path):
-        """Every shot-level read sees a pre-fix `results.h5`, a pre-fix
-        worker data file, a live writer's ledger plus payload and a killed
-        writer's ledger plus payload together, and consolidation merges
-        them all and removes every transient file."""
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
+    def test_mixed_canonical_live_and_killed_shot_checkpoints(self, tmp_path):
+        """Every shot-level read sees a serial writer's `results.h5`, a live
+        writer's ledger plus payload and a killed writer's ledger plus
+        payload together, and consolidation merges them all and removes
+        every transient file."""
+        from loqs.internal.checkpointstore import (
+            SHOT_LAYOUT,
+            CheckpointStore,
+        )
 
-        # Pre-fix results.h5: a ProgramResults envelope with shots 0-1,
-        # their wall-clock times, and a non-default name.
+        checkpoint_dir = tmp_path / "checkpoints"
+
+        # A serial writer's results.h5: shots 0-3 with wall-clock times and
+        # a non-default name.
         canonical = ProgramResults(name="mixed run", lazy_loading=False)
-        for i in range(2):
+        for i in range(4):
             canonical.add_shot(
                 i, self._shot_history(i), wall_clock_time=0.5 + i
             )
-        Serializable.write(
-            canonical, checkpoint_dir / "results.h5", format="hdf5"
-        )
-
-        # Pre-fix worker data file with shots 2-3 (and their wall-clock
-        # times), in the bootstrap layout the pre-fix `checkpoint()` wrote.
-        legacy_file = checkpoint_dir / "worker_legacy_checkpoint.h5"
-        _write_prefix_worker_file(
-            legacy_file,
-            {i: self._shot_history(i) for i in (2, 3)},
-            {2: 2.5, 3: 3.5},
-        )
+        canonical.checkpoint(checkpoint_dir=checkpoint_dir)
 
         # A live writer in this process: ledger plus payload, shots 4-5,
         # no wall-clock times.
@@ -1699,7 +1233,9 @@ time.sleep(600)
         self._write_killed_writer_files(checkpoint_dir)
 
         expected_wall_clock = {0: 0.5, 1: 1.5, 2: 2.5, 3: 3.5}
-        assert ProgramResults._count_done_shots(checkpoint_dir) == 8
+        store = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
+        assert store.keys() == list(range(8))
+        assert store.missing(range(10)) == [8, 9]
 
         loaded = ProgramResults(lazy_loading=False)
         loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
@@ -1713,15 +1249,8 @@ time.sleep(600)
             for k, v in loaded.shot_wall_clock_times.items()
         )
 
-        for lazy_loading in (True, False):
-            remaining, num_done, _, _ = QuantumProgram._load_remaining_shots(
-                checkpoint_dir, num_shots=10, lazy_loading=lazy_loading
-            )
-            assert remaining == [8, 9]
-            assert num_done == 8
-
         ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
-        assert not list(checkpoint_dir.glob("worker_*"))
+        assert list(checkpoint_dir.iterdir()) == [store.canonical_path]
 
         consolidated = ProgramResults(lazy_loading=False)
         consolidated.load_checkpoint(checkpoint_dir=checkpoint_dir)
@@ -1729,12 +1258,10 @@ time.sleep(600)
         for i in range(8):
             assert consolidated.shot_histories[i][0]["shot_id"] == i
 
-    def test_lazy_reload_falls_back_when_recorded_payload_vanishes(
-        self, tmp_path
-    ):
-        """A recorded payload deleted between its `exists()` check and the
-        open (e.g. by a concurrent consolidation) makes a lazy reload fall
-        back to `results.h5` instead of raising."""
+    def test_lazy_reads_follow_a_payload_into_consolidation(self, tmp_path):
+        """A lazy reader finds a shot in an unconsolidated payload, and
+        keeps finding the others once consolidation moved them into
+        `results.h5` and deleted the payload."""
         checkpoint_dir = tmp_path / "checkpoints"
         results = ProgramResults()
         for i in range(2):
@@ -1743,15 +1270,16 @@ time.sleep(600)
         payload_file = checkpoint_dir / "worker_w0_shots_0_payload.h5"
         assert payload_file.exists()
 
+        shot_1 = results.get_shot_history(1)
+        assert shot_1 is not None
+        assert shot_1[0]["shot_id"] == 1
+
         ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
         assert not payload_file.exists()
 
-        with unittest.mock.patch.object(
-            results, "_recorded_payload_for_shot", return_value=payload_file
-        ):
-            shot_1 = results.get_shot_history(1)
-        assert shot_1 is not None
-        assert shot_1[0]["shot_id"] == 1
+        shot_0 = results.get_shot_history(0)
+        assert shot_0 is not None
+        assert shot_0[0]["shot_id"] == 0
 
     @pytest.mark.parametrize("worker", ["w1", None], ids=["id", "serial"])
     def test_checkpoint_closes_shot_ledger_on_return(self, tmp_path, worker):
@@ -1767,8 +1295,8 @@ time.sleep(600)
         effective_worker_id = (
             worker if worker is not None else global_worker_id()
         )
-        ledger_path = programresults_module._shot_ledger_path(
-            checkpoint_dir.resolve(), effective_worker_id
+        ledger_path = _shot_store(checkpoint_dir).ledger_path(
+            effective_worker_id
         )
         assert ledger_path.exists()
         open_paths = _open_hdf5_file_paths()
@@ -1787,8 +1315,8 @@ time.sleep(600)
         `with` closes and unregisters on exit."""
         checkpoint_dir = tmp_path / "checkpoints"
         checkpoint_dir.mkdir()
-        ledger_path = programresults_module._shot_ledger_path(
-            checkpoint_dir.resolve(), global_worker_id()
+        ledger_path = (
+            _shot_store(checkpoint_dir).ledger_path(global_worker_id())
         ).resolve()
         results = ProgramResults(lazy_loading=False)
 
@@ -1886,10 +1414,6 @@ class TestLiveShotCount:
         ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
         assert (checkpoint_dir / "results.h5").exists()
 
-        # A pre-fix worker data file with shot 20, at the legacy name.
-        legacy_file = checkpoint_dir / "worker_legacy_checkpoint.h5"
-        _write_prefix_worker_file(legacy_file, shots((20,)).shot_histories)
-
         # A ledger written and closed by a `checkpoint()` call (done 0-2),
         # plus its payload with shots 0-2.
         shots((0, 1, 2)).checkpoint(
@@ -1906,7 +1430,7 @@ class TestLiveShotCount:
             mark_ledger_item_done(closed_group, i, float("nan"))
         closed_file.close()
 
-        ledger_glob = ProgramResults._WORKER_FILE_GLOBS[0]
+        ledger_glob = _shot_store(checkpoint_dir).ledger_path("*").name
         opens: list[tuple[str, bool]] = []
         real_file = h5py.File
 
@@ -1942,6 +1466,10 @@ class TestConcurrentCheckpointing:
             num_workers = 4
             shots_per_worker = 25
 
+            # The driver creates the canonical file before workers start,
+            # as `QuantumProgram.run()` does.
+            ProgramResults(checkpoint_dir=checkpoint_dir)._ensure_snapshot()
+
             with mp.Pool(num_workers) as pool:
                 pool.map(
                     _write_worker_checkpoint,
@@ -1953,13 +1481,11 @@ class TestConcurrentCheckpointing:
 
             # Every worker got its own file -- no shared-file contention,
             # and therefore nothing for two processes to race over.
-            worker_files = list(checkpoint_dir.glob("worker_*_checkpoint.h5"))
+            worker_files = _shot_store(checkpoint_dir).ledger_paths()
             assert len(worker_files) == num_workers
 
             consolidated = ProgramResults()
-            consolidated.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=False
-            )
+            consolidated.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
             consolidated.load_checkpoint(checkpoint_dir=checkpoint_dir)
 
             total_shots = num_workers * shots_per_worker
@@ -1979,106 +1505,14 @@ class TestParentProgramFileWriting:
         os.getenv("CI", "false") == "true",
         reason="Requires QuantumProgram dependencies",
     )
-    def test_parent_program_writes_to_specified_checkpoint_dir(self, tmp_path):
-        """Regression test: results.h5 (containing the whole ProgramResults)
-        should be written to the explicit checkpoint_dir."""
-        # Import here to avoid import errors when dependencies are missing
-        pytest.importorskip("quantumsim")
-        pytest.importorskip("stim")
-        from loqs.backends import QSimQuantumState
-        from loqs.core import QuantumProgram
-        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
-
-        # Create a minimal QuantumProgram
-        trivial_code = trivial_codepack.create_qec_code()
-        qubits = ["Q0"]
-        ideal_model = trivial_codepack.create_ideal_model(qubits)
-
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch Trivial",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            {
-                "instruction": "Init Counter",
-                "patch_label": "L0",
-                "initial_value": 0,
-            },
-        ]
-
-        program = QuantumProgram(
-            stack,
-            default_noise_model=ideal_model,
-            state_type=QSimQuantumState,
-            patch_types={"Trivial": trivial_code},
-            name="Test program for parent file writing",
-        )
-
-        # Create ProgramResults with explicit checkpoint_dir
-        checkpoint_dir = tmp_path / "my_checkpoints"
-        results = ProgramResults(
-            name="Test Results",
-            parent_program=program,
-            checkpoint_enabled=True,
-            checkpoint_dir=checkpoint_dir,
-        )
-
-        # Verify the results.h5 file exists and is under checkpoint_dir
-        assert isinstance(results.parent_program, str)
-        results_file = Path(results.parent_program)
-        assert results_file.exists()
-        assert results_file.parent == checkpoint_dir
-        assert results_file.name == "results.h5"
-
-    @pytest.mark.skipif(
-        os.getenv("CI", "false") == "true",
-        reason="Requires QuantumProgram dependencies",
-    )
     def test_parent_program_reuses_existing_results_h5(self, tmp_path):
-        """When results.h5 already exists, a second ProgramResults construction
-        should reuse the same file (no duplicate writes)."""
+        """Regression test: results.h5 (containing the whole ProgramResults)
+        should be written to the explicit checkpoint_dir, and when it already
+        exists, a second ProgramResults construction should reuse the same
+        file (no duplicate writes)."""
         pytest.importorskip("quantumsim")
         pytest.importorskip("stim")
-        from loqs.backends import QSimQuantumState
-        from loqs.core import QuantumProgram
-        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
-
-        # Create a minimal QuantumProgram
-        trivial_code = trivial_codepack.create_qec_code()
-        qubits = ["Q0"]
-        ideal_model = trivial_codepack.create_ideal_model(qubits)
-
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch Trivial",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            {
-                "instruction": "Init Counter",
-                "patch_label": "L0",
-                "initial_value": 0,
-            },
-        ]
-
-        program = QuantumProgram(
-            stack,
-            default_noise_model=ideal_model,
-            state_type=QSimQuantumState,
-            patch_types={"Trivial": trivial_code},
-            name="Test program for results.h5 reuse",
-        )
+        program = _trivial_quantum_program("Test program for results.h5 reuse")
 
         checkpoint_dir = tmp_path / "collide_test"
 
@@ -2089,6 +1523,7 @@ class TestParentProgramFileWriting:
             checkpoint_enabled=True,
             checkpoint_dir=checkpoint_dir,
         )
+        assert isinstance(results1.parent_program, str)
         file1 = Path(results1.parent_program)
         mtime1 = file1.stat().st_mtime
 
@@ -2126,37 +1561,7 @@ class TestParentProgramFileWriting:
         """
         pytest.importorskip("quantumsim")
         pytest.importorskip("stim")
-        from loqs.backends import QSimQuantumState
-        from loqs.core import QuantumProgram
-        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
-
-        trivial_code = trivial_codepack.create_qec_code()
-        qubits = ["Q0"]
-        ideal_model = trivial_codepack.create_ideal_model(qubits)
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch Trivial",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            {
-                "instruction": "Init Counter",
-                "patch_label": "L0",
-                "initial_value": 0,
-            },
-        ]
-        program = QuantumProgram(
-            stack,
-            default_noise_model=ideal_model,
-            state_type=QSimQuantumState,
-            patch_types={"Trivial": trivial_code},
-            name="Shared parent program",
-        )
+        program = _trivial_quantum_program("Shared parent program")
 
         checkpoint_dir = tmp_path / "checkpoints"
         results = ProgramResults(
@@ -2218,10 +1623,7 @@ class TestParentProgramFileWriting:
             if n.get("class") == "QuantumProgram"
             and n.get("cache_type") == "source"
         ]
-        assert len(program_sources) == 1, (
-            "Expected exactly one QuantumProgram source node (parent_program "
-            f"re-embedded fresh {len(program_sources)} times instead)"
-        )
+        assert len(program_sources) == 1
         source_cache_id = program_sources[0]["cache_id"]
 
         # Each shot's own reference to `program` should resolve back to that
@@ -2236,726 +1638,262 @@ class TestParentProgramFileWriting:
                 or n.get("cache_id") == source_cache_id
             )
         ]
-        assert len(referencing_nodes) >= 1, (
-            "Expected at least one copy/reference node pointing back to the "
-            "single QuantumProgram source"
+        assert len(referencing_nodes) >= 1
+
+        # A resumed object over the marked file seeds its cache from the
+        # stored parent program, so a further append embeds no second source.
+        resumed = ProgramResults(
+            name="Resumed Results",
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=checkpoint_dir,
         )
+        assert resumed._checkpoint_encode_cache
+        history = History()
+        history.append(Frame({"program_ref": program}))
+        resumed.add_shot(3, history)
+        resumed.checkpoint(checkpoint_dir=checkpoint_dir)
+
+        cache_nodes = []
+        with h5py.File(checkpoint_dir / "results.h5", "r") as f:
+            collect(f, cache_nodes)
+        assert (
+            len(
+                [
+                    n
+                    for n in cache_nodes
+                    if n.get("class") == "QuantumProgram"
+                    and n.get("cache_type") == "source"
+                ]
+            )
+            == 1
+        )
+        assert _shot_store(checkpoint_dir).keys() == [0, 1, 2, 3]
+
+    @pytest.mark.skipif(
+        os.getenv("CI", "false") == "true",
+        reason="Requires QuantumProgram dependencies",
+    )
+    def test_seeding_over_a_corrupt_parent_program_names_the_file(
+        self, tmp_path
+    ):
+        """A canonical file whose `parent_program` group is damaged makes
+        seeding raise `CheckpointReadError` naming the file, instead of
+        continuing without a cache. Catches a swallowed read error."""
+        pytest.importorskip("quantumsim")
+        pytest.importorskip("stim")
+        program = _trivial_quantum_program(
+            "Corrupt parent program", stack_depth=1
+        )
+        checkpoint_dir = tmp_path / "checkpoints"
+        ProgramResults(
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=checkpoint_dir,
+        )
+        with h5py.File(checkpoint_dir / "results.h5", "a") as f:
+            container = _resolve_checkpoint_object_group(f)
+            if "parent_program" in container:
+                del container["parent_program"]
+            elif "$collapsed" in container:
+                del container["$collapsed"]
+
+        with pytest.raises(CheckpointReadError) as excinfo:
+            ProgramResults(
+                parent_program=program,
+                checkpoint_enabled=True,
+                checkpoint_dir=checkpoint_dir,
+            )
+        assert "results.h5" in str(excinfo.value)
 
 
 class TestResumeCheckpointing:
     """Test resume functionality for checkpoint-enabled runs."""
 
-    def test_consolidate_checkpoints_merges_existing_output(self):
-        """consolidate_checkpoints() called twice must preserve shots from
-        the first consolidation, not drop them when creating the second."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            checkpoint_dir.mkdir()
-
-            # First consolidation: write some worker files and consolidate
-            results1 = ProgramResults(name="Worker 1", lazy_loading=False)
-            for i in range(2):
-                history = History()
-                history.append(Frame({"batch": 1, "shot": i}))
-                results1.add_shot(i, history)
-            results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
-
-            consolidated = ProgramResults()
-            consolidated.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=False
-            )
-            final_results = ProgramResults()
-            final_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert len(final_results.shot_histories) == 2
-
-            # Second consolidation: add a new worker file and consolidate again
-            results2 = ProgramResults(name="Worker 2", lazy_loading=False)
-            for i in range(2, 4):
-                history = History()
-                history.append(Frame({"batch": 2, "shot": i}))
-                results2.add_shot(i, history)
-            results2.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w2")
-
-            consolidated2 = ProgramResults()
-            consolidated2.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=False
-            )
-            final_results2 = ProgramResults()
-            final_results2.load_checkpoint(checkpoint_dir=checkpoint_dir)
-
-            # All 4 shots should be present - not just the 2 from the second batch
-            assert len(final_results2.shot_histories) == 4
-            for i in range(4):
-                assert i in final_results2.shot_histories
-
-    def test_consolidate_checkpoints_recovers_out_of_lockstep_merge_histories_first(
-        self,
-    ):
-        """`shot_histories` and `shot_wall_clock_times` are two independent
-        dict-attr entries, each merged via its own `already_merged_by_attr`
-        key tracking during consolidation -- so a crash between merging one
-        and the other for the same shot is a real, reachable on-disk state.
-        Seeds a worker file with both attributes for shot 0 (via
-        `merge_dict_attr` directly, mirroring
-        `test_consolidation_merges_item_and_shot_wall_clock_times` in
-        `test_multiprogramrunner.py`), and a canonical `results.h5` already
-        carrying `shot_histories` for shot 0 but not yet
-        `shot_wall_clock_times` (simulating a crash after the first
-        attribute merged but before the second did). Confirms
-        `consolidate_checkpoints` recovers correctly: the already-merged
-        `shot_histories` entry is left untouched (not overwritten by the
-        worker file's own copy of the same shot), while the missing
-        `shot_wall_clock_times` entry is merged in from the worker file."""
-        from loqs.internal.streamingmerge import merge_dict_attr
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            checkpoint_dir.mkdir()
-
-            # shot_histories already merged for shot 0; shot_wall_clock_times
-            # seeded empty (only entry presence distinguishes "not merged").
-            canonical_history = History()
-            canonical_history.append(Frame({"source": "canonical"}))
-            with h5py.File(checkpoint_dir / "results.h5", "a") as f:
-                merge_dict_attr(
-                    f,
-                    "shot_histories",
-                    [(0, canonical_history)],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-                merge_dict_attr(
-                    f,
-                    "shot_wall_clock_times",
-                    [],
-                    key_use_dataset=True,
-                    value_use_dataset=True,
-                )
-
-            # Worker file: both attributes present for shot 0.
-            worker_history = History()
-            worker_history.append(Frame({"source": "worker"}))
-            with h5py.File(
-                checkpoint_dir / "worker_w0_checkpoint.h5", "a"
-            ) as f:
-                merge_dict_attr(
-                    f,
-                    "shot_histories",
-                    [(0, worker_history)],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-                merge_dict_attr(
-                    f,
-                    "shot_wall_clock_times",
-                    [(0, 1.5)],
-                    key_use_dataset=True,
-                    value_use_dataset=True,
-                )
-
-            consolidated = ProgramResults()
-            consolidated.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=True
-            )
-
-            # Read back via iter_dict_attr_entries, not load_checkpoint: this
-            # hand-built file lacks the full Serializable envelope
-            # load_checkpoint expects (see test_multiprogramrunner.py's
-            # analogous test for the same readback style).
-            with h5py.File(checkpoint_dir / "results.h5", "r") as f:
-                histories = dict(iter_dict_attr_entries(f, "shot_histories"))
-                wall_clock_times = dict(
-                    iter_dict_attr_entries(f, "shot_wall_clock_times")
-                )
-
-            assert set(histories.keys()) == {0}
-            assert histories[0][0]["source"] == "canonical"
-            assert set(wall_clock_times.keys()) == {0}
-            assert wall_clock_times[0] == pytest.approx(1.5)
-
-    def test_consolidate_checkpoints_recovers_out_of_lockstep_merge_wall_clock_times_first(
-        self,
-    ):
-        """Reverse direction of
-        `test_consolidate_checkpoints_recovers_out_of_lockstep_merge_histories_first`:
-        `shot_wall_clock_times` is already merged for shot 0 while
-        `shot_histories` isn't yet. Confirms the missing entry merges in
-        from the worker file while the already-merged one stays
-        untouched."""
-        from loqs.internal.streamingmerge import merge_dict_attr
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            checkpoint_dir.mkdir()
-
-            with h5py.File(checkpoint_dir / "results.h5", "a") as f:
-                merge_dict_attr(
-                    f,
-                    "shot_histories",
-                    [],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-                merge_dict_attr(
-                    f,
-                    "shot_wall_clock_times",
-                    [(0, 2.5)],
-                    key_use_dataset=True,
-                    value_use_dataset=True,
-                )
-
-            worker_history = History()
-            worker_history.append(Frame({"source": "worker"}))
-            with h5py.File(
-                checkpoint_dir / "worker_w0_checkpoint.h5", "a"
-            ) as f:
-                merge_dict_attr(
-                    f,
-                    "shot_histories",
-                    [(0, worker_history)],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-                merge_dict_attr(
-                    f,
-                    "shot_wall_clock_times",
-                    [(0, 9.9)],
-                    key_use_dataset=True,
-                    value_use_dataset=True,
-                )
-
-            consolidated = ProgramResults()
-            consolidated.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=True
-            )
-
-            # Read back directly via iter_dict_attr_entries -- see the
-            # matching comment in the histories-first test above.
-            with h5py.File(checkpoint_dir / "results.h5", "r") as f:
-                histories = dict(iter_dict_attr_entries(f, "shot_histories"))
-                wall_clock_times = dict(
-                    iter_dict_attr_entries(f, "shot_wall_clock_times")
-                )
-
-            assert set(histories.keys()) == {0}
-            assert histories[0][0]["source"] == "worker"
-            assert set(wall_clock_times.keys()) == {0}
-            assert wall_clock_times[0] == pytest.approx(2.5)
-
-    def test_load_done_shots_returns_union_from_checkpoint_and_workers(self):
-        """read_checkpoint_dict_attr_union returns the union of shots
-        from results.h5 and all transient worker shot files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            checkpoint_dir.mkdir()
-
-            # Write to results.h5
-            results_main = ProgramResults(lazy_loading=False)
-            for i in range(3):
-                history = History()
-                history.append(Frame({"source": "main", "idx": i}))
-                results_main.add_shot(i, history)
-            results_main.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            # Write to worker files
-            for w in range(2):
-                results_w = ProgramResults(lazy_loading=False)
-                for i in range(3, 6):
-                    history = History()
-                    history.append(Frame({"source": f"worker{w}", "idx": i}))
-                    results_w.add_shot(i, history)
-                results_w.checkpoint(
-                    checkpoint_dir=checkpoint_dir, worker_id=f"w{w}"
-                )
-
-            # Load done shots
-            done = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                "results.h5",
-                ProgramResults._WORKER_FILE_GLOBS,
-                "shot_histories",
-            )
-            assert len(done) == 6
-            for i in range(6):
-                assert i in done
-
-    def test_load_done_shot_wall_clock_times_returns_union_from_checkpoint_and_workers(
-        self,
-    ):
-        """read_checkpoint_dict_attr_union is attribute-name-agnostic, so it
-        must also correctly union `shot_wall_clock_times` (not just
-        `shot_histories`) across a canonical results.h5 and worker
-        checkpoint files. This is a direct-coverage test for that
-        attribute, not a regression test for any known bug."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-            checkpoint_dir.mkdir()
-
-            # Write to results.h5
-            results_main = ProgramResults(lazy_loading=False)
-            for i in range(3):
-                history = History()
-                history.append(Frame({"source": "main", "idx": i}))
-                results_main.add_shot(
-                    i, history, wall_clock_time=float(i) + 0.1
-                )
-            results_main.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            # Write to a worker file
-            results_worker = ProgramResults(lazy_loading=False)
-            for i in range(3, 6):
-                history = History()
-                history.append(Frame({"source": "worker", "idx": i}))
-                results_worker.add_shot(
-                    i, history, wall_clock_time=float(i) + 0.5
-                )
-            results_worker.checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
-            )
-
-            # Load the union of shot_wall_clock_times across both files
-            wall_clock_times = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                "results.h5",
-                ProgramResults._WORKER_FILE_GLOBS,
-                "shot_wall_clock_times",
-            )
-            assert set(wall_clock_times.keys()) == {0, 1, 2, 3, 4, 5}
-            for i in range(3):
-                assert wall_clock_times[i] == pytest.approx(float(i) + 0.1)
-            for i in range(3, 6):
-                assert wall_clock_times[i] == pytest.approx(float(i) + 0.5)
-
-    def test_load_done_shots_resolves_reference_before_source(self):
-        """read_checkpoint_dict_attr_union must decode with a
-        `ResolvingDecodeCache`, not a bare dict, so a "reference" node
-        physically stored before its own "source" node still resolves
-        correctly instead of raising `RuntimeError`.
-
-        Builds a results.h5-shaped file by hand whose two shots both encode
-        the exact same History instance (the second becomes a
-        `cache_type="reference"`), with the referencing shot's own HDF5
-        group placed at physical index 0 and the source shot's group at
-        index 1.
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-            _build_reference_before_source_checkpoint(
-                checkpoint_dir / "results.h5", source_index=1, copy_index=0
-            )
-
-            done = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                "results.h5",
-                ProgramResults._WORKER_FILE_GLOBS,
-                "shot_histories",
-            )
-
-            assert set(done.keys()) == {0, 1}
-            for shot_index, history in done.items():
-                assert isinstance(history, History)
-                assert history[0]["marker"] == "shared"
-
-    def test_merge_worker_into_output_resolves_reference_before_source(self):
-        """_merge_worker_into_output must
-        decode with a `ResolvingDecodeCache`, not `decode_cache={}`, so a
-        worker file whose referencing shot is physically stored before its
-        own source shot still merges both shots correctly instead of
-        producing an undecodable placeholder.
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            worker_file = Path(temp_dir) / "worker_w0_checkpoint.h5"
-            _build_reference_before_source_checkpoint(
-                worker_file, source_index=1, copy_index=0
-            )
-
-            output_file = Path(temp_dir) / "results.h5"
-            results = ProgramResults()
-            with h5py.File(output_file, "a") as out_f:
-                results._merge_worker_into_output(worker_file, out_f, {})
-
-            merged = ProgramResults()
-            merged.load_checkpoint(checkpoint_dir=temp_dir)
-            assert set(merged.shot_histories.keys()) == {0, 1}
-            for shot_index, history in merged.shot_histories.items():
-                assert isinstance(history, History)
-                assert history[0]["marker"] == "shared"
-
-    def test_nested_source_mode_set_and_get(self):
-        """Test that _set_nested_shot_source stores source file and index."""
-        results = ProgramResults()
-        test_path = Path("/some/test/file.h5")
-        test_index = 42
-
-        results._set_nested_shot_source(test_path, test_index)
-
-        assert results._nested_source_file == test_path
-        assert results._nested_source_index == test_index
-
-    def test_nested_source_load_shot(self):
+    def test_nested_source_load_shot(self, tmp_path):
         """Test loading a shot from a nested source within another file."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = Path(temp_dir) / "parent.h5"
+        store = _write_nested_source(
+            tmp_path,
+            {
+                0: _results_with_shots(range(3), "nested"),
+                1: _results_with_shots(range(3, 6), "nested"),
+            },
+        )
 
-            # Create a parent object with a _program_results dict containing
-            # a ProgramResults with some shots
-            with h5py.File(parent_path, "w") as parent_f:
-                # Write a ProgramResults nested inside a _program_results dict
-                pr1 = ProgramResults(lazy_loading=False)
-                for i in range(3):
-                    history = History()
-                    history.append(Frame({"nested": i}))
-                    pr1.add_shot(i, history)
+        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
-                pr2 = ProgramResults(lazy_loading=False)
-                for i in range(3, 6):
-                    history = History()
-                    history.append(Frame({"nested": i}))
-                    pr2.add_shot(i, history)
+        history = nested_pr.get_shot_history(1)
+        assert history is not None
+        assert history[0]["nested"] == 1
+        assert 1 in nested_pr._memory_cache
+        assert nested_pr.get_shot_history(4) is None
 
-                # Write a container with _program_results dict attribute
-                from loqs.internal.streamingmerge import merge_dict_attr
-
-                root_group = parent_f.create_group("container")
-                merge_dict_attr(
-                    root_group,
-                    "_program_results",
-                    [(0, pr1), (1, pr2)],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-
-            # Now load from the nested source
-            nested_pr = ProgramResults(lazy_loading=True)
-            nested_pr._set_nested_shot_source(parent_path, 0)
-
-            # Manually set checkpoint_dir so it looks in the right place
-            nested_pr._checkpoint_dir = Path(temp_dir)
-
-            # Load shot 1 from the nested source
-            assert nested_pr._load_shot_from_checkpoint(1) is True
-            assert 1 in nested_pr._memory_cache
-            history = nested_pr._memory_cache[1]
-            assert history is not None
-
-    def test_load_shot_from_single_file_propagates_open_error(
-        self, monkeypatch
+    @pytest.mark.parametrize(
+        "read",
+        [
+            lambda nested_pr: nested_pr.get_shot_history(1),
+            lambda nested_pr: nested_pr.max_frame_limit,
+        ],
+        ids=["load_shot", "resolve_nested_attr"],
+    )
+    def test_nested_source_open_error_propagates(
+        self, tmp_path, monkeypatch, read
     ):
-        """`_load_shot_from_checkpoint` propagates a `BlockingIOError` from
-        its single open instead of silently reporting the shot as not
-        found."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = Path(temp_dir) / "parent.h5"
+        """An open of the nested source that raises `BlockingIOError`
+        surfaces as a `CheckpointReadError` naming the file, instead of
+        silently reporting the shot as not found or falling back to a
+        default for a lazily resolved attribute."""
+        store = self._build_nested_source_with_name_and_parent(
+            tmp_path, max_frame_limit=17
+        )
 
-            with h5py.File(parent_path, "w") as parent_f:
-                pr1 = ProgramResults(lazy_loading=False)
-                for i in range(3):
-                    history = History()
-                    history.append(Frame({"nested": i}))
-                    pr1.add_shot(i, history)
+        nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
-                from loqs.internal.streamingmerge import merge_dict_attr
+        def always_fails(path, mode, *args, **kwargs):
+            raise BlockingIOError("simulated lock")
 
-                root_group = parent_f.create_group("container")
-                merge_dict_attr(
-                    root_group,
-                    "_program_results",
-                    [(0, pr1)],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
+        monkeypatch.setattr(h5py, "File", always_fails)
 
-            nested_pr = ProgramResults(lazy_loading=True)
-            nested_pr._set_nested_shot_source(parent_path, 0)
-            nested_pr._checkpoint_dir = Path(temp_dir)
+        with pytest.raises(CheckpointReadError, match="runner.h5"):
+            read(nested_pr)
 
-            call_count = {"n": 0}
-
-            def always_fails(path, mode, *args, **kwargs):
-                call_count["n"] += 1
-                raise BlockingIOError("simulated lock")
-
-            monkeypatch.setattr(h5py, "File", always_fails)
-
-            with pytest.raises(BlockingIOError):
-                nested_pr._load_shot_from_checkpoint(1)
-            assert call_count["n"] == 1
-
-    def test_get_available_shot_indices_retries_transient_stale_keys_then_succeeds(
-        self, monkeypatch
+    def test_get_shot_history_absent_shot_is_none_and_corrupt_raises(
+        self, tmp_path
     ):
-        """`_get_available_shot_indices(expected_num_shots=...)` must retry
-        a successful-but-incomplete key read instead of returning the stale
-        list immediately."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            results = ProgramResults(num_shots=2, lazy_loading=False)
-            for i in range(2):
-                history = History()
-                history.append(Frame({"shot": i}))
-                results.add_shot(i, history)
-            results.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
-            pr_read._checkpoint_dir = checkpoint_dir
-
-            import loqs.core.programresults as programresults_module
-            import loqs.internal.streamingmerge as streamingmerge_module
-
-            real_get_dict_attr_keys = streamingmerge_module.get_dict_attr_keys
-            call_count = {"n": 0}
-
-            def flaky_get_dict_attr_keys(*args, **kwargs):
-                call_count["n"] += 1
-                if call_count["n"] <= 2:
-                    return [0]
-                return real_get_dict_attr_keys(*args, **kwargs)
-
-            monkeypatch.setattr(
-                programresults_module,
-                "get_dict_attr_keys",
-                flaky_get_dict_attr_keys,
-            )
-
-            indices = pr_read._get_available_shot_indices(expected_num_shots=2)
-            assert indices == [0, 1]
-            assert call_count["n"] > 2
-
-    def test_get_available_shot_indices_falls_back_to_range_after_persistent_stale_keys(
-        self, monkeypatch
-    ):
-        """When a branch's key list never reaches `expected_num_shots` after
-        the bounded retry budget, `_get_available_shot_indices` must fall
-        back to the safe `range(num_shots)` result rather than hanging or
-        returning the incomplete list."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            results = ProgramResults(num_shots=2, lazy_loading=False)
-            for i in range(2):
-                history = History()
-                history.append(Frame({"shot": i}))
-                results.add_shot(i, history)
-            results.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
-            pr_read._checkpoint_dir = checkpoint_dir
-
-            call_count = {"n": 0}
-
-            def always_stale(*args, **kwargs):
-                call_count["n"] += 1
-                return [0]
-
-            monkeypatch.setattr(
-                programresults_module, "get_dict_attr_keys", always_stale
-            )
-
-            indices = pr_read._get_available_shot_indices(expected_num_shots=2)
-            assert indices == [0, 1]
-            assert call_count["n"] == 5
-
-    def test_get_available_shot_indices_does_not_retry_open_error(
-        self, monkeypatch
-    ):
-        """An `OSError` opening `results.h5` is not a stale read, so
-        `_get_available_shot_indices` opens it once and falls back to
-        `range(num_shots)` instead of retrying the open."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            results = ProgramResults(num_shots=2, lazy_loading=False)
-            for i in range(2):
-                history = History()
-                history.append(Frame({"shot": i}))
-                results.add_shot(i, history)
-            results.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
-            pr_read._checkpoint_dir = checkpoint_dir
-
-            real_file = h5py.File
-            results_opens = {"n": 0}
-
-            def failing_results_open(path, *args, **kwargs):
-                if Path(path).name == "results.h5":
-                    results_opens["n"] += 1
-                    raise OSError("simulated unreadable results.h5")
-                return real_file(path, *args, **kwargs)
-
-            monkeypatch.setattr(h5py, "File", failing_results_open)
-
-            indices = pr_read._get_available_shot_indices(expected_num_shots=2)
-            assert indices == [0, 1]
-            assert results_opens["n"] == 1
-
-    def test_load_shot_from_checkpoint_retries_transient_key_error_then_succeeds(
-        self, monkeypatch
-    ):
-        """`_load_shot_from_checkpoint` must retry a `KeyError` raised while
-        looking up a shot's history, since it may only mean the entry isn't
-        visible yet due to a benign write/read race, not that the shot was
-        never written."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            results = ProgramResults(num_shots=2, lazy_loading=False)
-            for i in range(2):
-                history = History()
-                history.append(Frame({"shot": i}))
-                results.add_shot(i, history)
-            results.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
-            pr_read._checkpoint_dir = checkpoint_dir
-
-            real_get_dict_attr_value = (
-                programresults_module.get_dict_attr_value
-            )
-            call_count = {"n": 0}
-
-            def flaky_get_dict_attr_value(
-                parent_group, attr_name, key, decode_cache=None
-            ):
-                if key == 1:
-                    call_count["n"] += 1
-                    if call_count["n"] <= 2:
-                        raise KeyError(key)
-                return real_get_dict_attr_value(
-                    parent_group, attr_name, key, decode_cache=decode_cache
-                )
-
-            monkeypatch.setattr(
-                programresults_module,
-                "get_dict_attr_value",
-                flaky_get_dict_attr_value,
-            )
-
-            assert pr_read._load_shot_from_checkpoint(1) is True
-            assert call_count["n"] > 2
-            assert 1 in pr_read._memory_cache
-
-    def test_load_shot_from_checkpoint_returns_false_for_genuinely_absent_shot(
-        self,
-    ):
-        """A shot index that was genuinely never written must still return
-        `False`, not retry forever or raise -- the retry added for a
-        transient `KeyError` must still degrade safely once retries are
-        exhausted."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            results = ProgramResults(num_shots=2, lazy_loading=False)
+        """An absent shot reads as `None`, but a truncated payload raises
+        `CheckpointReadError` naming it. Catches corruption read as "not
+        there"."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        results = ProgramResults(num_shots=2, lazy_loading=False)
+        for i in range(2):
             history = History()
-            history.append(Frame({"shot": 0}))
-            results.add_shot(0, history)
-            results.checkpoint(checkpoint_dir=checkpoint_dir)
+            history.append(Frame({"shot": i}))
+            results.add_shot(i, history)
+        results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+        results.consolidate_checkpoints(checkpoint_dir)
 
-            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
-            pr_read._checkpoint_dir = checkpoint_dir
+        reader = ProgramResults(num_shots=3, lazy_loading=True)
+        reader._checkpoint_dir = checkpoint_dir
+        assert reader.get_shot_history(2) is None
+        assert reader.get_shot_history(1) is not None
 
-            assert pr_read._load_shot_from_checkpoint(1) is False
+        results.add_shot(5, results.get_shot_history(0))
+        results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
+        payload = checkpoint_dir / "worker_w1_shots_5_payload.h5"
+        payload.write_bytes(payload.read_bytes()[:100])
+        with pytest.raises(CheckpointReadError, match="w1_shots_5_payload"):
+            reader.get_shot_history(5)
 
-    def test_nested_source_resolve_group(self):
-        """Test that _resolve_shot_source_group correctly navigates nested groups."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            test_path = Path(temp_dir) / "test.h5"
+    def test_collect_shot_data_includes_evicted_shots_in_order(self, tmp_path):
+        """A lazy object holding shots 0 and 2 in memory, with shot 1 only
+        on disk, collects all three in index order. Catches the in-memory
+        shortcut dropping evicted shots."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        writer = ProgramResults(num_shots=3, lazy_loading=False)
+        for i in range(3):
+            history = History()
+            history.append(Frame({"shot": i}))
+            writer.add_shot(i, history)
+        writer.checkpoint(checkpoint_dir=checkpoint_dir)
 
-            # Create nested structure
-            with h5py.File(test_path, "w") as f:
-                from loqs.internal.streamingmerge import merge_dict_attr
+        reader = ProgramResults(num_shots=3, lazy_loading=True)
+        reader._checkpoint_dir = checkpoint_dir
+        for i in (0, 2):
+            history = History()
+            history.append(Frame({"shot": i}))
+            reader.shot_histories[i] = history
 
-                pr = ProgramResults(lazy_loading=False)
+        assert reader.collect_shot_data("shot", [0]) == [[0], [1], [2]]
+
+    def test_collect_shot_data_builds_the_key_index_once_per_call(
+        self, tmp_path
+    ):
+        """The number of `_key_index` calls doesn't grow with the number
+        of stored shots. Catches the per-shot index rebuild."""
+        calls = []
+        for n_shots in (2, 6):
+            checkpoint_dir = tmp_path / f"checkpoints{n_shots}"
+            writer = ProgramResults(num_shots=n_shots, lazy_loading=False)
+            for i in range(n_shots):
                 history = History()
-                history.append(Frame({"test": "data"}))
-                pr.add_shot(0, history)
+                history.append(Frame({"shot": i}))
+                writer.add_shot(i, history)
+            writer.checkpoint(checkpoint_dir=checkpoint_dir)
 
-                root_group = f.create_group("container")
-                merge_dict_attr(
-                    root_group,
-                    "_program_results",
-                    [(5, pr)],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
+            reader = ProgramResults(num_shots=n_shots, lazy_loading=True)
+            reader._checkpoint_dir = checkpoint_dir
+            store = reader._shot_store()
+            real_key_index = store._key_index
+            counter = {"n": 0}
 
-            # Load and verify resolution
-            with h5py.File(test_path, "r") as f:
-                nested_pr = ProgramResults()
-                nested_pr._set_nested_shot_source(test_path, 5)
+            def counting(*args, _real=real_key_index, _c=counter, **kwargs):
+                _c["n"] += 1
+                return _real(*args, **kwargs)
 
-                source_group = nested_pr._resolve_shot_source_group(f)
-                assert source_group is not None
-                assert isinstance(source_group, h5py.Group)
+            with unittest.mock.patch.object(store, "_key_index", counting):
+                data = reader.collect_shot_data("shot", [0])
+            assert data == [[i] for i in range(n_shots)]
+            calls.append(counter["n"])
+        assert calls[0] == calls[1]
 
-    def test_nested_source_does_not_decode_all_shots(self):
+    def test_collect_shot_data_reads_a_lazy_nested_source(self, tmp_path):
+        """A lazy nested `ProgramResults` with no shots in memory collects
+        all its shots. Catches the nested branch returning `[]`."""
+        store = _write_nested_source(
+            tmp_path, {0: _results_with_shots(range(4), "nested")}
+        )
+
+        nested = ProgramResults(lazy_loading=True)
+        nested._set_nested_shot_source(store.nested(0))
+        assert not nested.shot_histories
+        assert nested.collect_shot_data("nested", [0]) == [
+            [0],
+            [1],
+            [2],
+            [3],
+        ]
+
+    def test_nested_source_does_not_decode_all_shots(self, tmp_path):
         """Test that loading from nested source doesn't decode all shots."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = Path(temp_dir) / "parent.h5"
+        store = _write_nested_source(
+            tmp_path, {0: _results_with_shots(range(20), "index")}
+        )
 
-            # Create a large ProgramResults
-            with h5py.File(parent_path, "w") as parent_f:
-                from loqs.internal.streamingmerge import merge_dict_attr
+        # Load from nested source with decoding spy
+        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
-                pr = ProgramResults(lazy_loading=False)
-                for i in range(20):
-                    history = History()
-                    history.append(Frame({"index": i}))
-                    pr.add_shot(i, history)
+        # Spy on Serializable.decode, capturing each group's path eagerly
+        # (h5py.Group.name is None once the source file closes).
+        real_decode = Serializable.decode
+        decoded_group_names = []
 
-                root_group = parent_f.create_group("container")
-                merge_dict_attr(
-                    root_group,
-                    "_program_results",
-                    [(0, pr)],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
+        def spy_decode(*args, **kwargs):
+            if args and isinstance(args[0], h5py.Group):
+                decoded_group_names.append(args[0].name)
+            return real_decode(*args, **kwargs)
 
-            # Load from nested source with decoding spy
-            nested_pr = ProgramResults(lazy_loading=True)
-            nested_pr._set_nested_shot_source(parent_path, 0)
-            nested_pr._checkpoint_dir = Path(temp_dir)
+        with unittest.mock.patch.object(
+            Serializable, "decode", side_effect=spy_decode
+        ):
+            # Load just one shot
+            assert nested_pr.get_shot_history(5) is not None
 
-            # Spy on Serializable.decode, capturing each decoded group's own
-            # HDF5 path eagerly -- the source file closes once the `with`
-            # block below exits, after which h5py.Group.name returns None.
-            real_decode = Serializable.decode
-            decoded_group_names = []
+        # Verify only shot 5's own subtree was decoded: every decoded
+        # group must live at or below shot 5's own iterable entry.
+        assert decoded_group_names
+        shot_index_pattern = re.compile(
+            r"/shot_histories/dict/values/iterable/(\d+)(?:/|$)"
+        )
+        for name in decoded_group_names:
+            match = shot_index_pattern.search(name)
+            assert match is not None
+            assert match.group(1) == "5"
 
-            def spy_decode(*args, **kwargs):
-                if args and isinstance(args[0], h5py.Group):
-                    decoded_group_names.append(args[0].name)
-                return real_decode(*args, **kwargs)
-
-            with unittest.mock.patch.object(
-                Serializable, "decode", side_effect=spy_decode
-            ):
-                # Load just one shot
-                assert nested_pr._load_shot_from_checkpoint(5) is True
-
-            # Verify only shot 5's own subtree was decoded: every decoded
-            # group must live at or below shot 5's own iterable entry.
-            assert (
-                decoded_group_names
-            ), "Expected at least one h5py.Group to be decoded for shot 5"
-            shot_index_pattern = re.compile(
-                r"/shot_histories/dict/values/iterable/(\d+)(?:/|$)"
-            )
-            for name in decoded_group_names:
-                match = shot_index_pattern.search(name)
-                assert match is not None, (
-                    f"Decoded group {name!r} isn't under shot_histories' "
-                    f"own iterable entries"
-                )
-                assert match.group(1) == "5", (
-                    f"Expected only shot 5 to be decoded, but found shot "
-                    f"{match.group(1)} in group path {name!r}"
-                )
-
-            # Also verify that shot 5 is in the cache
-            assert 5 in nested_pr._memory_cache
+        # Also verify that shot 5 is in the cache
+        assert 5 in nested_pr._memory_cache
 
     def _build_nested_source_with_name_and_parent(
         self, temp_dir, index=0, max_frame_limit=None
@@ -2963,417 +1901,144 @@ class TestResumeCheckpointing:
         """Build a parent HDF5 file whose `_program_results` dict attribute
         holds a real ProgramResults (with a real `name`/`parent_program`
         and several shots) at `index`. Returns the parent file path."""
-        from loqs.internal.streamingmerge import merge_dict_attr
+        pr = _results_with_shots(
+            range(20),
+            "index",
+            name="RealName",
+            parent_program="RealProgram",
+            max_frame_limit=max_frame_limit,
+        )
+        return _write_nested_source(Path(temp_dir), {index: pr})
 
-        parent_path = Path(temp_dir) / "parent.h5"
-        with h5py.File(parent_path, "w") as parent_f:
-            pr = ProgramResults(
-                lazy_loading=False,
-                name="RealName",
-                parent_program="RealProgram",
-                max_frame_limit=max_frame_limit,
-            )
-            for i in range(20):
-                history = History()
-                history.append(Frame({"index": i}))
-                pr.add_shot(i, history)
+    @pytest.mark.parametrize(
+        "attr, expected",
+        [
+            ("name", "RealName"),
+            ("parent_program", "RealProgram"),
+            ("max_frame_limit", 17),
+        ],
+    )
+    def test_lazy_attrs_resolve_from_nested_source(
+        self, tmp_path, attr, expected
+    ):
+        """A lazy nested-source proxy resolves `.name`/`.parent_program`/
+        `.max_frame_limit` (constructed as `None`) to the real stored values
+        on first access, instead of staying at their bare constructor
+        defaults."""
+        store = self._build_nested_source_with_name_and_parent(
+            tmp_path, max_frame_limit=17
+        )
 
-            root_group = parent_f.create_group("container")
-            merge_dict_attr(
-                root_group,
-                "_program_results",
-                [(index, pr)],
-                key_use_dataset=True,
-                value_use_dataset=False,
-            )
-        return parent_path
+        nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
-    def test_lazy_name_and_parent_program_resolve_from_nested_source(self):
-        """A lazy nested-source proxy resolves `.name`/`.parent_program`
-        to the real stored values on first access, instead of staying at
-        their bare constructor defaults."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = self._build_nested_source_with_name_and_parent(
-                temp_dir
-            )
+        assert getattr(nested_pr, attr) == expected
 
-            nested_pr = ProgramResults(lazy_loading=True)
-            nested_pr._set_nested_shot_source(parent_path, 0)
-
-            assert nested_pr.name == "RealName"
-            assert nested_pr.parent_program == "RealProgram"
-
-    def test_lazy_max_frame_limit_resolves_from_nested_source(self):
-        """A lazy nested-source proxy constructed with `max_frame_limit=None`
-        resolves `.max_frame_limit` to the real stored value from the
-        nested source on first access, mirroring `.name`/`.parent_program`."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = self._build_nested_source_with_name_and_parent(
-                temp_dir, max_frame_limit=17
-            )
-
-            nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
-            nested_pr._set_nested_shot_source(parent_path, 0)
-
-            assert nested_pr.max_frame_limit == 17
-
-    def test_resolve_nested_attr_propagates_open_error(self, monkeypatch):
-        """Resolving `.max_frame_limit` on a lazy nested-source proxy
-        propagates a `BlockingIOError` from its single open instead of
-        silently falling back to its `default` of `None`."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = self._build_nested_source_with_name_and_parent(
-                temp_dir, max_frame_limit=17
-            )
-
-            nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
-            nested_pr._set_nested_shot_source(parent_path, 0)
-
-            call_count = {"n": 0}
-
-            def always_fails(path, mode, *args, **kwargs):
-                call_count["n"] += 1
-                raise BlockingIOError("simulated lock")
-
-            monkeypatch.setattr(h5py, "File", always_fails)
-
-            with pytest.raises(BlockingIOError):
-                nested_pr.max_frame_limit
-            assert call_count["n"] == 1
-
-    def test_set_nested_shot_source_preserves_non_none_max_frame_limit(self):
+    def test_set_nested_shot_source_preserves_non_none_max_frame_limit(
+        self, tmp_path
+    ):
         """A `ProgramResults` constructed with a real, non-`None`
         `max_frame_limit` keeps that value after `_set_nested_shot_source` is
         called, since the `is None` guard there only marks the field
         unresolved when it was never actually set."""
         results = ProgramResults(max_frame_limit=99)
-        # Deliberately points at a file that doesn't exist -- if the value
-        # were reset to _UNRESOLVED, resolution would fall through to the
-        # `default=None` case (a missing file) rather than raising, so a
-        # value of 99 surviving is real proof the guard skipped it.
-        results._set_nested_shot_source(Path("/never/written.h5"), 0)
+        # Deliberately a view over a directory with no file -- if the value
+        # were reset to _UNRESOLVED, resolution would raise on the missing
+        # entry, so a value of 99 surviving is real proof the guard skipped
+        # it.
+        store = CheckpointStore(tmp_path, ITEM_LAYOUT)
+        results._set_nested_shot_source(store.nested(0))
 
         assert results.max_frame_limit == 99
 
-    def test_lazy_name_resolution_does_not_decode_shot_histories(self):
+    def test_lazy_name_resolution_does_not_decode_shot_histories(
+        self, tmp_path
+    ):
         """Resolving `.name` alone must never decode `shot_histories` (its
-        own real, non-collapsed HDF5 subgroup) or invoke the streaming
-        per-shot decode helpers `_load_shot_from_single_file` itself uses.
-        Confirmed two ways: (1) `Serializable.decode` is never called with
-        the `shot_histories` group (or anything under it) as its source,
-        which a naive "just decode the whole nested object" implementation
-        would trip; (2) `get_dict_attr_value`, the per-shot streaming helper
-        actually reachable from this code path, is never called either."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = self._build_nested_source_with_name_and_parent(
-                temp_dir
-            )
+        own real, non-collapsed HDF5 subgroup): `Serializable.decode` is
+        never called with the `shot_histories` group (or anything under it)
+        as its source, which a naive "just decode the whole nested object"
+        implementation would trip."""
+        store = self._build_nested_source_with_name_and_parent(tmp_path)
 
-            nested_pr = ProgramResults(lazy_loading=True)
-            nested_pr._set_nested_shot_source(parent_path, 0)
+        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
-            real_decode = Serializable.decode
-            decoded_source_names = []
+        real_decode = Serializable.decode
+        decoded_source_names = []
 
-            def spy_decode(source, *args, **kwargs):
-                if isinstance(source, (h5py.Group, h5py.Dataset)):
-                    decoded_source_names.append(source.name)
-                return real_decode(source, *args, **kwargs)
+        def spy_decode(source, *args, **kwargs):
+            if isinstance(source, (h5py.Group, h5py.Dataset)):
+                decoded_source_names.append(source.name)
+            return real_decode(source, *args, **kwargs)
 
-            with (
-                unittest.mock.patch.object(
-                    Serializable, "decode", side_effect=spy_decode
-                ),
-                unittest.mock.patch.object(
-                    programresults_module, "get_dict_attr_value"
-                ) as mock_get_value,
-            ):
-                assert nested_pr.name == "RealName"
+        with unittest.mock.patch.object(
+            Serializable, "decode", side_effect=spy_decode
+        ):
+            assert nested_pr.name == "RealName"
 
-            assert not any(
-                "shot_histories" in name for name in decoded_source_names
-            ), (
-                "shot_histories was decoded while resolving .name alone: "
-                f"{decoded_source_names}"
-            )
-            mock_get_value.assert_not_called()
+        assert not any(
+            "shot_histories" in name for name in decoded_source_names
+        )
 
-    def test_lazy_name_resolution_reads_file_only_once(self):
+    def test_lazy_name_resolution_reads_file_only_once(self, tmp_path):
         """A second read of an already-resolved lazy attribute must not
         re-open the nested source file."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = self._build_nested_source_with_name_and_parent(
-                temp_dir
-            )
+        store = self._build_nested_source_with_name_and_parent(tmp_path)
 
-            nested_pr = ProgramResults(lazy_loading=True)
-            nested_pr._set_nested_shot_source(parent_path, 0)
+        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
-            real_h5py_file = h5py.File
-            open_calls = []
+        with _record_h5_opens() as open_calls:
+            first = nested_pr.name
+            opens_after_first = len(open_calls)
+            second = nested_pr.name
 
-            def spy_file(*args, **kwargs):
-                open_calls.append((args, kwargs))
-                return real_h5py_file(*args, **kwargs)
+        assert first == "RealName"
+        assert second == "RealName"
+        assert opens_after_first > 0
+        assert len(open_calls) == opens_after_first
 
-            with unittest.mock.patch.object(
-                h5py, "File", side_effect=spy_file
-            ):
-                first = nested_pr.name
-                second = nested_pr.name
+    def test_lazy_nested_proxy_over_truncated_entry_raises(self, tmp_path):
+        """A lazy nested proxy whose `runner.h5` entry is damaged raises
+        `CheckpointReadError` from `name` and from `collect_shot_data`,
+        instead of returning the default name or no shots."""
+        store = self._build_nested_source_with_name_and_parent(tmp_path)
+        path = store.canonical_path
+        path.write_bytes(path.read_bytes()[:200])
 
-            assert first == "RealName"
-            assert second == "RealName"
-            assert len(open_calls) == 1
+        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr._set_nested_shot_source(store.nested(0))
 
-    def test_explicit_assignment_before_read_prevents_lazy_fetch(self):
+        with pytest.raises(CheckpointReadError):
+            nested_pr.name
+        with pytest.raises(CheckpointReadError):
+            nested_pr.collect_shot_data("index", [0])
+
+    def test_explicit_assignment_before_read_prevents_lazy_fetch(
+        self, tmp_path
+    ):
         """Explicitly assigning `.name`/`.parent_program` on a lazy proxy
         before ever reading them must prevent the lazy fetch from ever
         running -- the nested source file must never be opened."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Deliberately points at a file that doesn't exist -- if the
-            # lazy fetch ever ran, it would either fail to open the file or
-            # (per _resolve_nested_attr's own existence check) silently
-            # return the default, either way proving assignment didn't win.
-            missing_path = Path(temp_dir) / "never_written.h5"
+        # A store with no file: if the lazy fetch ran, it would open or
+        # fail, either way showing the assignment lost.
+        store = CheckpointStore(tmp_path / "never_written", ITEM_LAYOUT)
 
-            nested_pr = ProgramResults(lazy_loading=True)
-            nested_pr._set_nested_shot_source(missing_path, 0)
-            nested_pr.name = "ExplicitName"
-            nested_pr.parent_program = "ExplicitParent"
+        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr._set_nested_shot_source(store.nested(0))
+        nested_pr.name = "ExplicitName"
+        nested_pr.parent_program = "ExplicitParent"
 
-            real_h5py_file = h5py.File
-            open_calls = []
+        with _record_h5_opens() as open_calls:
+            assert nested_pr.name == "ExplicitName"
+            assert nested_pr.parent_program == "ExplicitParent"
 
-            def spy_file(*args, **kwargs):
-                open_calls.append((args, kwargs))
-                return real_h5py_file(*args, **kwargs)
+        assert len(open_calls) == 0
 
-            with unittest.mock.patch.object(
-                h5py, "File", side_effect=spy_file
-            ):
-                assert nested_pr.name == "ExplicitName"
-                assert nested_pr.parent_program == "ExplicitParent"
-
-            assert len(open_calls) == 0
-
-    def test_non_lazy_name_and_parent_program_unaffected(self):
-        """An ordinary (non-nested-source) ProgramResults behaves exactly
-        as before -- `.name`/`.parent_program` simply return whatever was
-        passed to `__init__`, with no lazy machinery ever triggered."""
-        parent_marker = object()
-        pr = ProgramResults(name="Foo", parent_program=parent_marker)
-
-        assert pr.name == "Foo"
-        assert pr.parent_program is parent_marker
-
-        # No nested source was ever configured, so no lazy resolution path
-        # exists to trigger regardless of how many times these are read.
-        assert pr.name == "Foo"
-        assert pr.parent_program is parent_marker
-
-    def test_name_and_parent_program_survive_serialization_round_trip(self):
-        """An ordinary (non-lazy-proxy) ProgramResults' `name`/
-        `parent_program` still round-trip correctly through
-        `Serializable.encode`/`.decode`, confirming the property-based
-        attributes stay fully compatible with the generic
-        `_SERIALIZE_ATTRS` machinery."""
-        for format_name in ("json", "hdf5"):
-            results = ProgramResults(
-                name="RoundTripName", parent_program="RoundTripProgram"
-            )
-            history = History()
-            history.append(Frame({"marker": "value"}))
-            results.add_shot(0, history)
-
-            if format_name == "hdf5":
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    h5_path = Path(temp_dir) / "roundtrip.h5"
-                    with h5py.File(h5_path, "w") as h5_file:
-                        root_group = h5_file.create_group("root")
-                        encoded = Serializable.encode(
-                            results,
-                            format=format_name,
-                            h5_group=root_group,
-                            reset_encode_id=True,
-                        )
-                        decoded = Serializable.decode(
-                            encoded, format=format_name
-                        )
-            else:
-                encoded = Serializable.encode(
-                    results, format=format_name, reset_encode_id=True
-                )
-                decoded = Serializable.decode(encoded, format=format_name)
-
-            assert isinstance(decoded, ProgramResults)
-            assert decoded.name == "RoundTripName"
-            assert decoded.parent_program == "RoundTripProgram"
-
-    def test_shot_wall_clock_times_survive_serialization_round_trip(self):
-        """`shot_wall_clock_times` round-trips through a whole-object
-        `Serializable.encode`/`.decode` cycle in both `json` and `hdf5`
-        formats, exactly like `shot_histories` already does above."""
-        for format_name in ("json", "hdf5"):
-            results = ProgramResults(name="Wall Clock Serialization Test")
-            for i in range(3):
-                history = History()
-                history.append(Frame({"marker": i}))
-                results.add_shot(i, history, wall_clock_time=float(i) + 0.5)
-
-            if format_name == "hdf5":
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    h5_path = Path(temp_dir) / "roundtrip.h5"
-                    with h5py.File(h5_path, "w") as h5_file:
-                        root_group = h5_file.create_group("root")
-                        encoded = Serializable.encode(
-                            results,
-                            format=format_name,
-                            h5_group=root_group,
-                            reset_encode_id=True,
-                        )
-                        decoded = Serializable.decode(
-                            encoded, format=format_name
-                        )
-            else:
-                encoded = Serializable.encode(
-                    results, format=format_name, reset_encode_id=True
-                )
-                decoded = Serializable.decode(encoded, format=format_name)
-
-            assert isinstance(decoded, ProgramResults)
-            assert len(decoded.shot_wall_clock_times) == 3
-            for i in range(3):
-                assert i in decoded.shot_wall_clock_times
-                value = decoded.shot_wall_clock_times[i]
-                assert isinstance(value, float)
-                assert abs(value - (float(i) + 0.5)) < 1e-9
-
-    def test_count_done_shots_returns_correct_count(self):
-        """Verify _count_done_shots returns the correct number of done shots."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            # Create results.h5 with some shots
-            pr1 = ProgramResults()
-            for i in range(3):
-                history = History()
-                history.append(Frame({"index": i}))
-                pr1.add_shot(i, history)
-            pr1.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            # Count should be 3
-            count = ProgramResults._count_done_shots(checkpoint_dir)
-            assert count == 3
-
-            # Add more shots via a worker file
-            pr2 = ProgramResults()
-            for i in range(3, 7):
-                history = History()
-                history.append(Frame({"index": i}))
-                pr2.add_shot(i, history)
-            pr2.checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="test_worker"
-            )
-
-            # Count should now be 7 (union of both files)
-            count = ProgramResults._count_done_shots(checkpoint_dir)
-            assert count == 7
-
-    def test_count_done_shots_no_decoding_of_history_values(self):
-        """Verify _count_done_shots truly doesn't decode History values.
-
-        This is a genuine trap test: if _count_done_shots ever tries to decode
-        a History value (e.g., via Serializable.decode on a groups-format entry),
-        this test fails. We patch the decode path to raise, proving it's never
-        invoked during _count_done_shots, even though the checkpoint file has
-        real shot data that *would* be decoded if the code tried to do so.
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            # Create a checkpoint with some shots
-            pr = ProgramResults()
-            for i in range(5):
-                history = History()
-                history.append(Frame({"index": i}))
-                pr.add_shot(i, history)
-            pr.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            # Patch Serializable.decode to raise if ever called during _count_done_shots.
-            # This is a trap: if the code tries to decode a History value, this will fire.
-            from loqs.internal.serializable import Serializable
-
-            original_decode = Serializable.decode
-
-            def decode_trap(*args, **kwargs):
-                # Raise only on a recursive decode (a History nested inside
-                # shot_histories), detected via stack depth -- not a top-level call.
-                import traceback
-
-                stack = traceback.extract_stack()
-                # Count how many times Serializable.decode appears in the stack.
-                decode_frames = [
-                    f for f in stack if "Serializable.decode" in f.line
-                ]
-                if len(decode_frames) > 1:
-                    # This is a recursive decode (a History value being decoded
-                    # inside a parent decode). This should NOT happen in _count_done_shots.
-                    raise AssertionError(
-                        "_count_done_shots should not decode History values; "
-                        "nested Serializable.decode detected"
-                    )
-                return original_decode(*args, **kwargs)
-
-            with unittest.mock.patch.object(
-                Serializable, "decode", side_effect=decode_trap
-            ):
-                count = ProgramResults._count_done_shots(checkpoint_dir)
-                # If we get here without an AssertionError, _count_done_shots
-                # successfully returned without decoding any History values.
-                assert count == 5
-
-    def test_count_done_shots_handles_missing_checkpoint_dir(self):
-        """Verify _count_done_shots returns 0 for non-existent checkpoint_dir."""
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            nonexistent_dir = Path(temp_dir) / "nonexistent"
-            count = ProgramResults._count_done_shots(nonexistent_dir)
-            assert count == 0
-
-    def test_count_done_shots_skips_tmp_files(self):
-        """Verify _count_done_shots skips .tmp checkpoint files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            # Create a valid checkpoint
-            pr1 = ProgramResults()
-            for i in range(3):
-                history = History()
-                history.append(Frame({"index": i}))
-                pr1.add_shot(i, history)
-            pr1.checkpoint(checkpoint_dir=checkpoint_dir)
-
-            # Create a .tmp file that would crash if decoded
-            tmp_file = checkpoint_dir / "worker_test_checkpoint.h5.tmp"
-            with h5py.File(str(tmp_file), "w") as f:
-                # Write invalid content
-                f.create_group("invalid")
-
-            # Count should still be 3 (ignoring the .tmp file)
-            count = ProgramResults._count_done_shots(checkpoint_dir)
-            assert count == 3
-
-    def test_load_done_shot_indices_no_decoding_of_history_values(self):
-        """Verify read_checkpoint_dict_attr_union_keys never decodes History values.
-
-        This trap test ensures that read_checkpoint_dict_attr_union_keys uses
-        the cheap key-only scan (get_dict_attr_keys) and never attempts to
-        decode History values, even when the checkpoint file contains real
-        shot data that would normally be decoded. Uses the same technique as
-        test_count_done_shots_no_decoding_of_history_values.
-        """
+    def test_shot_store_keys_decode_no_history(self):
+        """The shot store's `keys` never decodes History values, even when
+        the checkpoint file contains real shot data."""
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir)
 
@@ -3400,91 +2065,22 @@ class TestResumeCheckpointing:
                     # Recursive decode: a History value being decoded inside
                     # a parent. Should NOT happen here.
                     raise AssertionError(
-                        "read_checkpoint_dict_attr_union_keys should not decode "
-                        "History values; nested Serializable.decode detected"
+                        "keys() should not decode History values; "
+                        "nested Serializable.decode detected"
                     )
                 return original_decode(*args, **kwargs)
 
             with unittest.mock.patch.object(
                 Serializable, "decode", side_effect=decode_trap
             ):
-                indices = read_checkpoint_dict_attr_union_keys(
-                    checkpoint_dir,
-                    "results.h5",
-                    ProgramResults._WORKER_FILE_GLOBS,
-                    "shot_histories",
-                )
+                indices = CheckpointStore(checkpoint_dir, SHOT_LAYOUT).keys()
                 # If we get here without an AssertionError, the method
                 # successfully avoided decoding any History values.
-                assert indices == {0, 1, 2, 3, 4}
-                # Also confirm count matches
-                count = ProgramResults._count_done_shots(checkpoint_dir)
-                assert count == len(indices)
+                assert indices == [0, 1, 2, 3, 4]
 
-    def test_checkpoint_fresh_envelope_read_and_decode(self):
-        """Decode fresh-envelope checkpoints.
-
-        Tests that a checkpoint file created via _write_results_snapshot_if_fresh
-        (which wraps the object in a /root version wrapper) can be decoded and
-        read without error, and that the shot_histories are correctly placed.
-        This was failing with IncorrectDecodableTypeError before the fix.
-        """
-        from loqs.core.quantumprogram import QuantumProgram
-        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir)
-
-            # Create and run a simple program with checkpointing enabled.
-            # This triggers _write_results_snapshot_if_fresh on first run.
-            trivial_code = trivial_codepack.create_qec_code()
-            ideal_model = trivial_codepack.create_ideal_model(["Q0"])
-            stack = [
-                {
-                    "instruction": "Init Patch Trivial",
-                    "new_patch_label": "L0",
-                    "qubits": ["Q0"],
-                }
-            ]
-            program = QuantumProgram(
-                stack,
-                default_noise_model=ideal_model,
-                patch_types={"Trivial": trivial_code},
-                default_base_seed=0,
-                name="simple",
-            )
-
-            # Run with checkpointing: this creates a fresh results.h5 via
-            # _write_results_snapshot_if_fresh, then adds shots via checkpoint()
-            program.run(
-                num_shots=2,
-                checkpoint=True,
-                checkpoint_dir=checkpoint_dir,
-                lazy_loading=False,
-                verbose=False,
-            )
-
-            # Decode the fresh-envelope checkpoint file directly.
-            results_file = checkpoint_dir / "results.h5"
-            assert results_file.exists()
-
-            stored = ProgramResults.read(results_file)
-            assert isinstance(stored, ProgramResults)
-            assert len(stored.shot_histories) == 2
-            # Verify shots are actually present
-            for i in range(2):
-                assert i in stored.shot_histories
-                assert isinstance(stored.shot_histories[i], History)
-
-    def test_load_done_shots_fresh_envelope_no_silent_failure(self):
-        """read_checkpoint_dict_attr_union finds fresh-envelope shots.
-
-        Tests that read_checkpoint_dict_attr_union correctly reports
-        already-checkpointed shots from a fresh-envelope file (created via
-        _write_results_snapshot_if_fresh), not silently returning an empty
-        dict due to a swallowed exception.
-        """
-        from loqs.core.quantumprogram import QuantumProgram
+    def test_shot_store_finds_a_fresh_checkpoints_shots(self):
+        """The shot store finds the shots of a freshly written checkpoint,
+        rather than silently returning an empty dict."""
         from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3519,130 +2115,27 @@ class TestResumeCheckpointing:
 
             # A fresh-envelope checkpoint must report its shots as done, not
             # an empty dict (which would defeat resume).
-            done_shots = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                "results.h5",
-                ProgramResults._WORKER_FILE_GLOBS,
-                "shot_histories",
+            done_shots = dict(
+                CheckpointStore(checkpoint_dir, SHOT_LAYOUT).iter_items()
             )
             assert len(done_shots) == 3
             for i in range(3):
                 assert i in done_shots
                 assert isinstance(done_shots[i], History)
 
-    def test_consolidate_into_already_populated_results_h5_is_memory_bounded(
-        self,
-    ):
-        """Consolidating a worker file into an already-populated results.h5
-        must decode shots one at a time, even with prior content to read
-        past -- combining the fresh-empty-output and already-populated-
-        output scenarios into one test that proves both are memory-bounded."""
-        num_shots_batch1 = 15
-        num_shots_batch2 = 20
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "checkpoints"
-
-            # First consolidation: create initial results.h5 with some shots
-            results1 = ProgramResults(name="Batch 1", lazy_loading=False)
-            for i in range(num_shots_batch1):
-                history = History()
-                history.append(
-                    Frame({"shot_id": i, "array": np.array([i, i + 1])})
-                )
-                results1.add_shot(i, history)
-            results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-
-            # Consolidate to results.h5
-            consolidator1 = ProgramResults()
-            consolidator1.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=True
-            )
-
-            # Verify results.h5 now has the first batch
-            assert (checkpoint_dir / "results.h5").exists()
-            reloaded1 = ProgramResults()
-            reloaded1.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert set(reloaded1.shot_histories.keys()) == set(
-                range(num_shots_batch1)
-            )
-
-            # Second consolidation: create a second worker file with more shots
-            results2 = ProgramResults(name="Batch 2", lazy_loading=False)
-            for i in range(
-                num_shots_batch1, num_shots_batch1 + num_shots_batch2
-            ):
-                history = History()
-                history.append(
-                    Frame({"shot_id": i, "array": np.array([i, i + 1])})
-                )
-                results2.add_shot(i, history)
-            results2.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
-
-            # Consolidate the second worker file into the already-populated
-            # results.h5 -- the scenario this test targets.
-            real_decode = Serializable.decode
-            decoded_shot_counts = []
-
-            def spy_decode(encoded, format="hdf5", decode_cache=None):
-                result = real_decode(
-                    encoded, format=format, decode_cache=decode_cache
-                )
-                if isinstance(result, History):
-                    decoded_shot_counts.append(1)
-                elif isinstance(result, ProgramResults):
-                    decoded_shot_counts.append(len(result.shot_histories))
-                return result
-
-            consolidator2 = ProgramResults()
-            with unittest.mock.patch.object(
-                Serializable, "decode", side_effect=spy_decode
-            ):
-                consolidator2.consolidate_checkpoints(
-                    checkpoint_dir=checkpoint_dir, delete_originals=False
-                )
-
-            # Memory-boundedness: every decode call in this second pass must
-            # materialize at most one shot, despite results.h5's prior content.
-            assert (
-                decoded_shot_counts
-            ), "Serializable.decode was never spied on"
-            assert max(decoded_shot_counts) == 1, (
-                f"Expected every decode call to materialize at most one "
-                f"shot at a time, but saw counts {decoded_shot_counts} -- "
-                f"consolidation into already-populated results.h5 is not "
-                f"entry-level memory-bounded."
-            )
-
-            # Verify the consolidation actually worked (all shots present)
-            reloaded2 = ProgramResults()
-            reloaded2.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert set(reloaded2.shot_histories.keys()) == set(
-                range(num_shots_batch1 + num_shots_batch2)
-            )
-
     def test_shot_histories_uses_dataset_storage_format(self, tmp_path):
-        """After _write_results_snapshot_if_fresh followed by a real shot
-        write, shot_histories key-side storage_format should be 'dataset',
+        """After the snapshot followed by a real shot write,
+        shot_histories key-side storage_format should be 'dataset',
         not 'groups'."""
         checkpoint_dir = tmp_path / "checkpoint"
-        checkpoint_dir.mkdir(parents=True)
 
-        # Create a ProgramResults with checkpoint enabled, which triggers
-        # _write_results_snapshot_if_fresh to write an empty results.h5
         results = ProgramResults(
             num_shots=1,
             lazy_loading=False,
             parent_program=None,
         )
-        results._checkpoint_dir = checkpoint_dir
-        results._write_results_snapshot_if_fresh()
-
-        # Now stream a real shot entry in, via the same method a real run
-        # uses to checkpoint shots.
-        with h5py.File(checkpoint_dir / "results.h5", "a") as f:
-            results._write_streamed_dict_entries(
-                f, "shot_histories", False, [(0, History())]
-            )
+        results.add_shot(0, History())
+        results.checkpoint(checkpoint_dir=checkpoint_dir)
 
         # Verify shot_histories key-side storage_format is 'dataset'
         with h5py.File(checkpoint_dir / "results.h5", "r") as f:
@@ -3650,131 +2143,4 @@ class TestResumeCheckpointing:
             storage_format = group["shot_histories"]["dict"]["keys"][
                 "iterable"
             ].attrs.get("storage_format", "groups")
-            assert storage_format == "dataset", (
-                f"Expected shot_histories keys to use 'dataset' format "
-                f"but got '{storage_format}' (empty dict was not cleaned up)"
-            )
-
-    def test_consolidate_checkpoints_skips_corrupted_worker_files(
-        self, tmp_path
-    ):
-        """consolidate_checkpoints should skip corrupted/truncated worker files
-        without crashing, leaving them intact for a later retry once they
-        become readable. Verify deduplication logic still works correctly.
-        """
-        checkpoint_dir = tmp_path / "checkpoint"
-        checkpoint_dir.mkdir(parents=True)
-
-        # Write first valid worker file
-        results1 = ProgramResults(lazy_loading=False)
-        for i in range(3):
-            history = History()
-            history.append(Frame({"shot_id": i}))
-            results1.add_shot(i, history)
-        results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-
-        # Write second valid worker file
-        results2 = ProgramResults(lazy_loading=False)
-        for i in range(3, 6):
-            history = History()
-            history.append(Frame({"shot_id": i}))
-            results2.add_shot(i, history)
-        results2.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
-
-        # Create a corrupted (0-byte) worker file to simulate a crash
-        corrupted_worker = checkpoint_dir / "worker_w2_checkpoint.h5"
-        corrupted_worker.write_bytes(b"")
-
-        # First consolidation should skip the corrupted file but merge valid ones
-        consolidator = ProgramResults()
-        consolidator.consolidate_checkpoints(
-            checkpoint_dir=checkpoint_dir, delete_originals=True
-        )
-
-        # Verify valid shots were merged
-        result = ProgramResults()
-        result.load_checkpoint(checkpoint_dir=checkpoint_dir)
-        assert set(result.shot_histories.keys()) == {0, 1, 2, 3, 4, 5}
-
-        # Verify corrupted file still exists (not deleted)
-        assert corrupted_worker.exists()
-
-        # Now overwrite corrupted file with valid worker checkpoint
-        results3 = ProgramResults(lazy_loading=False)
-        for i in range(6, 9):
-            history = History()
-            history.append(Frame({"shot_id": i}))
-            results3.add_shot(i, history)
-        # Write directly to corrupted_worker's path
-        with h5py.File(corrupted_worker, "w") as f:
-            Serializable.encode(
-                results3, format="hdf5", h5_group=f, encode_cache={}
-            )
-
-        # Second consolidation should now pick up the previously corrupted file
-        consolidator2 = ProgramResults()
-        consolidator2.consolidate_checkpoints(
-            checkpoint_dir=checkpoint_dir, delete_originals=True
-        )
-
-        # Verify all shots are now present
-        result2 = ProgramResults()
-        result2.load_checkpoint(checkpoint_dir=checkpoint_dir)
-        assert set(result2.shot_histories.keys()) == {
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-        }
-
-    def test_consolidate_leaves_locked_payload_in_place(
-        self, tmp_path, monkeypatch
-    ):
-        """consolidate_checkpoints opens a worker payload once, without
-        retrying, and leaves a payload it can't open in place and unmerged,
-        so a later load still finds its shots."""
-        from loqs.internal.streamingmerge import (
-            read_checkpoint_dict_attr_union_keys,
-        )
-
-        checkpoint_dir = tmp_path / "checkpoint"
-        checkpoint_dir.mkdir(parents=True)
-
-        results1 = ProgramResults(lazy_loading=False)
-        history = History()
-        history.append(Frame({"shot_id": 0}))
-        results1.add_shot(0, history)
-        results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
-
-        (worker_file,) = checkpoint_dir.glob("worker_w0_shots_*_payload.h5")
-        real_file = h5py.File
-        call_count = {"n": 0}
-
-        def flaky_file(path, mode="r", *args, **kwargs):
-            if Path(path) == worker_file:
-                call_count["n"] += 1
-                if call_count["n"] == 1:
-                    raise BlockingIOError("simulated lock")
-            return real_file(path, mode, *args, **kwargs)
-
-        monkeypatch.setattr(h5py, "File", flaky_file)
-
-        consolidator = ProgramResults()
-        consolidator.consolidate_checkpoints(
-            checkpoint_dir=checkpoint_dir, delete_originals=True
-        )
-
-        assert worker_file.exists()
-        assert call_count["n"] == 1
-        assert 0 not in read_checkpoint_dict_attr_union_keys(
-            checkpoint_dir, "results.h5", None, "shot_histories"
-        )
-
-        result = ProgramResults()
-        result.load_checkpoint(checkpoint_dir=checkpoint_dir)
-        assert 0 in result.shot_histories
+            assert storage_format == "dataset"

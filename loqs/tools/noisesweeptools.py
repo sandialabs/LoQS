@@ -112,7 +112,12 @@ def _compute_failure_rate(
     shot_failed = [False] * num_shots
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         outs = HistoryDataCollector.from_raw(args).collect(program_results)
-        for i, out in enumerate(outs[-num_shots:]):
+        if len(outs) != num_shots:
+            raise RuntimeError(
+                f"Collected {len(outs)} shot outcomes but expected "
+                f"num_shots={num_shots}."
+            )
+        for i, out in enumerate(outs):
             if out != expected:
                 shot_failed[i] = True
 

@@ -23,20 +23,15 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
 from loqs.internal.swmrledger import (
     SwmrLedgerSnapshot,
     open_swmr_reader,
     read_swmr_ledger_status,
 )
 
-# Must match the file names written by `multiprogramrunner._item_ledger_path`
-# (guarded by a test). The glob never matches the writer's `.tmp` files.
-WORKER_LEDGER_GLOB = "worker_*_runner.h5"
-
 DEFAULT_STALE_AFTER = 120.0
 
-_NAME_PREFIX = "worker_"
-_NAME_SUFFIX = "_runner.h5"
 _SUFFIX_RE = re.compile(r"[0-9a-fA-F]{8}")
 
 
@@ -115,8 +110,7 @@ class MonitorSnapshot:
 
 def _list_worker_files(directory: Path) -> list[Path]:
     """List candidate worker ledger files in `directory`, sorted."""
-    # Keep in step with `multiprogramrunner._item_ledger_path`.
-    return sorted(directory.glob(WORKER_LEDGER_GLOB))
+    return CheckpointStore(directory, ITEM_LAYOUT).ledger_paths()
 
 
 def _parse_worker_name(path: Path) -> tuple[str, str, int] | None:
@@ -125,10 +119,10 @@ def _parse_worker_name(path: Path) -> tuple[str, str, int] | None:
     Returns `(worker_id, host, pid)`, or None when the name doesn't match.
     Hostnames may contain `_`, so the split is from the right.
     """
-    name = path.name
-    if not (name.startswith(_NAME_PREFIX) and name.endswith(_NAME_SUFFIX)):
+    try:
+        core = CheckpointStore(path.parent, ITEM_LAYOUT).worker_id_of(path)
+    except ValueError:
         return None
-    core = name[len(_NAME_PREFIX) : -len(_NAME_SUFFIX)]
     parts = core.rsplit("_", 2)
     if len(parts) != 3:
         return None

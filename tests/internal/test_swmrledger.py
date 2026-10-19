@@ -538,7 +538,7 @@ def test_held_ledger_is_readable_in_same_process(tmp_path):
     with held_swmr_writer(path, ALL_FIELDS) as group:
         mark_ledger_item_done(group, 3, 0.5)
         assert is_swmr_ledger_file(path) is True
-        assert read_swmr_ledger_done_union(tmp_path, path.name) == {3}
+        assert read_swmr_ledger_done_union([path]) == {3}
 
 
 def test_open_swmr_writer_cleans_up_tmp_on_failure(tmp_path):

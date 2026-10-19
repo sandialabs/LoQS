@@ -32,7 +32,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 import h5py
 import numpy as np
@@ -369,24 +369,19 @@ def is_swmr_ledger_file(path: Path) -> bool:
 
 
 def read_swmr_ledger_done_union(
-    directory: Path,
-    pattern: str,
+    paths: Iterable[str | os.PathLike],
     group_name: str = DEFAULT_GROUP_NAME,
 ) -> set[int]:
-    """Return the union of `done` indices across the ledger files in
-    `directory` whose names match the glob `pattern`.
+    """Return the union of `done` indices across the ledger files at `paths`.
 
-    Each file is opened here, in SWMR read mode, and closed again before
-    the next one. A file that fails to open, or has no ledger group with a
-    `done` dataset (a ledger still being created, or a non-ledger file
-    sharing the name pattern), is skipped.
+    Each file is opened in SWMR read mode and closed before the next. A
+    file that fails to open or has no ledger group with a `done` dataset
+    is skipped.
 
     Parameters
     ----------
-    directory : Path
-        Directory to scan. A missing directory yields an empty set.
-    pattern : str
-        Glob pattern, relative to `directory`, naming the ledger files.
+    paths : iterable of path-like
+        The ledger files to read; a path that doesn't exist is skipped.
     group_name : str, optional
         Name of the ledger subgroup. Default is `DEFAULT_GROUP_NAME`.
 
@@ -396,7 +391,7 @@ def read_swmr_ledger_done_union(
         Every index marked done in at least one matching ledger.
     """
     done: set[int] = set()
-    for path in sorted(Path(directory).glob(pattern)):
+    for path in paths:
         try:
             with h5py.File(
                 path, "r", libver="latest", swmr=True, locking=False

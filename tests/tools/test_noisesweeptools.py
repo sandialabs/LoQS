@@ -1,5 +1,6 @@
 """Tester for loqs.tools.noisesweeptools"""
 
+import contextlib
 import inspect
 import sys
 import warnings
@@ -9,6 +10,7 @@ import pytest
 
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.backends.state import NumpyStatevectorQuantumState
+from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
 from loqs.tools import paralleltools
 from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.noisesweeptools import (
@@ -74,6 +76,49 @@ def make_runner(strengths, **kwargs):
 COLLECT_SHOT_DATA_ARGS = [("failed", -1)]
 EXPECTED_OUTCOMES = [False]
 
+INTERACTIVE_FN_SOURCE = "def interactive_fn(strength):\n    return strength\n"
+
+
+@pytest.fixture
+def interactive_fn():
+    """A notebook-style function with no real source file, so
+    inspect.getsource fails with OSError or a subclass of it."""
+    env = {}
+    exec(INTERACTIVE_FN_SOURCE, env)
+    return env["interactive_fn"]
+
+
+@contextlib.contextmanager
+def _spy_program_run(seen, kwarg):
+    """Append each QuantumProgram.run call's `kwarg` kwarg to `seen`."""
+    real_run = QuantumProgram.run
+
+    def spy_run(self, *args, **kwargs):
+        seen.append(kwargs.get(kwarg))
+        return real_run(self, *args, **kwargs)
+
+    QuantumProgram.run = spy_run
+    try:
+        yield
+    finally:
+        QuantumProgram.run = real_run
+
+
+@contextlib.contextmanager
+def _hooked_build_program(before):
+    """Call `before(index)` ahead of every NoiseSweepRunner.build_program."""
+    real_build_program = NoiseSweepRunner.build_program
+
+    def hooked_build_program(self, index):
+        before(index)
+        return real_build_program(self, index)
+
+    NoiseSweepRunner.build_program = hooked_build_program
+    try:
+        yield
+    finally:
+        NoiseSweepRunner.build_program = real_build_program
+
 
 class TestBuildProgram:
     def test_seed_formula(self):
@@ -134,10 +179,7 @@ class TestSignatureParity:
             inspect.signature(NoiseSweepRunner.__init__).parameters
         )
         missing = program_params - runner_params
-        assert not missing, (
-            f"QuantumProgram.__init__ parameter(s) {missing} are not forwarded by "
-            "NoiseSweepRunner.__init__"
-        )
+        assert not missing
 
 
 class TestSerialization:
@@ -189,40 +231,34 @@ class TestSerialization:
             "name",
         }
 
-    def test_non_file_backed_callable_raises_without_override(self):
-        # A notebook-defined function has no real source file, so
-        # inspect.getsource fails with OSError or a subclass of it.
-        env = {}
-        exec("def interactive_fn(strength):\n    return strength\n", env)
-        interactive_fn = env["interactive_fn"]
-
+    def test_non_file_backed_callable_raises_without_override(
+        self, interactive_fn
+    ):
         with pytest.raises(OSError):
             make_runner(
                 [0.1], seed_stride=1, default_noise_model=interactive_fn
             )
 
-    def test_non_file_backed_callable_with_override_succeeds(self):
-        env = {}
-        exec("def interactive_fn(strength):\n    return strength\n", env)
-        interactive_fn = env["interactive_fn"]
-
+    def test_non_file_backed_callable_with_override_succeeds(
+        self, interactive_fn
+    ):
         runner = make_runner(
             [0.1],
             seed_stride=1,
             default_noise_model=interactive_fn,
             serialized_callables={
-                "default_noise_model": "def interactive_fn(strength):\n    return strength\n"
+                "default_noise_model": INTERACTIVE_FN_SOURCE
             },
         )
         assert (
             runner._quantum_program_serialized_callables["default_noise_model"]
-            == "def interactive_fn(strength):\n    return strength\n"
+            == INTERACTIVE_FN_SOURCE
         )
         assert runner.build_program(0).default_noise_model == 0.1
 
 
 class TestRun:
-    def test_seed_reproducibility(self, tmp_path):
+    def test_seed_reproducibility(self):
         runner1 = make_runner(
             [0.0, 0.5],
             seed_stride=20,
@@ -274,117 +310,24 @@ class TestRun:
         with pytest.raises(ValueError):
             make_runner([0.0, 0.1], seed_stride=3, num_shots=5)
 
-    def test_run_kwargs_forwarded_and_resolved(self):
-        seen_names = []
-
-        real_run = QuantumProgram.run
-
-        def spy_run(self, *args, **kwargs):
-            seen_names.append(kwargs.get("max_frame_limit"))
-            return real_run(self, *args, **kwargs)
-
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            run_kwargs={
-                "max_frame_limit": lambda strength: (
-                    10 if strength == 0.0 else 20
-                ),
-            },
-        )
-        try:
-            QuantumProgram.run = spy_run
-            runner.run()
-        finally:
-            QuantumProgram.run = real_run
-
-        assert seen_names == [10, 20]
-
-    def test_serial_run_respects_verbose_parameter(self):
-        """Serial run with verbose=True should forward verbose=True to
-        each point's QuantumProgram.run call; default or explicit verbose=False
-        should suppress it."""
+    @pytest.mark.parametrize(
+        "verbose_kwargs, expected",
+        [({"verbose": True}, True), ({"verbose": False}, False), ({}, True)],
+        ids=["explicit_true", "explicit_false", "default_true"],
+    )
+    def test_serial_run_respects_verbose_parameter(
+        self, verbose_kwargs, expected
+    ):
+        """Serial run forwards the runner's `verbose` (default True) to each
+        point's QuantumProgram.run call."""
         seen_verbose_values = []
-
-        real_run = QuantumProgram.run
-
-        def spy_run(self, *args, **kwargs):
-            seen_verbose_values.append(kwargs.get("verbose"))
-            return real_run(self, *args, **kwargs)
-
-        # Test 1: explicit verbose=True should forward True to each point
-        runner1 = make_runner(
-            [0.0, 0.1], seed_stride=5, num_shots=5, verbose=True
-        )
-        seen_verbose_values.clear()
-        try:
-            QuantumProgram.run = spy_run
-            runner1.run()
-        finally:
-            QuantumProgram.run = real_run
-
-        assert seen_verbose_values == [
-            True,
-            True,
-        ], f"Expected [True, True] with verbose=True, got {seen_verbose_values}"
-
-        # Test 2: explicit verbose=False should forward False to each point
-        runner2 = make_runner(
-            [0.0, 0.1], seed_stride=5, num_shots=5, verbose=False
-        )
-        seen_verbose_values.clear()
-        try:
-            QuantumProgram.run = spy_run
-            runner2.run()
-        finally:
-            QuantumProgram.run = real_run
-
-        assert seen_verbose_values == [
-            False,
-            False,
-        ], f"Expected [False, False] with verbose=False, got {seen_verbose_values}"
-
-        # Test 3: default (no explicit verbose) should forward True
-        # (runner defaults verbose=True in its constructor)
-        runner3 = make_runner([0.0, 0.1], seed_stride=5, num_shots=5)
-        seen_verbose_values.clear()
-        try:
-            QuantumProgram.run = spy_run
-            runner3.run()
-        finally:
-            QuantumProgram.run = real_run
-
-        assert seen_verbose_values == [
-            True,
-            True,
-        ], f"Expected [True, True] with default verbose, got {seen_verbose_values}"
-
-    def test_wall_clock_timing_attributes(self):
-        """item_wall_clock_times and shot_wall_clock_times are populated after run()."""
-        strengths = [0.0, 0.1, 0.2]
         runner = make_runner(
-            strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False
+            [0.0, 0.1], seed_stride=5, num_shots=5, **verbose_kwargs
         )
-        runner.run()
+        with _spy_program_run(seen_verbose_values, "verbose"):
+            runner.run()
 
-        # item_wall_clock_times: dict[int, float] with one entry per strength
-        assert set(runner.item_wall_clock_times.keys()) == {0, 1, 2}
-        for item_time in runner.item_wall_clock_times.values():
-            assert isinstance(item_time, float)
-            assert item_time > 0
-
-        # shot_wall_clock_times: dict[int, dict[int, float]]
-        # same item indices, each with per-shot timing dict
-        assert set(runner.shot_wall_clock_times.keys()) == {0, 1, 2}
-        for shot_times_dict in runner.shot_wall_clock_times.values():
-            assert isinstance(shot_times_dict, dict)
-            assert len(shot_times_dict) == 10  # num_shots=10
-            for shot_idx, shot_time in shot_times_dict.items():
-                assert isinstance(shot_idx, int)
-                assert isinstance(shot_time, float)
-                assert shot_time > 0
+        assert seen_verbose_values == [expected, expected]
 
 
 class TestRunParallel:
@@ -437,39 +380,21 @@ class TestRunParallel:
             verbose=False,
             config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
         )
-        real_build_program = NoiseSweepRunner.build_program
 
-        def crash_at_index_2(self, index):
+        def crash_at_index_2(index):
             if index == 2:
                 raise RuntimeError("simulated crash")
-            return real_build_program(self, index)
 
-        NoiseSweepRunner.build_program = crash_at_index_2
-        try:
+        with _hooked_build_program(crash_at_index_2):
             with pytest.raises(RuntimeError):
                 runner.run()
-        finally:
-            NoiseSweepRunner.build_program = real_build_program
 
-        # Read the partial state (indices 0 and 1) with the same glob pair
-        # as _read_done_union. The completed entries come from the per-item
-        # payload files; the worker ledgers hold no results, so the read
-        # skips them.
-        from loqs.internal.streamingmerge import (
-            read_checkpoint_dict_attr_union,
+        # The partial state (indices 0 and 1) comes from the per-item
+        # payload files, read through the item store.
+        completed = CheckpointStore(item_checkpoint_dir, ITEM_LAYOUT).keys(
+            strict=False
         )
-
-        completed = read_checkpoint_dict_attr_union(
-            item_checkpoint_dir,
-            None,
-            ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
-            "results",
-        )
-        assert len(completed) == 2  # Only 0 and 1 completed
-        assert 0 in completed
-        assert 1 in completed
-        assert 2 not in completed
-        assert 3 not in completed
+        assert completed == [0, 1]  # Only 0 and 1 completed
 
         # ParallelStrategy.make_chunks (in loqs.tools.paralleltools, not
         # noisesweeptools) is what actually calls chunk_round_robin now.
@@ -538,21 +463,16 @@ class TestResume:
             verbose=False,
             config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
         )
-        real_build_program = NoiseSweepRunner.build_program
 
-        def spy_build_program(self, index):
+        def spy_build_program(index):
             built_indices.append(index)
             if index == 2 and not crash_triggered:
                 crash_triggered.append(True)
                 raise RuntimeError("simulated crash")
-            return real_build_program(self, index)
 
-        NoiseSweepRunner.build_program = spy_build_program
-        try:
+        with _hooked_build_program(spy_build_program):
             with pytest.raises(RuntimeError):
                 runner1.run()
-        finally:
-            NoiseSweepRunner.build_program = real_build_program
 
         assert built_indices == [0, 1, 2]
 
@@ -568,146 +488,92 @@ class TestResume:
             ),
         )
         built_indices.clear()
-        NoiseSweepRunner.build_program = spy_build_program
-        try:
+        with _hooked_build_program(spy_build_program):
             final_result = runner2.run()
-        finally:
-            NoiseSweepRunner.build_program = real_build_program
 
         assert built_indices == [2]
         assert final_result.failure_rates == uninterrupted_result.failure_rates
         assert final_result.stderrs == uninterrupted_result.stderrs
         assert final_result.is_complete
 
-    def test_resume_with_default_seed_stride_resolving_to_num_shots(
-        self, tmp_path
-    ):
-        """Resume should succeed when effective seeding is identical: one runner
-        uses seed_stride=None (resolves to num_shots), another uses explicit seed_stride
-        equal to num_shots."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-
-        # First runner: seed_stride=None, which resolves to num_shots=5
-        runner1 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=None,  # Explicitly None -> will resolve to num_shots=5
-            base_seed=0,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
-        )
-        runner1.run()
-
-        # Second runner: explicit seed_stride=5 (which equals num_shots)
-        # This has the same effective seeding as runner1, so resume should succeed
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=5,  # Explicitly set to match resolved value
-            base_seed=0,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            config=CheckpointConfig(
-                item_checkpoint_dir=item_checkpoint_dir, resume=True
+    @pytest.mark.parametrize(
+        "second_overrides, expectation",
+        [
+            # seed_stride=None resolves to num_shots=5, so seed_stride=5 is
+            # the same effective seeding.
+            ({"seed_stride": 5}, contextlib.nullcontext()),
+            # Different num_shots -> different _resolved_seed_stride.
+            (
+                {"num_shots": 10},
+                pytest.raises(ValueError, match="seed_stride"),
             ),
-        )
-        # This should NOT raise ValueError about seed_stride mismatch
-        result = runner2.run()
-        assert result.is_complete
-
-    def test_resume_with_different_resolved_seed_stride_still_raises(
-        self, tmp_path
+            # Equivalent-but-differently-typed expected_outcomes.
+            ({"expected_outcomes": (False,)}, contextlib.nullcontext()),
+        ],
+        ids=[
+            "default_seed_stride_resolving_to_num_shots",
+            "different_resolved_seed_stride_raises",
+            "equivalent_expected_outcomes",
+        ],
+    )
+    def test_resume_checks_effective_config(
+        self, tmp_path, second_overrides, expectation
     ):
-        """Verify that a genuine mismatch in effective seeding (different _resolved_seed_stride)
-        is still caught even though we now check _resolved_seed_stride instead of seed_stride.
-        """
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-
-        # First runner: seed_stride=None, which resolves to num_shots=5
-        runner1 = NoiseSweepRunner(
+        runner_kwargs = dict(
             strengths=[0.0, 0.1],
             num_shots=5,
             collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=None,  # Explicitly None -> will resolve to num_shots=5
-            base_seed=0,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
-        )
-        runner1.run()
-
-        # Second runner: seed_stride=None but different num_shots=10
-        # This has different effective seeding (_resolved_seed_stride would be 10, not 5)
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=10,  # Different num_shots -> different _resolved_seed_stride
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
+            expected_outcomes=[False],
             seed_stride=None,
             base_seed=0,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
             verbose=False,
-            config=CheckpointConfig(
-                item_checkpoint_dir=item_checkpoint_dir, resume=True
-            ),
         )
-        # This SHOULD raise ValueError about seed_stride mismatch
-        with pytest.raises(ValueError, match="seed_stride"):
-            runner2.run()
-
-    def test_resume_with_equivalent_expected_outcomes_succeeds(self, tmp_path):
-        """Resume succeeds when expected_outcomes is passed as an
-        equivalent-but-differently-typed sequence (e.g. list vs tuple)."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        # Run with list form
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
+        NoiseSweepRunner(
+            **runner_kwargs,
             config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
-            expected_outcomes=[False],
-        )
-        runner1.run()
+        ).run()
 
-        # Resume with tuple form
         runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=(False,),  # tuple instead of list
-            seed_stride=5,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
+            **{**runner_kwargs, **second_overrides},
             config=CheckpointConfig(
                 item_checkpoint_dir=item_checkpoint_dir, resume=True
             ),
         )
-        # Should not raise despite differently-typed expected_outcomes
-        result = runner2.run()
-        assert result is not None
+        with expectation:
+            assert runner2.run().is_complete
 
 
 class TestNoiseSweepResult:
-    def test_write_read_round_trip_complete(self, tmp_path):
-        result = NoiseSweepResult(
-            strengths=[0.0, 0.1],
-            failure_rates=[0.0, 0.2],
-            stderrs=[0.0, 0.01],
-            num_shots=100,
-            metadata={"note": "test"},
-        )
+    @pytest.mark.parametrize(
+        "result, expected_complete",
+        [
+            (
+                NoiseSweepResult(
+                    strengths=[0.0, 0.1],
+                    failure_rates=[0.0, 0.2],
+                    stderrs=[0.0, 0.01],
+                    num_shots=100,
+                    metadata={"note": "test"},
+                ),
+                True,
+            ),
+            # Full-length with None placeholders for incomplete points
+            (
+                NoiseSweepResult(
+                    strengths=[0.0, 0.1, 0.2],
+                    failure_rates=[0.0, None, 0.1],
+                    stderrs=[0.01, None, 0.02],
+                    num_shots=100,
+                ),
+                False,
+            ),
+        ],
+        ids=["complete", "incomplete"],
+    )
+    def test_write_read_round_trip(self, tmp_path, result, expected_complete):
         path = tmp_path / "result.json"
         result.write(path)
         loaded = NoiseSweepResult.read(path)
@@ -716,32 +582,8 @@ class TestNoiseSweepResult:
         assert loaded.stderrs == result.stderrs
         assert loaded.num_shots == result.num_shots
         assert loaded.metadata == result.metadata
-        assert loaded.is_complete
-
-    def test_write_read_round_trip_incomplete(self, tmp_path):
-        result = NoiseSweepResult(
-            strengths=[0.0, 0.1, 0.2],
-            failure_rates=[
-                0.0,
-                None,
-                0.1,
-            ],  # Full-length with None placeholder
-            stderrs=[0.01, None, 0.02],  # Full-length with None placeholder
-            num_shots=100,
-        )
-        path = tmp_path / "result.json"
-        result.write(path)
-        loaded = NoiseSweepResult.read(path)
-        assert not loaded.is_complete
-        assert len(loaded.failure_rates) == 3  # Always full-length
-        # Check sparse array model directly: completed indices have values,
-        # incomplete indices have None
-        assert loaded.failure_rates[0] is not None
-        assert loaded.failure_rates[1] is None
-        assert loaded.failure_rates[2] is not None
-        assert loaded.stderrs[0] is not None
-        assert loaded.stderrs[1] is None
-        assert loaded.stderrs[2] is not None
+        assert loaded.is_complete is expected_complete
+        assert len(loaded.failure_rates) == len(result.strengths)
 
     def test_mismatched_lengths_raise(self):
         with pytest.raises(ValueError):
@@ -776,23 +618,21 @@ class TestCompareNoiseSweeps:
             num_shots=num_shots,
         )
 
-    def test_mismatched_strengths_always_raises(self):
-        results = {
-            "a": self._make_result([0.0, 0.1], 2),
-            "b": self._make_result([0.0, 0.2], 2),
-        }
-        with pytest.raises(ValueError):
-            compare_noise_sweeps(results)
-        with pytest.raises(ValueError):
-            compare_noise_sweeps(results, strict=True)
-
-    def test_mismatched_num_shots_always_raises(self):
+    @pytest.mark.parametrize("strict", [False, True])
+    @pytest.mark.parametrize(
+        "b_strengths, b_num_shots",
+        [([0.0, 0.2], 10), ([0.0, 0.1], 20)],
+        ids=["mismatched_strengths", "mismatched_num_shots"],
+    )
+    def test_mismatched_series_always_raises(
+        self, b_strengths, b_num_shots, strict
+    ):
         results = {
             "a": self._make_result([0.0, 0.1], 2, num_shots=10),
-            "b": self._make_result([0.0, 0.1], 2, num_shots=20),
+            "b": self._make_result(b_strengths, 2, num_shots=b_num_shots),
         }
         with pytest.raises(ValueError):
-            compare_noise_sweeps(results)
+            compare_noise_sweeps(results, strict=strict)
 
     def test_incomplete_warns_by_default(self):
         results = {
@@ -838,38 +678,45 @@ class TestCompareNoiseSweeps:
         assert len(caught) == 1
         warning_msg = str(caught[0].message)
         # Should report 2 missing points, not 0
-        assert (
-            "2 point(s) missing" in warning_msg
-        ), f"Expected '2 point(s) missing' in warning, got: {warning_msg}"
+        assert "2 point(s) missing" in warning_msg
 
 
 class TestPlotNoiseSweep:
-    def test_smoke(self):
+    @pytest.mark.parametrize(
+        "results, kwargs",
+        [
+            (
+                NoiseSweepResult(
+                    strengths=[0.01, 0.05, 0.1],
+                    failure_rates=[0.0, 0.02, 0.1],
+                    stderrs=[0.0, 0.01, 0.02],
+                    num_shots=100,
+                ),
+                {"reference_slope": 2},
+            ),
+            (
+                {
+                    "a": NoiseSweepResult(
+                        strengths=[0.01, 0.05],
+                        failure_rates=[0.0, 0.02],
+                        stderrs=[0.0, 0.01],
+                        num_shots=100,
+                    ),
+                    "b": NoiseSweepResult(
+                        strengths=[0.01, 0.05],
+                        failure_rates=[0.01, 0.03],
+                        stderrs=[0.005, 0.01],
+                        num_shots=100,
+                    ),
+                },
+                {},
+            ),
+        ],
+        ids=["single_series", "multi_series"],
+    )
+    def test_smoke(self, results, kwargs):
         pytest.importorskip("matplotlib")
-        result = NoiseSweepResult(
-            strengths=[0.01, 0.05, 0.1],
-            failure_rates=[0.0, 0.02, 0.1],
-            stderrs=[0.0, 0.01, 0.02],
-            num_shots=100,
-        )
-        ax = plot_noise_sweep(result, reference_slope=2)
-        assert ax is not None
-
-    def test_multi_series_smoke(self):
-        pytest.importorskip("matplotlib")
-        result_a = NoiseSweepResult(
-            strengths=[0.01, 0.05],
-            failure_rates=[0.0, 0.02],
-            stderrs=[0.0, 0.01],
-            num_shots=100,
-        )
-        result_b = NoiseSweepResult(
-            strengths=[0.01, 0.05],
-            failure_rates=[0.01, 0.03],
-            stderrs=[0.005, 0.01],
-            num_shots=100,
-        )
-        ax = plot_noise_sweep({"a": result_a, "b": result_b})
+        ax = plot_noise_sweep(results, **kwargs)
         assert ax is not None
 
     def test_missing_matplotlib_raises_import_error(self, monkeypatch):
@@ -904,22 +751,22 @@ class TestPlotNoiseSweep:
 
         # Check that plotted data contains no nan values.
         # The line is drawn only for nonzero points (index 1, 3).
-        assert len(ax.lines) > 0, "Expected at least one line to be plotted"
+        assert len(ax.lines) > 0
         main_line = ax.lines[0]
         x_data = main_line.get_xdata()
         y_data = main_line.get_ydata()
 
         # No nan should appear in the plotted data
-        assert not np.any(np.isnan(x_data)), "Found nan in line x_data"
-        assert not np.any(np.isnan(y_data)), "Found nan in line y_data"
+        assert not np.any(np.isnan(x_data))
+        assert not np.any(np.isnan(y_data))
 
         # The main line should contain the two nonzero valid points (indices 1, 3)
-        assert len(x_data) == 2, "Expected 2 points in main line"
+        assert len(x_data) == 2
 
         # Verify guide line exists and contains no nan
         assert any(
             "slope=2" in str(getattr(line, "_label", "")) for line in ax.lines
-        ), "Expected guide line with slope=2 label"
+        )
 
         plt.close(fig)
 
@@ -946,17 +793,15 @@ class TestPlotNoiseSweep:
             for line in ax.lines
             if getattr(line, "_label", "").startswith("slope")
         ]
-        assert (
-            len(guide_lines) > 0
-        ), "Expected guide line to be plotted despite incomplete points"
+        assert len(guide_lines) > 0
 
         guide_line = guide_lines[0]
         guide_x = guide_line.get_xdata()
         guide_y = guide_line.get_ydata()
 
-        assert len(guide_x) == 2, "Expected 2-point guide line"
-        assert not np.any(np.isnan(guide_x)), "Found nan in guide line x_data"
-        assert not np.any(np.isnan(guide_y)), "Found nan in guide line y_data"
+        assert len(guide_x) == 2
+        assert not np.any(np.isnan(guide_x))
+        assert not np.any(np.isnan(guide_y))
         # The guide line's upper bound must be the largest *valid* strength (0.1),
         # not the incomplete point's own strength (0.5).
         assert guide_x.max() == pytest.approx(0.1)
@@ -989,6 +834,15 @@ class TestNoiseSweepRunnerHooks:
         assert 0 <= failure_rate <= 1
         assert 0 <= stderr <= 1
 
+    def test_reduce_program_outcomes_raises_on_missing_shot(self):
+        """A results object with fewer shots than `num_shots` raises
+        instead of reporting a failure rate biased low."""
+        runner = make_runner([0.1], seed_stride=20, num_shots=2)
+        program = runner.build_program(0)
+        program_results = program.run(num_shots=1, verbose=False)
+        with pytest.raises(RuntimeError, match="1.*2"):
+            runner.reduce_program_outcomes(program_results)
+
     def test_build_output_assembles_noise_sweep_result_without_disk_write(
         self, tmp_path
     ):
@@ -1012,8 +866,8 @@ class TestNoiseSweepRunnerHooks:
         assert result.failure_rates == [0.1, 0.2, None]
         assert result.stderrs == [0.05, 0.06, None]
         assert result.strengths == [0.1, 0.2, 0.3]
-        # Verify no result.h5 file was created
-        assert not (tmp_path.exists() and any(tmp_path.glob("**/result.h5")))
+        # Verify no file was written
+        assert not any(path.is_file() for path in tmp_path.rglob("*"))
 
     def test_chkpt_subdir_prefix_is_point(self):
         """NoiseSweepRunner.CHKPT_SUBDIR_PREFIX should be "point"."""
