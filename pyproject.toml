@@ -19,6 +19,7 @@ authors = [
     {name = "Megan Dahlhauser", email = "mldahlh@sandia.gov"},
     {name = "Julie Campos", email = "jacampo@sandia.gov"},
     {name = "Mario Morford-Oberst", email = "mmorfor@sandia.gov"},
+    {name = "Aliza Siddiqui", email = "ausiddi@sandia.gov"}
 ]
 maintainers = [
     {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
