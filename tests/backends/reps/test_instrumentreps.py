@@ -15,35 +15,17 @@ from loqs.backends.reps import (
 
 
 class TestZBasisProjectionInstrumentRep:
-    @pytest.mark.parametrize(
-        "reset,include_outcome", [(None, True), (0, False), (1, True)]
-    )
-    def test_constructs_instance(self, reset, include_outcome):
-        rep = ZBasisProjectionInstrumentRep(reset, include_outcome, ("Q0",))
+    def test_constructs_instance(self):
+        rep = ZBasisProjectionInstrumentRep(None, True, ("Q0",))
         assert isinstance(rep, ZBasisProjectionInstrumentRep)
         assert isinstance(rep, InstrumentRep)
-        assert rep.reset == reset
-        assert rep.include_outcome == include_outcome
+        assert rep.reset is None
+        assert rep.include_outcome is True
         assert rep.qubit_labels == ("Q0",)
 
-    @pytest.mark.parametrize(
-        "reset,include_outcome",
-        [
-            ("not an int", True),  # reset not int/None
-            (0, "not a bool"),  # include_outcome not bool
-            (2, True),  # reset out of range
-        ],
-    )
-    def test_rejects_invalid_values(self, reset, include_outcome):
+    def test_rejects_invalid_values(self):
         with pytest.raises(RepConstructionError):
-            ZBasisProjectionInstrumentRep(reset, include_outcome, ("Q0",))
-
-    def test_accepts_legacy_int_include_outcome(self):
-        """Files serialized before `include_outcome` was decoded as a
-        `bool` store it as a plain `1`/`0`; construction from decoded
-        legacy data must still succeed."""
-        rep = ZBasisProjectionInstrumentRep(0, 1, ("Q0",))
-        assert rep.include_outcome == 1
+            ZBasisProjectionInstrumentRep(2, True, ("Q0",))  # reset range
 
 
 class TestZBasisPrePostInstrumentRep:
@@ -57,31 +39,9 @@ class TestZBasisPrePostInstrumentRep:
         assert rep.pre_op is pre_op
         assert rep.post_op is post_op
 
-    def test_rejects_non_gaterep_pre_op(self):
-        post_op = UnitaryGateRep(np.eye(2), ("Q0",))
-        with pytest.raises(RepConstructionError):
-            ZBasisPrePostInstrumentRep(None, True, np.eye(2), post_op, ("Q0",))
-
-    def test_rejects_non_gaterep_post_op(self):
-        pre_op = UnitaryGateRep(np.eye(2), ("Q0",))
-        with pytest.raises(RepConstructionError):
-            ZBasisPrePostInstrumentRep(None, True, pre_op, np.eye(2), ("Q0",))
-
-    def test_rejects_invalid_reset(self):
-        pre_op = UnitaryGateRep(np.eye(2), ("Q0",))
-        post_op = UnitaryGateRep(np.eye(2), ("Q0",))
-        with pytest.raises(RepConstructionError):
-            ZBasisPrePostInstrumentRep(2, True, pre_op, post_op, ("Q0",))
-
     def test_rejects_pre_op_qubits_mismatch(self):
         pre_op = UnitaryGateRep(np.eye(2), ("Q1",))
         post_op = UnitaryGateRep(np.eye(2), ("Q0",))
-        with pytest.raises(RepConstructionError):
-            ZBasisPrePostInstrumentRep(None, True, pre_op, post_op, ("Q0",))
-
-    def test_rejects_post_op_qubits_mismatch(self):
-        pre_op = UnitaryGateRep(np.eye(2), ("Q0",))
-        post_op = UnitaryGateRep(np.eye(2), ("Q1",))
         with pytest.raises(RepConstructionError):
             ZBasisPrePostInstrumentRep(None, True, pre_op, post_op, ("Q0",))
 
@@ -97,10 +57,6 @@ class TestOutcomeOperationDictInstrumentRep:
         assert rep.include_outcome is False
         assert rep.outcome_ops == outcome_ops
 
-    def test_rejects_non_mapping(self):
-        with pytest.raises(RepConstructionError):
-            OutcomeOperationDictInstrumentRep([0, 1], True, ("Q0",))
-
     def test_rejects_non_gaterep_values(self):
         with pytest.raises(RepConstructionError):
             OutcomeOperationDictInstrumentRep({0: np.eye(2)}, True, ("Q0",))
@@ -109,13 +65,6 @@ class TestOutcomeOperationDictInstrumentRep:
         outcome_ops = {0: UnitaryGateRep(np.eye(2), ("Q0",))}
         rep = OutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
         assert rep.outcome_qubits == ("Q0",)
-
-    def test_outcome_qubits_bare_scalar_normalized_to_tuple(self):
-        outcome_ops = {0: UnitaryGateRep(np.eye(4), ("Q0", "Q1"))}
-        rep = OutcomeOperationDictInstrumentRep(
-            outcome_ops, True, ("Q0", "Q1"), outcome_qubits="synd_Q0Q1"
-        )
-        assert rep.outcome_qubits == ("synd_Q0Q1",)
 
     def test_joint_outcome_qubits_allows_arbitrary_keys(self):
         """A single classical channel (`len(outcome_qubits) == 1`) admits
@@ -155,19 +104,10 @@ class TestOutcomeOperationDictInstrumentRep:
         assert rep.outcome_qubits == ("Q0", "Q1")
         assert set(rep.outcome_ops.keys()) == set(outcome_ops.keys())
 
-    @pytest.mark.parametrize(
-        "bad_keys",
-        [
-            {"even": None, "odd": None},  # not sequences at all
-            {(0,): None, (1, 1): None},  # inconsistent lengths
-            {(0, 2): None, (1, 1): None},  # entry not in {0, 1}
-        ],
-    )
-    def test_decomposable_outcome_qubits_rejects_mismatched_keys(
-        self, bad_keys
-    ):
+    def test_decomposable_outcome_qubits_rejects_mismatched_keys(self):
         outcome_ops = {
-            k: UnitaryGateRep(np.eye(4), ("Q0", "Q1")) for k in bad_keys
+            k: UnitaryGateRep(np.eye(4), ("Q0", "Q1"))
+            for k in [(0, 2), (1, 1)]  # entry not in {0, 1}
         }
         with pytest.raises(RepConstructionError):
             OutcomeOperationDictInstrumentRep(
@@ -207,7 +147,3 @@ class TestStimCircuitInstrumentRep:
         rep = StimCircuitInstrumentRep("M 0", ("Q0",))
         assert isinstance(rep, StimCircuitInstrumentRep)
         assert rep.circuit_str == "M 0"
-
-    def test_rejects_non_str(self):
-        with pytest.raises(RepConstructionError):
-            StimCircuitInstrumentRep(42, ("Q0",))

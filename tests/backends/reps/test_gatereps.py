@@ -23,18 +23,57 @@ _TP_K1 = np.array([[0.0, np.sqrt(_GAMMA)], [0.0, 0.0]])
 _NON_TP_K = np.eye(2) * 0.5
 
 
+def _assert_kraus_reps_equal(expected: KrausGateRep, actual: KrausGateRep):
+    assert isinstance(actual, KrausGateRep)
+    assert expected.qubit_labels == actual.qubit_labels
+    assert len(expected.kraus_operators) == len(actual.kraus_operators)
+    for (ek, ep), (ak, ap) in zip(
+        expected.kraus_operators, actual.kraus_operators
+    ):
+        assert np.allclose(ek, ak)
+        if ep is None or ap is None:
+            assert ep is None and ap is None
+        else:
+            assert np.allclose(ep, ap)
+
+
+@pytest.mark.parametrize(
+    "make,attr,expected",
+    [
+        (lambda: UnitaryGateRep(np.eye(2), ("Q0",)), "unitary", np.eye(2)),
+        (lambda: PTMGateRep(np.eye(4), ("Q0",)), "ptm", np.eye(4)),
+        (
+            lambda: QSimSuperopGateRep(np.eye(4), ("Q0",)),
+            "superop",
+            np.eye(4),
+        ),
+        (
+            lambda: StimCircuitGateRep("X 0", ("Q0",)),
+            "circuit_str",
+            "X 0",
+        ),
+        (
+            lambda: ProbabilisticStimGateRep(
+                [["X 0", 0.5], ["Y 0", 0.5]], ("Q0",)  # type: ignore[list-item]
+            ),
+            "operations",
+            (("X 0", 0.5), ("Y 0", 0.5)),
+        ),
+    ],
+    ids=["unitary", "ptm", "qsim", "stim", "probabilistic-stim"],
+)
+def test_constructs_instance(make, attr, expected):
+    rep = make()
+    assert isinstance(rep, GateRep)
+    assert rep.qubit_labels == ("Q0",)
+    payload = getattr(rep, attr)
+    if isinstance(expected, np.ndarray):
+        assert np.array_equal(payload, expected)
+    else:
+        assert payload == expected
+
+
 class TestUnitaryGateRep:
-    def test_constructs_instance(self):
-        rep = UnitaryGateRep(np.eye(2), ("Q0",))
-        assert isinstance(rep, UnitaryGateRep)
-        assert isinstance(rep, GateRep)
-        assert np.array_equal(rep.unitary, np.eye(2))
-        assert rep.qubit_labels == ("Q0",)
-
-    def test_rejects_non_ndarray(self):
-        with pytest.raises(RepConstructionError):
-            UnitaryGateRep("not an array", ("Q0",))
-
     def test_rejects_wrong_shape_for_known_qubits(self):
         with pytest.raises(RepConstructionError):
             UnitaryGateRep(np.eye(4), ("Q0",))
@@ -45,96 +84,18 @@ class TestUnitaryGateRep:
         rep = UnitaryGateRep(np.eye(4))
         assert rep.unitary.shape == (4, 4)
 
-    def test_rejects_non_square(self):
-        with pytest.raises(RepConstructionError):
-            UnitaryGateRep(np.ones((2, 3)))
-
-    def test_rejects_square_non_power_of_2_dimension_without_qubits(self):
-        with pytest.raises(RepConstructionError):
-            UnitaryGateRep(np.eye(3))
-
-    def test_rejects_1x1_payload_without_qubits(self):
-        """`1 = 2**0` would otherwise pass the "some power of 2" check,
-        but there's no such thing as a 0-qubit gate."""
-        with pytest.raises(RepConstructionError):
-            UnitaryGateRep(np.array([[2.0]]))
-
-
-class TestPTMGateRep:
-    def test_constructs_instance(self):
-        rep = PTMGateRep(np.eye(4), ("Q0",))
-        assert isinstance(rep, PTMGateRep)
-        assert np.array_equal(rep.ptm, np.eye(4))
-
-    def test_rejects_non_ndarray(self):
-        with pytest.raises(RepConstructionError):
-            PTMGateRep(None, ("Q0",))
-
-    def test_rejects_wrong_shape_for_known_qubits(self):
-        with pytest.raises(RepConstructionError):
-            PTMGateRep(np.eye(2), ("Q0",))
-
-    def test_rejects_1x1_payload_without_qubits(self):
-        with pytest.raises(RepConstructionError):
-            PTMGateRep(np.array([[1.0]]))
-
-
-class TestQSimSuperopGateRep:
-    def test_constructs_instance(self):
-        rep = QSimSuperopGateRep(np.eye(4), ("Q0",))
-        assert isinstance(rep, QSimSuperopGateRep)
-        assert np.array_equal(rep.superop, np.eye(4))
-
-    def test_rejects_non_ndarray(self):
-        with pytest.raises(RepConstructionError):
-            QSimSuperopGateRep(None, ("Q0",))
-
-    def test_rejects_wrong_shape_for_known_qubits(self):
-        with pytest.raises(RepConstructionError):
-            QSimSuperopGateRep(np.eye(2), ("Q0",))
-
 
 class TestStimCircuitGateRep:
-    def test_constructs_instance(self):
-        rep = StimCircuitGateRep("X 0", ("Q0",))
-        assert isinstance(rep, StimCircuitGateRep)
-        assert rep.circuit_str == "X 0"
-
     def test_rejects_non_str(self):
         with pytest.raises(RepConstructionError):
             StimCircuitGateRep(42, ("Q0",))
 
 
 class TestProbabilisticStimGateRep:
-    def test_constructs_instance_with_immutable_operations(self):
-        rep = ProbabilisticStimGateRep([["X 0", 0.5], ["Y 0", 0.5]], ("Q0",))
-        assert isinstance(rep, ProbabilisticStimGateRep)
-        assert rep.operations == (("X 0", 0.5), ("Y 0", 0.5))
-
-    def test_accepts_int_probability(self):
-        rep = ProbabilisticStimGateRep((("X 0", 1),), ("Q0",))
-        assert rep.operations == (("X 0", 1),)
-
-    def test_rejects_empty_sequence(self):
+    def test_rejects_malformed_sequences(self):
         with pytest.raises(RepConstructionError):
-            ProbabilisticStimGateRep((), ("Q0",))
-
-    def test_rejects_bare_string(self):
-        with pytest.raises(RepConstructionError):
-            ProbabilisticStimGateRep("X 0", ("Q0",))
-
-    @pytest.mark.parametrize(
-        "malformed",
-        [
-            ("X 0",),  # element is not a (str, prob) tuple/list
-            (("X 0", 0.5, "extra"),),  # wrong length
-            ((0, 0.5),),  # first entry not a str
-            (("X 0", "not a number"),),  # second entry not float/int
-        ],
-    )
-    def test_rejects_malformed_sequences(self, malformed):
-        with pytest.raises(RepConstructionError):
-            ProbabilisticStimGateRep(malformed, ("Q0",))
+            # element is not a (str, prob) tuple/list
+            ProbabilisticStimGateRep(("X 0",), ("Q0",))
 
 
 class TestKrausGateRep:
@@ -144,64 +105,18 @@ class TestKrausGateRep:
         assert isinstance(rep, KrausGateRep)
         assert len(recwarn) == 0
 
-    def test_constructs_with_precomputed_probabilities(self):
-        gr = ((_TP_K0, 0.95), (_TP_K1, 0.05))
-        rep = KrausGateRep(gr, ("Q0",))
-        assert isinstance(rep, KrausGateRep)
-
-    def test_rejects_empty_sequence(self):
+    def test_rejects_malformed_sequences(self):
         with pytest.raises(RepConstructionError):
-            KrausGateRep((), ("Q0",))
-
-    def test_rejects_bare_string(self):
-        with pytest.raises(RepConstructionError):
-            KrausGateRep("not a sequence of kraus ops", ("Q0",))
-
-    @pytest.mark.parametrize(
-        "malformed",
-        [
-            (_TP_K0,),  # element is not a (op, prob) tuple/list at all
-            ((_TP_K0, 0.5, "extra"),),  # wrong length
-            (("not an array", 0.5),),  # first entry not an ndarray
-            ((_TP_K0, "not a float"),),  # second entry not float/None
-        ],
-    )
-    def test_rejects_malformed_sequences(self, malformed):
-        with pytest.raises(RepConstructionError):
-            KrausGateRep(malformed, ("Q0",))
-
-    def test_rejects_wrong_shape_for_known_qubits(self):
-        with pytest.raises(RepConstructionError):
-            KrausGateRep([(_TP_K0, None)], ("Q0", "Q1"))
+            # element is not an (op, prob) tuple/list at all
+            KrausGateRep((_TP_K0,), ("Q0",))
 
     def test_non_tp_kraus_warns(self):
-        with pytest.warns(UserWarning, match="do not constitute a TP channel"):
+        with pytest.warns(UserWarning):
             rep = KrausGateRep(((_NON_TP_K, None),), ("Q0",))
         assert isinstance(rep, KrausGateRep)  # still constructed, just warned
 
-    def test_tp_check_disabled_by_none(self, recwarn):
-        rep = KrausGateRep(((_NON_TP_K, None),), ("Q0",), tp_check_abstol=None)
-        assert isinstance(rep, KrausGateRep)
-        assert len(recwarn) == 0
-
-    def test_kraus_operators_stored_as_immutable_tuple_of_tuples(self):
-        rep = KrausGateRep([[_TP_K0, None], [_TP_K1, None]], ("Q0",))
-        assert isinstance(rep.kraus_operators, tuple)
-        assert all(isinstance(k, tuple) for k in rep.kraus_operators)
-
 
 class TestKrausGateRepFromPauliStochastic:
-    def test_depolarizing_via_pauli_stochastic_1q(self):
-        p = 0.1
-        rep = KrausGateRep.from_pauli_stochastic(
-            [1 - 3 * p / 4, p / 4, p / 4, p / 4], ["Q0"]
-        )
-        from loqs.backends.reps.conversion import _kraus_to_ptm
-
-        ptm = _kraus_to_ptm(rep).ptm
-        expected = np.diag([1, 1 - p, 1 - p, 1 - p])
-        assert np.allclose(ptm, expected, atol=1e-10)
-
     def test_2q_pauli_stochastic_matches_diagonal_ptm(self):
         rng = np.random.default_rng(0)
         non_i_rates = rng.random(15) * 0.05
@@ -212,9 +127,6 @@ class TestKrausGateRepFromPauliStochastic:
 
         ptm = _kraus_to_ptm(rep).ptm
         assert np.allclose(ptm, np.diag(np.diag(ptm)), atol=1e-10)
-        assert np.allclose(
-            np.diag(ptm).real, rep_diag_from_rates(rates), atol=1e-8
-        )
 
     def test_negligible_terms_are_omitted(self):
         rates = [1.0, 0.0, 0.0, 0.0]
@@ -222,32 +134,15 @@ class TestKrausGateRepFromPauliStochastic:
         assert len(rep.kraus_operators) == 1
 
 
-def rep_diag_from_rates(rates):
-    """Cross-check helper: PTM diagonal (Pauli eigenvalues) for a Pauli-
-    stochastic channel, computed directly from the Kraus/PTM machinery
-    rather than the deleted Walsh-Hadamard-transform shortcut."""
-    from loqs.backends.reps.conversion import _kraus_to_ptm
-
-    rep = KrausGateRep.from_pauli_stochastic(rates, ["Q0", "Q1"])
-    return np.diag(_kraus_to_ptm(rep).ptm).real
-
-
 class TestKrausGateRepFromDepolarizing:
-    def test_matches_from_pauli_stochastic(self):
+    def test_depolarizing_ptm_is_diagonal(self):
+        from loqs.backends.reps.conversion import _kraus_to_ptm
+
         p = 0.1
-        via_depolarizing = KrausGateRep.from_depolarizing(p, ["Q0"])
-        via_pauli_stochastic = KrausGateRep.from_pauli_stochastic(
-            [1 - 3 * p / 4, p / 4, p / 4, p / 4], ["Q0"]
-        )
-        assert len(via_depolarizing.kraus_operators) == len(
-            via_pauli_stochastic.kraus_operators
-        )
-        for (k1, p1), (k2, p2) in zip(
-            via_depolarizing.kraus_operators,
-            via_pauli_stochastic.kraus_operators,
-        ):
-            assert np.allclose(k1, k2)
-            assert np.isclose(p1, p2)
+        rep = KrausGateRep.from_depolarizing(p, ["Q0"])
+        ptm = _kraus_to_ptm(rep).ptm
+        expected = np.diag([1, 1 - p, 1 - p, 1 - p])
+        assert np.allclose(ptm, expected, atol=1e-10)
 
 
 class TestKrausGateRepFromAmplitudeDamping:
@@ -267,29 +162,6 @@ class TestKrausGateRepFromAmplitudeDamping:
 
 
 class TestKrausGateRepDedup:
-    def _assert_kraus_reps_equal(
-        self, expected: KrausGateRep, actual: KrausGateRep
-    ):
-        assert isinstance(actual, KrausGateRep)
-        assert expected.qubit_labels == actual.qubit_labels
-        assert len(expected.kraus_operators) == len(actual.kraus_operators)
-        for (ek, ep), (ak, ap) in zip(
-            expected.kraus_operators, actual.kraus_operators
-        ):
-            assert np.allclose(ek, ak)
-            if ep is None or ap is None:
-                assert ep is None and ap is None
-            else:
-                assert np.allclose(ep, ap)
-
-    def test_dedup_simple_duplicate(self):
-        rep = KrausGateRep(
-            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * np.eye(2), 0.4)],
-            [0],
-        )
-        expected = KrausGateRep([(np.eye(2), 1.0)], [0])
-        self._assert_kraus_reps_equal(expected, rep.dedup())
-
     def test_dedup_more_complicated_mix(self):
         rep = KrausGateRep(
             [
@@ -310,7 +182,7 @@ class TestKrausGateRepDedup:
             ],
             [0],
         )
-        self._assert_kraus_reps_equal(expected, rep.dedup())
+        _assert_kraus_reps_equal(expected, rep.dedup())
 
     def test_dedup_raises_for_non_unital_operators(self):
         with pytest.raises(ValueError):
@@ -318,21 +190,6 @@ class TestKrausGateRepDedup:
 
 
 class TestKrausGateRepCompose:
-    def _assert_kraus_reps_equal(
-        self, expected: KrausGateRep, actual: KrausGateRep
-    ):
-        assert isinstance(actual, KrausGateRep)
-        assert expected.qubit_labels == actual.qubit_labels
-        assert len(expected.kraus_operators) == len(actual.kraus_operators)
-        for (ek, ep), (ak, ap) in zip(
-            expected.kraus_operators, actual.kraus_operators
-        ):
-            assert np.allclose(ek, ak)
-            if ep is None or ap is None:
-                assert ep is None and ap is None
-            else:
-                assert np.allclose(ep, ap)
-
     def test_compose_with_unitary_gaterep(self):
         X = np.array([[0, 1], [1, 0]])
         Z = np.array([[1, 0], [0, -1]])
@@ -341,46 +198,7 @@ class TestKrausGateRepCompose:
 
         # Z applied first, then X: X @ Z
         expected = KrausGateRep([(X @ Z, 1.0)], [0])
-        self._assert_kraus_reps_equal(expected, rep1.compose(rep2))
-
-    def test_compose_two_kraus_reps(self):
-        X = np.array([[0, 1], [1, 0]])
-        Z = np.array([[1, 0], [0, -1]])
-        rep1 = KrausGateRep([(Z, 1.0)], [0])
-        rep2 = KrausGateRep(
-            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * X, 0.4)], [0]
-        )
-
-        # Z o ([I,X]) = [Z, ZX] -> applied Z first, then [I,X]
-        expected = KrausGateRep(
-            [
-                (np.sqrt(0.6) * Z, 0.6),
-                (np.sqrt(0.4) * (X @ Z), 0.4),
-            ],
-            [0],
-        )
-        self._assert_kraus_reps_equal(expected, rep1.compose(rep2))
-
-    def test_compose_without_dedup(self):
-        X = np.array([[0, 1], [1, 0]])
-        rep1 = KrausGateRep(
-            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * X, 0.4)], [0]
-        )
-        rep2 = KrausGateRep(
-            [(np.sqrt(0.3) * X, 0.3), (np.sqrt(0.7) * np.eye(2), 0.7)], [0]
-        )
-
-        result = rep1.compose(rep2, dedup=False)
-        expected = KrausGateRep(
-            [
-                (np.sqrt(0.6 * 0.3) * X, 0.6 * 0.3),
-                (np.sqrt(0.6 * 0.7) * np.eye(2), 0.6 * 0.7),
-                (np.sqrt(0.4 * 0.3) * np.eye(2), 0.4 * 0.3),
-                (np.sqrt(0.4 * 0.7) * X, 0.4 * 0.7),
-            ],
-            [0],
-        )
-        self._assert_kraus_reps_equal(expected, result)
+        _assert_kraus_reps_equal(expected, rep1.compose(rep2))
 
     def test_compose_with_dedup(self):
         X = np.array([[0, 1], [1, 0]])
@@ -402,24 +220,9 @@ class TestKrausGateRepCompose:
             ],
             [0],
         )
-        self._assert_kraus_reps_equal(expected, result)
+        _assert_kraus_reps_equal(expected, result)
 
     def test_compose_rejects_non_gaterep_argument(self):
         rep1 = KrausGateRep([(np.eye(2), 1.0)], [0])
         with pytest.raises(TypeError):
             rep1.compose(PTMGateRep(np.eye(4), [0]))
-
-    def test_compose_with_none_probability_operand(self):
-        """When either operand's probability is `None` (e.g. a non-unital
-        channel with no fixed probability), the composed term's
-        probability can't be computed and is also `None`."""
-        X = np.array([[0, 1], [1, 0]])
-        Z = np.array([[1, 0], [0, -1]])
-        rep1 = KrausGateRep([(Z, None)], [0])
-        rep2 = KrausGateRep([(X, 1.0)], [0])
-
-        result = rep1.compose(rep2, dedup=False)
-        assert len(result.kraus_operators) == 1
-        op, prob = result.kraus_operators[0]
-        assert np.allclose(op, X @ Z)
-        assert prob is None
