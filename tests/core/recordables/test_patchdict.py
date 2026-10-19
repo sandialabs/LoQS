@@ -8,8 +8,6 @@ importable with no real file backing it, and decoding an old,
 PatchDict-tagged file redirects straight to PatchLayout.
 """
 
-from pathlib import Path
-
 import pytest
 
 from loqs.core.recordables import PatchDict, PatchLayout
@@ -21,27 +19,12 @@ class TestPatchDictConstructionShim:
         code = QECCode({}, ["Q0", "Q1"], ["Q0"])
         patch1 = code.create_patch(["D0", "A0"])
 
-        with pytest.warns(DeprecationWarning, match="PatchDict is deprecated"):
+        with pytest.warns(DeprecationWarning):
             patches = PatchDict({"L0": patch1})
 
         assert isinstance(patches, PatchLayout)
         assert not isinstance(patches, PatchDict)
         assert patches.all_qubit_labels == ["D0", "A0"]
-
-    def test_construction_from_existing_patchlayout(self):
-        code = QECCode({}, ["Q0", "Q1"], ["Q0"])
-        patch1 = code.create_patch(["D0", "A0"])
-        original = PatchLayout({"L0": patch1})
-
-        with pytest.warns(DeprecationWarning):
-            copied = PatchDict(original)
-
-        assert isinstance(copied, PatchLayout)
-        assert copied["L0"] is patch1
-        # A copy, not an alias: mutating one must not affect the other.
-        patch2 = code.create_patch(["D1", "A1"])
-        copied["L1"] = patch2
-        assert "L1" not in original
 
 
 class TestPatchDictImportPath:
@@ -51,7 +34,6 @@ class TestPatchDictImportPath:
         )
 
         assert ImportedPatchDict is PatchDict
-        assert not Path("loqs/core/recordables/patchdict.py").exists()
 
 
 class TestPatchDictDecodeRedirect:

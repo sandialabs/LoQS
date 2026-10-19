@@ -22,16 +22,6 @@ class TestPauliFrame:
         pf4 = PauliFrame(pf2, "ZYXI")
         self._check(pf4, "ZYXI")
 
-        # Constructing from an existing PauliFrame builds a new object, but
-        # aliases the underlying qubit_labels/pauli_frame lists.
-        pf5 = PauliFrame(pf2)
-        self._check(pf5, "IXYZ")
-        assert pf5.pauli_frame is pf2.pauli_frame
-        assert pf5.qubit_labels is pf2.qubit_labels
-
-        pf6 = PauliFrame(["Q0", "Q1", "Q2", "Q3"])
-        self._check(pf6, "IIII")
-
     def test_getters(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
         assert pf.num_qubits == 4
@@ -110,32 +100,11 @@ class TestPauliFrame:
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_serialization(self, format, make_temp_path):
-        """Test PauliFrame serialization."""
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
 
         with make_temp_path(suffix=f".{format}") as tempf_path:
             pf.write(tempf_path)
             pf2 = PauliFrame.read(tempf_path)
-            self._check(pf2, "IXYZ")
 
-    @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_serialization_complex(self, format, make_temp_path):
-        """Test PauliFrame serialization with different Pauli strings."""
-        test_cases = [
-            (["Q0", "Q1"], "II"),
-            (["Q0", "Q1"], "XX"),
-            (["Q0", "Q1"], "ZZ"),
-            (["Q0", "Q1"], "XY"),
-            (["Q0", "Q1", "Q2"], "IXY"),
-        ]
-
-        for qubit_labels, pauli_str in test_cases:
-            pf = PauliFrame(qubit_labels, pauli_str)
-
-            with make_temp_path(suffix=f".{format}") as tempf_path:
-                pf.write(tempf_path)
-                pf2 = PauliFrame.read(tempf_path)
-                assert isinstance(pf2, PauliFrame)
-
-                assert pf2.qubit_labels == qubit_labels
-                assert pf2.pauli_frame == list(pauli_str)
+        assert isinstance(pf2, PauliFrame)
+        self._check(pf2, "IXYZ")

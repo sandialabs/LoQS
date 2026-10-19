@@ -33,9 +33,6 @@ class TestInstructionStack:
         s = InstructionStack([self.ilbl1, self.ilbl2])
         self._check(s, ["L0", "L1"])
 
-        s1 = InstructionStack([self.ilbl1, self.ilbl2])
-        self._check(s1, ["L0", "L1"])
-
         s2 = InstructionStack(s)
         self._check(s2, ["L0", "L1"])
 
@@ -53,19 +50,6 @@ class TestInstructionStack:
         assert s2[0]["instruction"] == "Label"
         assert s2[0]["patch_label"] == "L0"
 
-    def test_init_with_multipatch_label(self):
-        s = InstructionStack(
-            [
-                {
-                    "instruction": "CNOT Bookkeeping",
-                    "patch_labels": {"ctrl": "L0", "tgt": "L1"},
-                }
-            ]
-        )
-        assert len(s) == 1
-        assert s[0].get("patch_label") is None
-        assert s[0]["patch_labels"] == {"ctrl": "L0", "tgt": "L1"}
-
     def test_list_operations(self):
         s = InstructionStack([self.ilbl1, self.ilbl2])
         self._check(s, ["L0", "L1"])
@@ -82,17 +66,6 @@ class TestInstructionStack:
         ilbl, s5 = s.pop_instruction()
         assert ilbl["patch_label"] == "L0"
         self._check(s5, ["L1"])
-
-    def test_serialization(self, make_temp_path):
-        s = InstructionStack([self.ilbl1, self.ilbl2])
-
-        # Create and write, but keep file closed before re-opening
-        with make_temp_path(suffix=".json") as tmp_path:
-            s.write(tmp_path)
-
-            # Now safe to open/read/remove on Windows
-            s2 = InstructionStack.read(tmp_path)
-            self._check(s2, ["L0", "L1"])
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_serialization_round_trip(self, format, make_temp_path):

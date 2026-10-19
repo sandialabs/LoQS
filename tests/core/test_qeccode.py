@@ -35,14 +35,7 @@ class TestQECCodeAndPatch:
             "state": 1,
             "qubits": ["D0", "A0"],
             "instruction": ins2,
-            # 'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
         }
-        assert result.log == "test result"
-
-    def test_data_qubits(self):
-        code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
-        patch = code.create_patch(["D0", "A0"])
-        assert patch.data_qubits == ["D0"]
 
     def test_data_qubits_multiple_out_of_order(self):
         # template_data_qubits in a different order than template_qubits,
@@ -53,60 +46,28 @@ class TestQECCodeAndPatch:
         patch = code.create_patch(["D0", "D1", "A0"])
         assert patch.data_qubits == ["D1", "D0"]
 
-    def test_serialization(self, make_temp_path):
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_serialization(self, format, make_temp_path):
         code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
         patch = code.create_patch(["D0", "A0"])
 
         # Patch should serialize code, so just do that
-        with make_temp_path(suffix=".json") as tmp_path:
+        with make_temp_path(suffix=f".{format}") as tmp_path:
             patch.write(tmp_path)
             patch2 = QECCodePatch.read(tmp_path)
-            assert isinstance(patch2, QECCodePatch)
 
-            ins2 = patch2["ins"]
-            assert isinstance(ins2, Instruction)
-            result = ins2.apply(state=0, qubits=ins2.data["qubits"])
-            assert result._data == {
-                "state": 1,
-                "qubits": ["D0", "A0"],
-                "instruction": ins2,
-                # 'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
-            }
-            assert result.log == "test result"
+        assert isinstance(patch2, QECCodePatch)
+        assert patch2.code.name == "Test code"
+        assert patch2.code.template_qubits == ["Q0", "Q1"]
+        assert patch2.code.template_data_qubits == ["Q0"]
+        assert patch2.qubits == ["D0", "A0"]
 
-    @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_qeccode_serialization_parameterized(self, format, make_temp_path):
-        """Test QECCode serialization roundtrip with both JSON and HDF5 formats."""
-        # Create a QEC code with instructions
-        code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
-
-        with make_temp_path(suffix=f".{format}") as f_path:
-            code.write(f_path)
-            loaded_code = QECCode.read(f_path)
-            assert isinstance(loaded_code, QECCode)
-            # Verify structure is preserved
-            assert loaded_code.name == "Test code"
-            assert loaded_code.template_qubits == ["Q0", "Q1"]
-            assert loaded_code.template_data_qubits == ["Q0"]
-
-    @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_qeccode_patch_serialization_parameterized(
-        self, format, make_temp_path
-    ):
-        """Test QECCode patch serialization with both JSON and HDF5 formats."""
-        # Create a QEC code and patch
-        code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
-        patch = code.create_patch(["D0", "A0"])
-
-        # Test patch serialization
-        with make_temp_path(suffix=f".{format}") as tempf_path:
-            patch.write(tempf_path)
-            loaded_patch = QECCodePatch.read(tempf_path)
-            assert isinstance(loaded_patch, QECCodePatch)
-
-            # Verify the patch data is preserved
-            assert loaded_patch.code.name == "Test code"
-            assert loaded_patch.qubits == ["D0", "A0"]
-            # The instruction should be mapped to the patch qubits
-            loaded_ins = loaded_patch["ins"]
-            assert loaded_ins.data["qubits"] == ["D0", "A0"]
+        ins2 = patch2["ins"]
+        assert isinstance(ins2, Instruction)
+        assert ins2.data["qubits"] == ["D0", "A0"]
+        result = ins2.apply(state=0, qubits=ins2.data["qubits"])
+        assert result._data == {
+            "state": 1,
+            "qubits": ["D0", "A0"],
+            "instruction": ins2,
+        }

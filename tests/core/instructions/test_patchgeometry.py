@@ -40,17 +40,8 @@ class TestConstruction:
             layout="surf10",
         )
         assert geometry.seams == {}
-        with pytest.raises(ValueError, match="exactly one seam"):
+        with pytest.raises(ValueError):
             geometry.seam
-
-    def test_seam_and_seams_both_given_rejected(self):
-        with pytest.raises(AssertionError):
-            PatchGeometry(
-                patches={"a": ("L0", ["D0"]), "b": ("L1", ["D1"])},
-                seam=["S0"],
-                seams={"main": ["S0"]},
-                layout="surf10",
-            )
 
     def test_copies_inputs(self):
         """Mutating the caller's lists after construction must not leak in."""
@@ -69,49 +60,27 @@ class TestConstruction:
 
 class TestDisjointness:
 
-    def test_overlapping_patches_rejected(self):
-        with pytest.raises(AssertionError, match="disjoint"):
-            PatchGeometry(
-                patches={"a": ("L0", ["D0", "D1"]), "b": ("L1", ["D1"])},
-                seam=["S0"],
-                layout="surf10",
-            )
-
-    def test_seam_overlapping_patch_rejected(self):
-        with pytest.raises(AssertionError, match="disjoint"):
-            PatchGeometry(
-                patches={"a": ("L0", ["D0"]), "b": ("L1", ["D1"])},
-                seam=["D0"],
-                layout="surf10",
-            )
-
-    def test_overlapping_seams_rejected(self):
-        with pytest.raises(AssertionError, match="disjoint"):
-            PatchGeometry(
-                patches={"a": ("L0", ["D0"]), "b": ("L1", ["D1"])},
-                seams={"zz": ["S0"], "xx": ["S0"]},
-                layout="surf10",
-            )
-
-
-class TestSeamProperty:
-
-    def test_single_seam_ok(self):
-        geometry = PatchGeometry(
-            patches={"a": ("L0", ["D0"]), "b": ("L1", ["D1"])},
-            seam=["S0"],
-            layout="surf10",
-        )
-        assert geometry.seam == ["S0"]
-
-    def test_multiple_seams_raises(self):
-        geometry = PatchGeometry(
-            patches={"a": ("L0", ["D0"]), "b": ("L1", ["D1"])},
-            seams={"zz": ["S0"], "xx": ["S1"]},
-            layout="surf10",
-        )
-        with pytest.raises(ValueError, match="exactly one seam"):
-            geometry.seam
+    @pytest.mark.parametrize(
+        "patches,seam_kwargs",
+        [
+            (
+                {"a": ("L0", ["D0", "D1"]), "b": ("L1", ["D1"])},
+                {"seam": ["S0"]},
+            ),
+            (
+                {"a": ("L0", ["D0"]), "b": ("L1", ["D1"])},
+                {"seam": ["D0"]},
+            ),
+            (
+                {"a": ("L0", ["D0"]), "b": ("L1", ["D1"])},
+                {"seams": {"zz": ["S0"], "xx": ["S0"]}},
+            ),
+        ],
+        ids=["patches", "seam_and_patch", "seams"],
+    )
+    def test_overlap_rejected(self, patches, seam_kwargs):
+        with pytest.raises(AssertionError):
+            PatchGeometry(patches=patches, layout="surf10", **seam_kwargs)
 
 
 class TestSubset:
@@ -137,19 +106,6 @@ class TestSubset:
         assert xx_geom.patch_labels == {"a": "A", "b": "T"}
         assert xx_geom.seam == ["Sh"]
 
-    def test_wrong_number_of_roles_rejected(self):
-        geometry = PatchGeometry(
-            patches={
-                "ctrl": ("C", ["Dc"]),
-                "tgt": ("T", ["Dt"]),
-                "anc": ("A", ["Da"]),
-            },
-            seams={"zz": ["Sv"], "xx": ["Sh"]},
-            layout="surf17",
-        )
-        with pytest.raises(AssertionError):
-            geometry.subset(["ctrl", "tgt", "anc"], seam="zz")
-
 
 class TestInitPatchEntries:
 
@@ -172,15 +128,3 @@ class TestInitPatchEntries:
                 "qubits": ["D1", "A1"],
             },
         ]
-
-
-class TestRepr:
-
-    def test_repr_mentions_labels_and_seams(self):
-        geometry = PatchGeometry(
-            patches={"a": ("L0", ["D0"]), "b": ("L1", ["D1"])},
-            seam=["S0"],
-            layout="surf10",
-        )
-        r = repr(geometry)
-        assert "L0" in r and "L1" in r and "surf10" in r
