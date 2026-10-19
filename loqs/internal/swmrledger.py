@@ -17,18 +17,35 @@ picks which of the six available fields it needs (an item-level ledger
 wants all six; a shot-level ledger typically omits the in-flight-item
 fields), so this module never assumes a fixed schema.
 
-SWMR relies on the file system preserving POSIX write ordering, so
-ledgers need a local disk or a parallel file system such as Lustre or
-GPFS, not an NFS or SMB share. Ledger opens turn HDF5 file locking off:
+SWMR relies on the file system preserving POSIX write ordering. Without
+it (an NFS or SMB share), live progress reads can stall or show wrong
+counts; results never depend on ledger contents, so they stay correct.
+Use a local disk or a parallel file system such as Lustre or GPFS for
+reliable live progress. Ledger opens turn HDF5 file locking off:
 SWMR's guarantees don't depend on it, and the locks are what made a
 writer's open fail while a reader was polling the ledger.
+
+HDF5 drops its own lock once a SWMR-write open completes, so a writer
+also holds an exclusive `flock` on its ledger until it closes the file
+(best effort: an open never fails because the lock couldn't be taken).
+A killed writer leaves HDF5's "open for write" flag set, which fails
+every open but an SWMR read. When a writer open fails, this process
+holds no handle on the file and no live writer holds the `flock`, the
+ledger is rebuilt without the flag (copied under a `.tmp` name and
+renamed into place) and reopened, so an explicit `worker_id` can be
+reused after a crash. Two gaps remain: where `flock` isn't coherent
+across nodes (Lustre `localflock`, NFS), two live writers on different
+nodes sharing one explicit worker id aren't detected; and on Windows
+there is no recovery.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
+import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +53,9 @@ from typing import Any, Iterable, Iterator, Sequence
 
 import h5py
 import numpy as np
+
+if sys.platform != "win32":
+    import fcntl
 
 DEFAULT_GROUP_NAME = "swmr_ledger"
 DEFAULT_CHUNK_SIZE = 1024
@@ -178,6 +198,12 @@ def open_swmr_writer(
     make the open fail. An existing ledger must already hold every
     requested field; `capacity` and `chunk_size` only apply to a new one.
 
+    The returned file holds an exclusive `flock` on `path` until its
+    `close()`. If the open fails because a killed writer left its "open
+    for write" flag set, the ledger is rebuilt without the flag and
+    reopened, unless this process holds a handle on it or a live writer
+    holds the lock; then the original `OSError` is raised.
+
     Parameters
     ----------
     path : Path
@@ -202,6 +228,8 @@ def open_swmr_writer(
     ValueError
         If `fields` names an unknown field, or an existing ledger lacks
         one of `fields`.
+    OSError
+        If an existing ledger can't be opened and isn't recoverable.
     """
     path = Path(path)
     if path.exists():
@@ -229,6 +257,139 @@ def open_swmr_writer(
     return _reopen_swmr_writer(path, fields, group_name)
 
 
+def _try_lock_exclusive(path: Path) -> int | None:
+    """Take a non-blocking exclusive `flock` on `path`, returning the file
+    descriptor that holds it, or `None` if the lock can't be taken (held
+    elsewhere, unsupported, open failed, or on Windows, which has no
+    `fcntl`).
+
+    `flock` locks belong to the open file description and the OS drops
+    them when the process dies. Record locks (`lockf`) would instead drop
+    whenever any descriptor of the file closes, as a SWMR reader's does.
+    """
+    if sys.platform != "win32":
+        fd: int | None = None
+        try:
+            fd = os.open(path, os.O_RDONLY)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+    return None
+
+
+class _LockedWriterFile(h5py.File):
+    """An `h5py.File` that also owns the writer lock's file descriptor.
+
+    `close()` releases the lock. The release runs once, so an explicit
+    close and the garbage-collection backstop can't close a descriptor
+    number the OS has since reused.
+    """
+
+    def __init__(self, fid: Any, lock_fd: int | None) -> None:
+        super().__init__(fid)
+        self._lock_release = (
+            weakref.finalize(self, os.close, lock_fd)
+            if lock_fd is not None
+            else None
+        )
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            release = getattr(self, "_lock_release", None)
+            if release is not None:
+                release()
+
+
+def _open_swmr_write_fid(path: Path) -> Any:
+    """Open `path` in SWMR write mode with HDF5 file locking off."""
+    fapl = h5py.h5p.create(h5py.h5p.FILE_ACCESS)
+    fapl.set_libver_bounds(h5py.h5f.LIBVER_LATEST, h5py.h5f.LIBVER_LATEST)
+    fapl.set_file_locking(False, True)
+    return h5py.h5f.open(
+        os.fsencode(path),
+        h5py.h5f.ACC_RDWR | h5py.h5f.ACC_SWMR_WRITE,
+        fapl=fapl,
+    )
+
+
+def _process_holds_file(path: Path) -> bool:
+    """Whether this process has an HDF5 file handle open on `path`."""
+    for fid in h5py.h5f.get_obj_ids(types=h5py.h5f.OBJ_FILE):
+        try:
+            name = os.fsdecode(h5py.h5f.get_name(fid))
+            if os.path.samefile(name, path):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _rebuild_ledger(path: Path, tmp_path: Path) -> None:
+    """Copy `path`'s root members and attributes into a new file at
+    `tmp_path`, which has no stale writer flag."""
+    with h5py.File(
+        path, "r", libver="latest", swmr=True, locking=False
+    ) as src:
+        with h5py.File(tmp_path, "w", libver="latest") as dst:
+            for name in src:
+                src.copy(name, dst, name=name)
+            for key, value in src.attrs.items():
+                dst.attrs[key] = value
+
+
+def _recover_stale_ledger(
+    path: Path, original: OSError
+) -> tuple[Any, int | None]:
+    """Recover a ledger whose SWMR-write open failed with `original`, and
+    return the retried open's file id and writer lock descriptor.
+
+    A killed writer leaves HDF5's "open for write" flag set, which fails
+    every open but an SWMR read. If this process holds no handle on `path`
+    and no live writer holds its `flock`, the ledger is rebuilt under a
+    `.tmp` name and renamed onto `path`. Otherwise, or if any step fails,
+    `original` is raised (chained from the failure, if any).
+    """
+    if _process_holds_file(path):
+        raise original
+    old_lock = _try_lock_exclusive(path)
+    if old_lock is None:
+        raise original
+
+    tmp_path = path.with_name(path.name + ".tmp")
+    new_lock: int | None = None
+    failure: Exception | None = None
+    try:
+        try:
+            _rebuild_ledger(path, tmp_path)
+            new_lock = _try_lock_exclusive(tmp_path)
+            os.replace(tmp_path, path)
+        except Exception as err:
+            failure = err
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            if new_lock is not None:
+                os.close(new_lock)
+            raise
+    finally:
+        os.close(old_lock)
+    if failure is not None:
+        tmp_path.unlink(missing_ok=True)
+        if new_lock is not None:
+            os.close(new_lock)
+        raise original from failure
+
+    try:
+        return _open_swmr_write_fid(path), new_lock
+    except OSError as err:
+        if new_lock is not None:
+            os.close(new_lock)
+        raise err from original
+
+
 def _reopen_swmr_writer(
     path: Path,
     fields: Sequence[str],
@@ -246,15 +407,12 @@ def _reopen_swmr_writer(
         If the ledger group or any of `fields` is missing; datasets can't
         be created once SWMR write mode is active.
     """
-    fapl = h5py.h5p.create(h5py.h5p.FILE_ACCESS)
-    fapl.set_libver_bounds(h5py.h5f.LIBVER_LATEST, h5py.h5f.LIBVER_LATEST)
-    fapl.set_file_locking(False, True)
-    fid = h5py.h5f.open(
-        os.fsencode(path),
-        h5py.h5f.ACC_RDWR | h5py.h5f.ACC_SWMR_WRITE,
-        fapl=fapl,
-    )
-    f = h5py.File(fid)
+    try:
+        fid = _open_swmr_write_fid(path)
+        lock_fd = _try_lock_exclusive(path)
+    except OSError as err:
+        fid, lock_fd = _recover_stale_ledger(path, err)
+    f = _LockedWriterFile(fid, lock_fd)
     group = f.get(group_name)
     if not isinstance(group, h5py.Group):
         missing = [group_name]

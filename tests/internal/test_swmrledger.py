@@ -5,6 +5,8 @@ import faulthandler
 import multiprocessing
 import os
 import queue as queue_module
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -12,6 +14,7 @@ import h5py
 import numpy as np
 import pytest
 
+import loqs.internal.swmrledger as swmrledger_module
 from loqs.internal import worker_id
 from loqs.internal.swmrledger import (
     SwmrLedgerSnapshot,
@@ -489,6 +492,87 @@ class TestSwmrLedgerUnit:
         # this module's cached state) must never reuse the cached value.
         monkeypatch.setattr(os, "getpid", lambda: real_getpid() + 12345)
         assert worker_id() != first
+
+    _HOLDING_WRITER_SCRIPT = """
+import sys
+import time
+
+from loqs.internal.swmrledger import mark_ledger_item_done, open_swmr_writer
+
+_, group = open_swmr_writer(sys.argv[1], ["done", "wall_clock_times"])
+mark_ledger_item_done(group, 3, 1.5)
+print("ready", flush=True)
+time.sleep(600)
+"""
+
+    def _start_holding_writer(self, path):
+        loqs_root = Path(swmrledger_module.__file__).resolve().parents[2]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(loqs_root), env.get("PYTHONPATH", "")]
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", self._HOLDING_WRITER_SCRIPT, str(path)],
+            stdout=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        try:
+            assert proc.stdout is not None
+            assert proc.stdout.readline().strip() == "ready"
+        except BaseException:
+            proc.kill()
+            proc.wait(timeout=30)
+            raise
+        return proc
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Rebuilding a killed writer's ledger needs an fcntl lock, so "
+        "Windows refuses instead",
+    )
+    def test_reopen_after_killed_writer_clears_stale_flag(self, tmp_path):
+        """A ledger whose writer was killed while it held the file reopens
+        with its done flags and fill values intact, and no `.tmp` is left."""
+        path = tmp_path / "ledger.h5"
+        proc = self._start_holding_writer(path)
+        proc.kill()
+        proc.wait(timeout=30)
+
+        f, group = open_swmr_writer(path, ["done", "wall_clock_times"])
+        try:
+            assert bool(group["done"][3]) is True
+            mark_ledger_item_done(group, 20, 2.5)
+            done = group["done"][()]
+            assert done[20] and done[3]
+            assert not done[4:20].any()
+            assert np.isnan(group["wall_clock_times"][10])
+        finally:
+            f.close()
+
+        with h5py.File(path, "r") as plain:
+            assert bool(plain["swmr_ledger"]["done"][3]) is True
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_live_writer_ledger_is_left_alone(self, tmp_path):
+        """A second writer on a ledger a live process holds fails, and
+        neither replaces the file nor leaves a `.tmp`."""
+        path = tmp_path / "ledger.h5"
+        proc = self._start_holding_writer(path)
+        try:
+            inode = os.stat(path).st_ino
+            with pytest.raises(OSError):
+                open_swmr_writer(path, ["done", "wall_clock_times"])
+            assert os.stat(path).st_ino == inode
+            assert list(tmp_path.glob("*.tmp")) == []
+            f, group = open_swmr_reader(path)
+            try:
+                assert bool(group["done"][3]) is True
+            finally:
+                f.close()
+        finally:
+            proc.kill()
+            proc.wait(timeout=30)
 
 
 def _open_hdf5_file_names() -> set[str]:

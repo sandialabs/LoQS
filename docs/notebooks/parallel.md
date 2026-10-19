@@ -79,7 +79,9 @@ small `dataclass`, reused identically by every program-level call site:
 
 - `program_executor`: dispatches chunks, auto-selecting one `.submit()` call
   per chunk vs. a bulk `.map_array()` call depending on which protocol it
-  satisfies.
+  satisfies. It also accepts a zero-argument factory, called once and cached
+  like an `ExecutorSpec` (see the `submitit` section below for checkpointing
+  with one).
 - `n_program_chunks`: how many round-robin chunks to split the batch into.
 - `shot_executor`: nested shot-level parallelism. A live executor can't
   normally cross the process boundary each dispatched chunk crosses once
@@ -301,6 +303,33 @@ On a real cluster, `submitit.Executor`'s own `slurm_*` parameters (e.g.
 `max_workers`, so each array task actually gets the cores its own nested
 executor tries to use.
 
+To checkpoint a submitit run, pass `program_executor` a zero-argument factory
+rather than a live executor, since LoQS can't rebuild a `submitit.AutoExecutor`
+from its own state. The factory is stored as source in the runner file, so
+define it at module level in a `.py` file, with its imports and settings in its
+body:
+
+```python
+def make_executor():
+    import submitit
+
+    executor = submitit.AutoExecutor(folder="submitit-logs")
+    executor.update_parameters(timeout_min=30, slurm_partition="short")
+    return executor
+
+
+strategy = ParallelStrategy(
+    program_executor=make_executor,
+    n_program_chunks=8,
+)
+runner = fttools.FaultInjectionRunner(
+    programs,
+    parallel_strategy=strategy,
+    config=CheckpointConfig(item_checkpoint_dir="checkpoints"),
+    ...,
+)
+```
+
 ### Multi-node parallelism via `MPI`
 
 `mpi4py.futures.MPIPoolExecutor` is a real `concurrent.futures.Executor`
@@ -409,10 +438,23 @@ deletes the payloads and ledgers -- callers never need to touch the
 per-worker files themselves. Each payload references the parent program
 stored once in `results.h5` rather than embedding its own copy.
 
-The progress ledgers rely on SWMR, which needs a file system that preserves
-POSIX write ordering: a local disk, or a parallel file system such as Lustre
-or GPFS. Keep checkpoint directories, for both `QuantumProgram.run()` and
-`MultiProgramRunner`, off NFS and SMB (Windows network) shares.
+The progress ledgers' SWMR mode relies on the file system preserving POSIX
+write ordering while a ledger is being written. Only live progress reads
+depend on that ordering. Results, resume and consolidation read only each
+ledger's root group, to tell it from a data file, and take every result from
+the payload files, which each worker closes before marking its shots done.
+So on an NFS or SMB (Windows network) share the risk is live progress that
+stalls or shows wrong counts, not wrong results. For reliable live progress,
+keep checkpoint directories, for both `QuantumProgram.run()` and
+`MultiProgramRunner`, on a local disk or a parallel file system such as
+Lustre or GPFS.
+
+Checkpointing needs process-based executors: loky,
+`concurrent.futures.ProcessPoolExecutor`, submitit or `mpi4py.futures`. With
+a thread executor, a worker thread's ledger open fails while the driver's
+poll holds a reader of that ledger, and threads that share one held ledger
+race when they grow it. Threads don't speed up shots anyway, since shots run
+under the GIL.
 
 ```{code-cell} ipython3
 import tempfile

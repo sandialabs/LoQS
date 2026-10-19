@@ -134,15 +134,13 @@ class Instruction(Displayable):
        version persists through deserialization, so re-serializing
        after deserialization still works even without access to the
        original source code.
-    3. As a side effect of the string versions of the functions
-       being used for serialization, these are also the objects
-       used when hashing and (potentially importantly) when doing
-       equality testing. Two [](api:Instruction) objects can have
-       functionally equivalently [](api:apply_fn) and [](api:map_qubits_fn),
-       but they will not test as equal if the string representations differ
-       in any way. Similarly, two [](api:Instruction) objects that
-       have very different functions would test as equal if one had
-       serialized versions that were set to match with the other.
+    3. Equality compares the data contents and the serialized (string)
+       versions of the functions, so two [](api:Instruction) objects
+       with functionally equivalent [](api:apply_fn) and
+       [](api:map_qubits_fn) do not test as equal if the strings differ
+       in any way. Two objects with very different functions test as equal
+       if one had serialized versions set to match the other. Hashing
+       uses only the name and type, which is consistent with equality.
     4. Importantly for Jupyter users: a notebook cell's function is only
        inspectable while its defining kernel session is alive (via
        IPython's own linecache patch, not a real file on disk), so if
@@ -369,6 +367,46 @@ class Instruction(Displayable):
                 Serializable._get_function_str(self.map_qubits_fn)
             )
         return self._serialized_map_qubits_fn_cache
+
+    def __eq__(self, other: object) -> bool:
+        """Equal if the data and the serialized functions are equal.
+
+        Every encoding attribute except the serialized functions is
+        compared by content, and the serialized functions are compared as
+        strings. If a function's string can't be computed (e.g. a notebook
+        function after a kernel restart), that pair is equal only if it is
+        the same function object.
+        """
+        if not isinstance(other, Instruction):
+            return NotImplemented
+        if self is other:
+            return True
+        if type(self) is not type(other):
+            return False
+
+        fn_attrs = ("_serialized_apply_fn", "_serialized_map_qubits_fn")
+        for attr in self._SERIALIZE_ATTRS:
+            if attr in fn_attrs:
+                continue
+            if not Serializable._content_equal(
+                self._get_encoding_attr(attr), other._get_encoding_attr(attr)
+            ):
+                return False
+
+        for attr, fn_name in zip(fn_attrs, ("apply_fn", "map_qubits_fn")):
+            try:
+                mine = getattr(self, attr)
+                theirs = getattr(other, attr)
+            except (OSError, TypeError):
+                if getattr(self, fn_name) is not getattr(other, fn_name):
+                    return False
+                continue
+            if not Serializable._content_equal(mine, theirs):
+                return False
+        return True
+
+    def __hash__(self) -> int:
+        return hash((self.name, self.type))
 
     def __str__(self) -> str:
         s = f"Instruction {self.name}\n"

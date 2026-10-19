@@ -435,6 +435,28 @@ class TestSTIMQuantumState:
             test2 = STIMState.read(tmp_path)
             self._check(test, test2)
 
+    def test_pickle_round_trip(self):
+        """A plain pickle must carry the tableau across a process boundary."""
+        import pickle
+
+        from loqs.internal.serializable import _rebuild_from_encoding_attrs
+
+        state = STIMState(3, ["Q0", "Q1", "Q2"])
+        state.state.h(0)
+        state.state.cx(0, 1)
+        state.state.s(2)
+        state.state.cx(1, 2)
+
+        reduced = state.__reduce_ex__(pickle.HIGHEST_PROTOCOL)
+        assert reduced[0] is _rebuild_from_encoding_attrs
+
+        state2 = pickle.loads(pickle.dumps(state))
+        assert state2.qubit_labels == state.qubit_labels
+        assert (
+            state2.state.current_inverse_tableau()
+            == state.state.current_inverse_tableau()
+        )
+
     def test_serialization_after_instrument(self, make_temp_path):
         """Serialization must round-trip correctly after applying an
         InstrumentRep, not just a plain gate-only circuit."""

@@ -1,18 +1,28 @@
 repos:
--   repo: https://github.com/psf/black
+-   repo: https://github.com/psf/black-pre-commit-mirror
     rev: 26.3.1
     hooks:
     - id: black
-      language_version: python3.11
 -   repo: https://github.com/pycqa/flake8
     rev: 7.3.0
     hooks:
     - id: flake8
+      # pre-commit passes file names directly, which bypasses .flake8's
+      # extend-exclude.
+      exclude: ^tests/tools/migrate_fixtures/
 -   repo: local
     hooks:
     - id: mypy
       name: mypy
       entry: mypy loqs tests
+      language: system
+      pass_filenames: false
+      types: [python]
+    # CI also type-checks on a Windows runner. A separate cache keeps the two
+    # platforms from invalidating each other's.
+    - id: mypy-win32
+      name: mypy (win32)
+      entry: mypy --platform win32 --cache-dir .mypy_cache/win32 loqs tests
       language: system
       pass_filenames: false
       types: [python]

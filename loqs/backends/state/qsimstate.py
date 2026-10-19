@@ -71,6 +71,9 @@ class QSimQuantumState(BaseQuantumState):
     ]
     """`seed` is deliberately not here to avoid triggering re-caching."""
 
+    _PICKLE_VIA_ENCODING_ATTRS = True
+    """GPU density classes hold device arrays; encoding attrs copy them to host."""
+
     _state: _SparseDM
     """Underlying state object."""
 

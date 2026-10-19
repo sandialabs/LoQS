@@ -430,6 +430,31 @@ class TestQSimQuantumState:
 
         self._check(test2, state11)
 
+    def test_pickle_round_trip(self):
+        """The state opts into the encoding-attribute pickle bridge, which
+        its GPU density class needs to cross a process boundary."""
+        import pickle
+
+        from loqs.internal.serializable import _rebuild_from_encoding_attrs
+
+        state = QSimState(2, ["Q0", "Q1"])
+        state.apply_reps_inplace(
+            [
+                QSimSuperopGateRep(_ptm.rotate_x_ptm(np.pi / 2), ["Q0"]),
+                QSimSuperopGateRep(_ptm.rotate_y_ptm(np.pi / 3), ["Q1"]),
+            ]
+        )
+
+        reduced = state.__reduce_ex__(pickle.HIGHEST_PROTOCOL)
+        assert reduced[0] is _rebuild_from_encoding_attrs
+
+        state2 = pickle.loads(pickle.dumps(state))
+        assert state2.state.names == state.state.names
+        assert np.allclose(
+            state2.state.full_dm.to_array(), state.state.full_dm.to_array()
+        )
+        assert state2.state.classical == state.state.classical
+
     def test_serialization_after_instrument(self, make_temp_path):
         """Serialization must round-trip correctly after applying an
         InstrumentRep, not just a plain gate-only circuit."""

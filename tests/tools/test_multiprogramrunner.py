@@ -626,6 +626,76 @@ class TestMultiProgramRunnerParallel:
         # The important test is that the final results are correct
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
 
+    def test_resume_results_ignore_ledger_contents(self, tmp_path):
+        """A resumed run's results don't depend on what the ledgers contain.
+
+        The two readers of ledger contents (`read_swmr_ledger_status` in
+        the runner's progress poll and `read_swmr_ledger_done_union` in
+        `ProgramResults`) are patched to report nothing done, as lost or
+        reordered ledger writes on a share without POSIX write ordering
+        would. Results and resume must still come from the payload files.
+        This doesn't cover the root-group classifier `is_swmr_ledger_file`.
+        """
+        import dataclasses
+
+        import loqs.tools.multiprogramrunner as mpr
+
+        loky = pytest.importorskip("loky")
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = list(range(10))
+
+        manager = mp.Manager()
+        recorded_indices = manager.list()
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=3,
+        )
+
+        runner1 = _TrackingDoubleRunner(
+            items,
+            tracked_indices=recorded_indices,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
+            parallel_strategy=strategy,
+        )
+        _seed_partial_run(checkpoint_dir, runner1, done_indices=[0, 2, 4])
+        del recorded_indices[:]
+
+        runner2 = _TrackingDoubleRunner(
+            items,
+            tracked_indices=recorded_indices,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
+            parallel_strategy=strategy,
+        )
+
+        real_status = mpr.read_swmr_ledger_status
+        status_calls = []
+
+        def blank_status(group):
+            status_calls.append(1)
+            snap = real_status(group)
+            done = None if snap.done is None else snap.done & False
+            return dataclasses.replace(
+                snap, done=done, current_item_index=0, item_shots_done=0
+            )
+
+        with (
+            unittest.mock.patch.object(
+                mpr, "read_swmr_ledger_status", blank_status
+            ),
+            unittest.mock.patch(
+                "loqs.core.programresults.read_swmr_ledger_done_union",
+                lambda *args, **kwargs: set(),
+            ),
+        ):
+            results = runner2.run()
+
+        assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+        assert sorted(recorded_indices) == [1, 3, 5, 6, 7, 8, 9]
+        assert len(status_calls) >= 1
+
     def test_parallel_resume_preserves_item_and_shot_wall_clock_times(
         self, tmp_path
     ):
@@ -1247,6 +1317,14 @@ class _ShotDataArgsRunner(_CountingRunner):
         return super()._mismatch_check_fields() + [
             "_normalized_collect_shot_data_args"
         ]
+
+
+def _submitit_debug_executor_factory():
+    # Module-level, with its import in the body: the factory is stored as
+    # source, so it must not depend on anything but its own body.
+    import submitit
+
+    return submitit.DebugExecutor(folder="submitit-logs")
 
 
 class _FlakyRunner(_CountingRunner):
@@ -3536,6 +3614,35 @@ class TestBaseClassMechanisms:
         )
         parallel_result = runner_parallel.run()
         assert parallel_result == serial_result
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="submitit unconditionally registers a SIGCONT handler, POSIX-only",
+    )
+    def test_submitit_debug_executor_factory_with_checkpointing(
+        self, tmp_path, monkeypatch
+    ):
+        """A zero-argument program_executor factory is called, so a
+        checkpointed submitit run works and resumes from its runner file."""
+        pytest.importorskip("submitit")
+        monkeypatch.chdir(tmp_path)
+
+        items = [3, -2, 1, 4]
+        serial_result = _CountingRunner(items=items).run()
+
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _CountingRunner(
+            items=items,
+            parallel_strategy=ParallelStrategy(
+                program_executor=_submitit_debug_executor_factory,
+                n_program_chunks=2,
+            ),
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
+        )
+        assert runner.run() == serial_result
+
+        resumed = _CountingRunner.read(checkpoint_dir / "runner.h5")
+        assert resumed.run() == serial_result
 
     @pytest.mark.parametrize("shot_executor_kind", ["factory", "live_loky"])
     def test_hybrid_program_and_shot_executor_parallelism(

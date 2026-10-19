@@ -492,9 +492,15 @@ class TestParallelStrategyDescribe:
     def test_factory_shot_executor_reports_factory_name(self):
         strategy = ParallelStrategy(shot_executor=_build_shot_executor)
         description = strategy.describe()
-        assert description.endswith(
-            "shot axis: factory `_build_shot_executor`"
+        assert description.endswith("shot axis: _build_shot_executor()")
+
+    def test_factory_program_executor_reports_factory_name(self):
+        strategy = ParallelStrategy(
+            program_executor=_build_shot_executor, n_program_chunks=2
         )
+        description = strategy.describe()
+        assert "program axis: _build_shot_executor()" in description
+        assert "# of program chunks: 2" in description
 
     def test_auto_converted_shot_executor_reports_backend_and_kwargs(self):
         """A live loky executor given alongside program_executor is
