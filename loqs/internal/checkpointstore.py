@@ -233,6 +233,11 @@ class BaseCheckpointStore(ABC):
         """A read-only view of the object stored at `key` in `attr`."""
 
 
+def _temp_path(path: Path) -> Path:
+    """The name `atomic_h5_file` writes `path` under before renaming."""
+    return path.with_name(path.name + ".tmp")
+
+
 @contextlib.contextmanager
 def atomic_h5_file(path: str | os.PathLike) -> Iterator[h5py.File]:
     """Write an HDF5 file atomically.
@@ -240,9 +245,12 @@ def atomic_h5_file(path: str | os.PathLike) -> Iterator[h5py.File]:
     Opens `<path>.tmp` in mode `"w"` and yields it. On a normal exit the
     file is closed and renamed onto `path`. On any `BaseException` the file
     is closed, the temp file is removed and the exception propagates.
+
+    Windows can't replace a file that a handle holds open, so a caller
+    holding a handle on `path` closes it inside the block.
     """
     final = Path(path)
-    temp = final.with_name(final.name + ".tmp")
+    temp = _temp_path(final)
     f: h5py.File | None = None
     try:
         f = open_h5(temp, "w")
@@ -631,6 +639,35 @@ def _parse_marker(f: h5py.File) -> dict[str, int]:
     return {k: int(v) for k, v in json.loads(marker).items()}
 
 
+def raise_if_uncommitted(f: h5py.File) -> None:
+    """Raise `CheckpointReadError` if a canonical file holds entries past
+    its commit marker. A file with no marker passes."""
+    if COMMIT_MARKER_ATTR not in f.attrs:
+        return
+    container = _resolve_checkpoint_object_group(f)
+    for name, committed in _parse_marker(f).items():
+        sides = _iterable_groups(container, name)
+        if sides is None:
+            if name not in container:
+                continue
+            problem = "is only partly built"
+        else:
+            longest = max(side_length(side) for side in sides)
+            if longest <= committed:
+                continue
+            problem = (
+                f"holds {longest} entries, more than {committed} committed"
+            )
+        raise CheckpointReadError(
+            f.filename,
+            f"attribute {name!r} {problem}: the file holds entries an "
+            "interrupted write left past its commit marker, which aren't "
+            "part of the checkpoint. Resume the run (or use "
+            "`load_checkpoint` for a shot checkpoint) to read only the "
+            "committed entries.",
+        )
+
+
 def _trim_attr(
     container: h5py.Group,
     streamed: StreamedAttr,
@@ -864,6 +901,18 @@ class CheckpointStore(_ReadableStore):
                 return match.group("id")
         raise ValueError(f"{name!r} is not a ledger or payload file name")
 
+    def has_content(self) -> bool:
+        """Whether the directory exists and holds any entry other than the
+        canonical file's temp file.
+
+        That temp file is what a kill during the first snapshot leaves, and
+        the next snapshot overwrites it, so it doesn't count as content.
+        """
+        if not self.directory.is_dir():
+            return False
+        ignored = _temp_path(self.canonical_path)
+        return any(p != ignored for p in self.directory.iterdir())
+
     # -- writing ----------------------------------------------------------
 
     def write_snapshot(
@@ -889,7 +938,7 @@ class CheckpointStore(_ReadableStore):
             if keep_entries:
                 old = self._open_for_rewrite(stack)
             self.directory.mkdir(parents=True, exist_ok=True)
-            self._write_snapshot_file(obj, old)
+            self._write_snapshot_file(obj, old, stack)
         self._canonical_decode_cache = None
         self._canonical_identity = None
 
@@ -949,6 +998,7 @@ class CheckpointStore(_ReadableStore):
         self,
         obj: Serializable,
         old: tuple[h5py.Group, dict[str, int], int] | None,
+        stack: contextlib.ExitStack,
     ) -> None:
         with atomic_h5_file(self.canonical_path) as f:
             if old is None:
@@ -973,6 +1023,9 @@ class CheckpointStore(_ReadableStore):
                 lengths[streamed.canonical] = side_length(sides[0])
             f.attrs[NEXT_CACHE_ID_ATTR] = HDF5Encoder.ENCODE_ID
             f.attrs[COMMIT_MARKER_ATTR] = json.dumps(lengths)
+            # Windows can't replace a file a handle holds open, so the old
+            # file closes before the rename. `old` is stale from here on.
+            stack.close()
 
     def put_batch(
         self,
@@ -1427,7 +1480,7 @@ class CheckpointStore(_ReadableStore):
                 remove_transient_file(path)
         if not self.directory.is_dir():
             return
-        orphans = {self.canonical_path.name + ".tmp"}
+        orphans = {_temp_path(self.canonical_path).name}
         for path in sorted(self.directory.iterdir()):
             is_worker_tmp = path.name.startswith(
                 "worker_"

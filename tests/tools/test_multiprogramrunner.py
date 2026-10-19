@@ -18,8 +18,10 @@ import pytest
 from _shared_checkpoint_test_helpers import (
     build_program_interrupts_at,
     build_sweep_runner,
+    open_hdf5_file_paths,
     record_h5_writes,
     sessions_in,
+    spy_on_renames,
 )
 from tqdm import tqdm as orig_tqdm
 
@@ -56,14 +58,6 @@ def _loky_strategy(max_workers=2, n_program_chunks=2, **kwargs):
 
 
 # Module-level worker functions for parallel/multiprocessing tests
-
-
-def _open_hdf5_file_paths() -> set[Path]:
-    """Resolved paths of every HDF5 file currently open in this process."""
-    return {
-        Path(h5py.h5f.get_name(fid).decode()).resolve()
-        for fid in h5py.h5f.get_obj_ids(types=h5py.h5f.OBJ_FILE)
-    }
 
 
 def _double_item(item, index, *, shot_executor, **kwargs):
@@ -1435,6 +1429,33 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         recovered = MultiProgramRunner.read(checkpoint_dir / "runner.h5")
         assert recovered.run() == [2, 4, 6]
 
+    def test_resume_renames_touch_no_open_file(self, tmp_path, monkeypatch):
+        """A resume rewrites runner.h5 without any rename involving a file
+        the resume still holds open, which Windows can't do."""
+        checkpoint_dir = tmp_path / "ckpt"
+        _FLAKY_CALL_COUNT["n"] = 0
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            _FlakyRunner(
+                [1, 2, 3],
+                multiplier=2,
+                config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
+            ).run()
+
+        calls = spy_on_renames(monkeypatch)
+        resumed = _FlakyRunner(
+            [1, 2, 3],
+            multiplier=2,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
+        )
+        assert resumed.run() == [2, 4, 6]
+
+        assert (checkpoint_dir / "runner.h5").resolve() in [
+            dst for dst, _ in calls
+        ]
+        assert not any(touched for _, touched in calls)
+
     def test_resume_true_without_checkpoint_raises(self):
         """resume=True requires item_checkpoint_dir to be set, raises ValueError."""
         with pytest.raises(
@@ -1904,7 +1925,7 @@ class TestItemCheckpointWithLedger:
         def spy_mark(group, index, *args, **kwargs):
             path = store.payload_path(worker_id(), 5)
             assert path.exists()
-            assert path.resolve() not in _open_hdf5_file_paths()
+            assert path.resolve() not in open_hdf5_file_paths()
             assert not list(store.directory.glob("*.tmp"))
             assert 5 in store.payload_view(path).keys()
             marked.append(index)
@@ -1956,10 +1977,10 @@ class TestItemCheckpointWithLedger:
         resolved_dir = checkpoint_dir.resolve()
         assert not any(
             path.is_relative_to(resolved_dir)
-            for path in _open_hdf5_file_paths()
+            for path in open_hdf5_file_paths()
         )
         if executor is not None:
-            worker_open_paths = executor.submit(_open_hdf5_file_paths).result()
+            worker_open_paths = executor.submit(open_hdf5_file_paths).result()
             assert not any(
                 path.is_relative_to(resolved_dir) for path in worker_open_paths
             )

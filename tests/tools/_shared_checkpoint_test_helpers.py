@@ -297,7 +297,13 @@ def _wrap_file_init(tap: H5WriteTap) -> Callable[[], None]:
             # HDF5 reports the shared file's intent for a read-only handle
             # opened beside a writer, so the handle itself is marked.
             self._tap_write_handle = True
-            tap.on_open(os.path.abspath(os.fsdecode(name)))
+            try:
+                tap.on_open(os.path.abspath(os.fsdecode(name)))
+            except BaseException:
+                # The code under test never got this handle, so only the
+                # harness can close it.
+                self.close()
+                raise
 
     setattr(h5py.File, "__init__", wrapper)
     return lambda: setattr(h5py.File, "__init__", original)
@@ -408,6 +414,31 @@ def injection_for(
 # ---------------------------------------------------------------------------
 # Process-death simulation
 # ---------------------------------------------------------------------------
+
+
+def open_hdf5_file_paths() -> set[Path]:
+    """Resolved paths of every HDF5 file currently open in this process."""
+    return {
+        Path(h5py.h5f.get_name(fid).decode()).resolve()
+        for fid in h5py.h5f.get_obj_ids(types=h5py.h5f.OBJ_FILE)
+    }
+
+
+def spy_on_renames(monkeypatch) -> list[tuple[Path, bool]]:
+    """Patch `os.replace` to record `(destination, touched_open_file)` per
+    call, where the flag says whether the source or destination is a file
+    this process holds open (which Windows refuses to rename)."""
+    real_replace = os.replace
+    calls: list[tuple[Path, bool]] = []
+
+    def spy(src, dst):
+        paths = {Path(src).resolve(), Path(dst).resolve()}
+        touched = bool(paths & open_hdf5_file_paths())
+        calls.append((Path(dst).resolve(), touched))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    return calls
 
 
 def simulate_process_death() -> None:
@@ -668,9 +699,10 @@ def build_sweep_runner(
     resume: bool = False,
     program_executor: InlineExecutor | None = None,
     runner_cls: type[NoiseSweepRunner] = NoiseSweepRunner,
+    keep_shot_results: bool = True,
 ) -> NoiseSweepRunner:
     """An item-level runner: two items of `NUM_SHOTS` shots, item and shot
-    checkpointing, `keep_shot_results=True`. With `program_executor` the
+    checkpointing, `keep_shot_results` as given. With `program_executor` the
     items go through a chunked `ParallelStrategy` (use inside
     `inline_execution_patches`)."""
     return runner_cls(
@@ -686,7 +718,7 @@ def build_sweep_runner(
         config=CheckpointConfig(
             item_checkpoint_dir=item_dir,
             shot_checkpoint_dir=shot_dir,
-            keep_shot_results=True,
+            keep_shot_results=keep_shot_results,
             resume=resume,
             show_progress=False,
         ),

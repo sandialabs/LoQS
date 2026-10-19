@@ -7,10 +7,12 @@ valid when the checkpoint writers are replaced.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import h5py
 import pytest
 from _shared_checkpoint_test_helpers import (
     BASE_SEED,
@@ -39,7 +41,12 @@ from loqs.core import Instruction
 from loqs.core.history import History
 from loqs.core.programresults import ProgramResults
 from loqs.core.quantumprogram import QuantumProgram
-from loqs.internal.checkpointstore import SHOT_LAYOUT, CheckpointStore
+from loqs.internal.checkpointstore import (
+    COMMIT_MARKER_ATTR,
+    SHOT_LAYOUT,
+    CheckpointReadError,
+    CheckpointStore,
+)
 from loqs.internal.serializable import Serializable
 from loqs.tools.noisesweeptools import NoiseSweepRunner
 
@@ -377,3 +384,82 @@ def test_shot_payloads_do_not_reembed_the_parent_program(
         assert data_digests(results.get_shot_history(i)) == data_digests(
             reference.get_shot_history(i)
         )
+
+
+@pytest.mark.parametrize("level", ["shot", "item"])
+def test_lone_canonical_temp_file_does_not_block_a_run(
+    tmp_path: Path, serial_reference: ShotSignature, level: str
+) -> None:
+    # A kill during the first snapshot leaves only the canonical temp file.
+    if level == "shot":
+        directory = tmp_path / "shots"
+        temp = directory / "results.h5.tmp"
+    else:
+        directory = tmp_path / "items"
+        temp = directory / "runner.h5.tmp"
+    directory.mkdir()
+    temp.write_bytes(b"garbage")
+
+    def run(resume: bool) -> Any:
+        if level == "shot":
+            return run_shot_program(directory, resume=resume)
+        runner = build_sweep_runner(
+            directory, tmp_path / "itemshots", resume=resume
+        )
+        return runner.run()
+
+    with pytest.raises(ValueError):
+        run(resume=True)
+    result = run(resume=False)
+
+    names = {p.name for p in directory.iterdir()}
+    canonical = "results.h5" if level == "shot" else "runner.h5"
+    assert canonical in names
+    assert temp.name not in names
+    if level == "shot":
+        assert shot_signature(result) == serial_reference
+
+
+def _lower_commit_marker(path: Path, limit: int) -> None:
+    with h5py.File(path, "r+") as f:
+        marker = json.loads(f.attrs[COMMIT_MARKER_ATTR])
+        f.attrs[COMMIT_MARKER_ATTR] = json.dumps(
+            {k: min(v, limit) for k, v in marker.items()}
+        )
+
+
+@pytest.mark.parametrize("level", ["shot", "item"])
+def test_plain_read_past_the_commit_marker_raises(
+    tmp_path: Path, level: str
+) -> None:
+    shot_dir = tmp_path / "itemshots"
+    if level == "shot":
+        canonical = tmp_path / "shots" / "results.h5"
+        first: Any = run_shot_program(tmp_path / "shots")
+        first_signature = shot_signature(first)
+    else:
+        canonical = tmp_path / "items" / "runner.h5"
+        first = build_sweep_runner(
+            tmp_path / "items", shot_dir, keep_shot_results=False
+        ).run()
+    # A kill between an append and its commit leaves entries past the
+    # marker. Close the lazy results' handle as a killed process would.
+    simulate_process_death()
+    _lower_commit_marker(canonical, 1)
+
+    reader: Any = ProgramResults if level == "shot" else NoiseSweepRunner
+    with pytest.raises(CheckpointReadError) as excinfo:
+        reader.read(canonical)
+    assert Path(excinfo.value.path) == canonical
+
+    if level == "shot":
+        again = run_shot_program(tmp_path / "shots", resume=True)
+        assert shot_signature(again) == first_signature
+    else:
+        again = build_sweep_runner(
+            tmp_path / "items", shot_dir, resume=True, keep_shot_results=False
+        ).run()
+        assert again.strengths == first.strengths
+        assert again.failure_rates == first.failure_rates
+        assert again.stderrs == first.stderrs
+        assert again.num_shots == first.num_shots

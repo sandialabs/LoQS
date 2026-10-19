@@ -468,9 +468,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 self.item_checkpoint_dir is not None
             )  # Enforced by checkpoint property and config validation
             runner_path = store.canonical_path
-            has_content = self.item_checkpoint_dir.exists() and any(
-                self.item_checkpoint_dir.iterdir()
-            )
+            has_content = store.has_content()
 
             if has_content and not runner_path.exists():
                 # Unrelated foreign content, ambiguous state

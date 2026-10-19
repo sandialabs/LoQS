@@ -7,6 +7,7 @@ import json
 import os
 import pickle
 import shutil
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -53,6 +54,7 @@ from _shared_checkpoint_test_helpers import (
     repeated_cache_ids,
     sessions_in,
     simulate_process_death,
+    spy_on_renames,
 )
 
 STREAMED = ("shot_histories", "shot_wall_clock_times")
@@ -118,6 +120,26 @@ def test_atomic_h5_file_commits_and_cleans_up(tmp_path):
     assert not (tmp_path / "a.h5.tmp").exists()
     with h5py.File(final, "r") as f:
         assert f.attrs["x"] == 1
+
+
+def test_checkpoint_renames_touch_no_open_file(
+    tmp_path, histories, monkeypatch
+):
+    """No rename of a temp file onto a checkpoint file involves a file the
+    store still holds open, which Windows can't do."""
+    _, item_store = _kept_item_store(tmp_path / "kept", histories)
+    runner = build_sweep_runner(tmp_path / "i2", tmp_path / "s2")
+    runner.index_map = {"a": 0}
+    calls = spy_on_renames(monkeypatch)
+
+    shot_store = CheckpointStore(tmp_path / "shot", SHOT_LAYOUT)
+    shot_store.write_snapshot(_shot_results(histories, []))
+    shot_store.put_batch(_shot_entries(histories, [2, 3]), worker_id="w_1")
+    item_store.write_snapshot(runner, keep_entries=True)
+
+    assert len(calls) == 3
+    assert not any(touched for _, touched in calls)
+    assert item_store.canonical_path.resolve() in [dst for dst, _ in calls]
 
 
 def test_payload_put_interrupt_sweep(tmp_path, histories):
@@ -628,10 +650,9 @@ def _digest(obj) -> int:
 
 def test_get_sees_replaced_canonical_file(tmp_path, monkeypatch):
     """A replacement reusing the old file's cache IDs for other objects
-    must not resolve through the old file's decode cache, including one
-    landing between a read's open and its identity check."""
+    must not resolve through the old file's decode cache."""
     monkeypatch.setattr(HDF5Encoder, "ENCODE_ID", 0)
-    versions = [_named_histories(name) for name in ("A", "B", "C", "D")]
+    versions = [_named_histories(name) for name in ("A", "B", "C")]
     store = CheckpointStore(tmp_path / "main", SHOT_LAYOUT)
     _write_as_fresh_process(store, versions[0])
     assert _digest(store.get(1)) == _digest(versions[0][1])
@@ -642,8 +663,26 @@ def test_get_sees_replaced_canonical_file(tmp_path, monkeypatch):
     _write_as_fresh_process(other, versions[2])
     assert _digest(store.get(1)) == _digest(versions[2][1])
 
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows can't replace a file another handle holds open, so "
+    "this race can't happen there",
+)
+def test_get_sees_a_replacement_between_open_and_identity_check(
+    tmp_path, monkeypatch
+):
+    """A replacement reusing the old file's cache IDs for other objects
+    must not resolve through the old file's decode cache when it lands
+    between a read's open and its identity check."""
+    monkeypatch.setattr(HDF5Encoder, "ENCODE_ID", 0)
+    versions = [_named_histories(name) for name in ("C", "D")]
+    store = CheckpointStore(tmp_path / "main", SHOT_LAYOUT)
+    _write_as_fresh_process(store, versions[0])
+    assert _digest(store.get(1)) == _digest(versions[0][1])
+
     staged = CheckpointStore(tmp_path / "staged", SHOT_LAYOUT)
-    _write_as_fresh_process(staged, versions[3])
+    _write_as_fresh_process(staged, versions[1])
     real_open = checkpointstore.open_h5
     opens = []
 
@@ -657,8 +696,8 @@ def test_get_sees_replaced_canonical_file(tmp_path, monkeypatch):
     monkeypatch.setattr(checkpointstore, "open_h5", open_then_replace)
     # `get` opens twice: once for the key index, then to decode, which
     # reads the old file while the path already names the new one.
-    assert _digest(store.get(1)) == _digest(versions[2][1])
-    assert _digest(store.get(1)) == _digest(versions[3][1])
+    assert _digest(store.get(1)) == _digest(versions[0][1])
+    assert _digest(store.get(1)) == _digest(versions[1][1])
 
 
 def test_interrupted_read_leaves_no_placeholders(

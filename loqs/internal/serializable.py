@@ -898,6 +898,12 @@ class Serializable:
                 root_group = f["root"]
                 assert isinstance(root_group, h5py.Group)
 
+                # A canonical checkpoint file may hold entries past its
+                # commit marker; refuse to decode those as results.
+                from loqs.internal.checkpointstore import raise_if_uncommitted
+
+                raise_if_uncommitted(f)
+
                 # Create ResolvingDecodeCache after getting the root group
                 if use_caching:
                     if decode_cache is None:
@@ -958,6 +964,10 @@ class Serializable:
         ------
         ValueError
             If the format cannot be determined from the file extension.
+        CheckpointReadError
+            If an HDF5 checkpoint file holds entries past its commit marker,
+            as an interrupted write leaves. Resume the run to read only the
+            committed entries.
         """
         if format is None:
             if str(path).endswith(".json"):
@@ -982,15 +992,16 @@ class Serializable:
         else:
             raise ValueError("Cannot write format")
 
-        loaded = cls.load(
-            f,
-            format,
-            use_caching=use_caching,
-            decode_cache=decode_cache,
-            migrate_legacy_fns=migrate_legacy_fns,
-        )
-
-        f.close()
+        try:
+            loaded = cls.load(
+                f,
+                format,
+                use_caching=use_caching,
+                decode_cache=decode_cache,
+                migrate_legacy_fns=migrate_legacy_fns,
+            )
+        finally:
+            f.close()
 
         return loaded
 

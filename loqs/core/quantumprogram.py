@@ -444,9 +444,12 @@ class QuantumProgram(Displayable):
             else Path("./checkpoints")
         )
         results_path = resolved_checkpoint_dir / results_filename
-        has_content = resolved_checkpoint_dir.exists() and any(
-            resolved_checkpoint_dir.iterdir()
+        store = CheckpointStore(
+            resolved_checkpoint_dir,
+            SHOT_LAYOUT,
+            canonical_filename=results_filename,
         )
+        has_content = store.has_content()
 
         # Case (a): no on-disk state, resume=False -> free to create and start
         if not has_content:
@@ -478,11 +481,9 @@ class QuantumProgram(Displayable):
         # From here on: on-disk state exists AND resume=True (case c)
 
         # Only the config attributes are read; no shot is decoded.
-        stored = CheckpointStore(
-            resolved_checkpoint_dir,
-            SHOT_LAYOUT,
-            canonical_filename=results_filename,
-        ).read_attrs(("num_shots", "max_frame_limit", "parent_program"))
+        stored = store.read_attrs(
+            ("num_shots", "max_frame_limit", "parent_program")
+        )
         stored_parent = stored["parent_program"]
         mismatches = []
         if stored["num_shots"] != num_shots:
