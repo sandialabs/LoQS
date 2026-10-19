@@ -42,6 +42,7 @@ there is no recovery.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 import weakref
@@ -53,10 +54,8 @@ from typing import Any, Iterable, Iterator, Sequence
 import h5py
 import numpy as np
 
-try:
+if sys.platform != "win32":
     import fcntl
-except ImportError:  # Windows
-    fcntl = None  # type: ignore[assignment]
 
 DEFAULT_GROUP_NAME = "swmr_ledger"
 DEFAULT_CHUNK_SIZE = 1024
@@ -261,23 +260,23 @@ def open_swmr_writer(
 def _try_lock_exclusive(path: Path) -> int | None:
     """Take a non-blocking exclusive `flock` on `path`, returning the file
     descriptor that holds it, or `None` if the lock can't be taken (held
-    elsewhere, unsupported, open failed, or no `fcntl`).
+    elsewhere, unsupported, open failed, or on Windows, which has no
+    `fcntl`).
 
     `flock` locks belong to the open file description and the OS drops
     them when the process dies. Record locks (`lockf`) would instead drop
     whenever any descriptor of the file closes, as a SWMR reader's does.
     """
-    if fcntl is None:
-        return None
-    fd: int | None = None
-    try:
-        fd = os.open(path, os.O_RDONLY)
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return fd
-    except OSError:
-        if fd is not None:
-            os.close(fd)
-        return None
+    if sys.platform != "win32":
+        fd: int | None = None
+        try:
+            fd = os.open(path, os.O_RDONLY)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+    return None
 
 
 class _LockedWriterFile(h5py.File):
