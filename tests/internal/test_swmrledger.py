@@ -526,6 +526,11 @@ time.sleep(600)
             raise
         return proc
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Rebuilding a killed writer's ledger needs an fcntl lock, so "
+        "Windows refuses instead",
+    )
     def test_reopen_after_killed_writer_clears_stale_flag(self, tmp_path):
         """A ledger whose writer was killed while it held the file reopens
         with its done flags and fill values intact, and no `.tmp` is left."""

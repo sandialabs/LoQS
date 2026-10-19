@@ -546,8 +546,8 @@ class ProgramResults(Displayable):
             shots are appended to the canonical `results.h5`. With an id,
             they go to that writer's own payload file, which
             `consolidate_checkpoints()` later merges into `results.h5`.
-            An id can be reused after its writer was killed, but not while
-            that writer is alive.
+            An id can be reused after its writer was killed (not on
+            Windows), but not while that writer is alive.
 
         Returns
         -------

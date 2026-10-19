@@ -1202,6 +1202,11 @@ time.sleep(600)
             expected_returncode = -signal.SIGKILL
         assert proc.returncode == expected_returncode
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Rebuilding a killed writer's ledger needs an fcntl lock, so "
+        "Windows refuses instead",
+    )
     def test_checkpoint_reuses_killed_writers_worker_id(self, tmp_path):
         """A checkpoint under the `worker_id` of a killed writer succeeds,
         and the reloaded run holds the killed and the new shots."""

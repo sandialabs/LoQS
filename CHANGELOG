@@ -32,7 +32,7 @@
   - Decoded `Instruction`s: stored functions decode in their module's globals and keep their source, and `Instruction` gains `__eq__`/`__hash__` (#90), so `read(path).run()` resumes a transversal CX
   - A zero-argument `program_executor` factory is accepted, so a submitit `program_executor` can be checkpointed
   - `Serializable.read`/`write` close their files on error
-  - A killed writer's ledger reopens under the same `worker_id`
+  - A killed writer's ledger reopens under the same `worker_id` (not on Windows)
   - `parallel.md` now says what the NFS/SMB caveat risks (live progress, not results) and that checkpointing needs process-based executors
 
 ## [1.2] - 2026-08-21
