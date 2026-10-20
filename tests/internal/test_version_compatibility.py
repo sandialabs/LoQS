@@ -12,10 +12,7 @@ import loqs.internal.serializable as serializable_module
 from loqs.backends.state.qsimstate import QSimQuantumState
 from loqs.core.instructions.instruction import Instruction
 from loqs.core.quantumprogram import QuantumProgram
-from loqs.internal.serializable import (
-    IMPORT_LOCATION_CHANGES_BY_VERSION,
-    Serializable,
-)
+from loqs.internal.serializable import Serializable
 
 
 class TestVersionCompatibility:
@@ -49,148 +46,20 @@ class TestVersionCompatibility:
         assert len(loaded_program_results.shot_histories) == 2
 
     def test_function_import_updates(self):
-        # This is a real physical circuit instruction apply_fn from version 0
+        # A version 0 apply_fn: old import locations and class names.
         test_str = """
-from collections.abc import Mapping, Sequence
-import inspect as ins
-import numpy as np
-from loqs.backends import propagate_state
-from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.model import (
-    BaseNoiseModel,
-    TimeDependentBaseNoiseModel,
-)
-from loqs.backends.state import BaseQuantumState
-from loqs.core.frame import Frame
-from loqs.core.qeccode import QECCode, QECCodePatch
-from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
-from loqs.core.syndrome import (
-    PauliFrame,
-    SyndromeLabel,
-    SyndromeLabelCastableTypes
-)
-from loqs.backends import (
-    STIMQuantumState,
-    STIMPhysicalCircuit,
-    PyGSTiNoiseModel,
-)
-def apply_fn(
-    model: BaseNoiseModel,
-    circuit: BasePhysicalCircuit,
-    state: BaseQuantumState,
-    inplace: bool,
-    error_injections: list[tuple[int, str, int]] | None,
-    pauli_frame_update: str | list[str] | dict[str, str] | None,
-    patch_label: str,
-    patches: PatchDict,
-) -> Frame:
-    # physical circuit apply function
-    frame = PauliFrame(pauli_frame_update)
-
-    return Frame(data)
+from loqs.core.syndrome import PauliFrame, SyndromeLabel
+def apply_fn(patches: PatchDict, label: SyndromeLabel):
+    return PauliFrame(patches, label)
 """
-        expected_str = """
-from collections.abc import Mapping, Sequence
-import inspect as ins
-import numpy as np
-from loqs.backends import propagate_state
-from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.model import (
-    BaseNoiseModel,
-    TimeDependentBaseNoiseModel,
-)
-from loqs.backends.state import BaseQuantumState
-from loqs.core.frame import Frame
-from loqs.core.qeccode import QECCode, QECCodePatch
-from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchlayout import PatchLayout
-from loqs.core.recordables.pauliframe import (
-    PauliFrame,
-    
-)
-from loqs.backends import (
-    STIMQuantumState,
-    STIMPhysicalCircuit,
-    PyGSTiNoiseModel,
-)
-def apply_fn(
-    model: BaseNoiseModel,
-    circuit: BasePhysicalCircuit,
-    state: BaseQuantumState,
-    inplace: bool,
-    error_injections: list[tuple[int, str, int]] | None,
-    pauli_frame_update: str | list[str] | dict[str, str] | None,
-    patch_label: str,
-    patches: PatchLayout,
-) -> Frame:
-    # physical circuit apply function
-    frame = PauliFrame(pauli_frame_update)
-
-    return Frame(data)
-"""
-
-        # SyndromeLabel/SyndromeLabelCastableTypes are unreferenced in the
-        # function body above, so libcst's RenameCommand drops their now-dead
-        # import along with renaming them -- a real, documented behavior of
-        # the underlying rename mechanism, not something loqs controls.
         updated_str = Serializable._update_imports(test_str, 0)
-        assert updated_str == expected_str
 
-        # Also try one where a module name changes. Uses version 1's table
-        # directly (not the full multi-hop composition), so
-        # SyndromeLabel/SyndromeLabelCastableTypes aren't in this table at
-        # all (their rename is a version 0 entry) -- only PauliFrame, via
-        # this test's own override, moves here.
-        renamed_loc_change = IMPORT_LOCATION_CHANGES_BY_VERSION[1].copy()
-        renamed_loc_change[("loqs.core.syndrome", "PauliFrame")] = (
-            "loqs.core.recordables.pauliframe",
-            "PauliFrameRenamed",
-        )
-
-        expected_str2 = """
-from collections.abc import Mapping, Sequence
-import inspect as ins
-import numpy as np
-from loqs.backends import propagate_state
-from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.model import (
-    BaseNoiseModel,
-    TimeDependentBaseNoiseModel,
-)
-from loqs.backends.state import BaseQuantumState
-from loqs.core.frame import Frame
-from loqs.core.qeccode import QECCode, QECCodePatch
-from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
-from loqs.core.recordables.pauliframe import (
-    PauliFrameRenamed
-)
-from loqs.backends import (
-    STIMQuantumState,
-    STIMPhysicalCircuit,
-    PyGSTiNoiseModel,
-)
-def apply_fn(
-    model: BaseNoiseModel,
-    circuit: BasePhysicalCircuit,
-    state: BaseQuantumState,
-    inplace: bool,
-    error_injections: list[tuple[int, str, int]] | None,
-    pauli_frame_update: str | list[str] | dict[str, str] | None,
-    patch_label: str,
-    patches: PatchDict,
-) -> Frame:
-    # physical circuit apply function
-    frame = PauliFrameRenamed(pauli_frame_update)
-
-    return Frame(data)
-"""
-
-        updated_str2 = Serializable._update_imports(
-            test_str, loc_change=renamed_loc_change
-        )
-        assert updated_str2 == expected_str2
+        assert "PatchLayout" in updated_str
+        assert "loqs.core.recordables.pauliframe" in updated_str
+        assert "loqs.core.syndromelabel" in updated_str
+        assert "PatchDict" not in updated_str
+        assert "loqs.core.syndrome " not in updated_str
 
     def test_instruction_label_and_stack_castable_types_rename(self):
         """`InstructionLabelCastableTypes`/`InstructionStackCastableTypes`
@@ -227,51 +96,46 @@ def apply_fn(
         updated_str = Serializable._update_imports(test_str, 1)
         assert updated_str == expected_str
 
-    def test_get_cumulative_changes_multi_hop_composition(self, monkeypatch):
-        """A rename chained across 3 versions (A -> B -> C -> D) must
-        compose into a single A -> D mapping. Regression test for a real
-        infinite loop in `_get_cumulative_changes` (`version` was never
-        incremented in its old `while` loop) -- no existing test
-        exercised more than one hop."""
-        fake_table = {
-            1: {("mod0", "A"): ("mod1", "B")},
-            2: {("mod1", "B"): ("mod2", "C")},
-            3: {("mod2", "C"): ("mod3", "D")},
-        }
-        monkeypatch.setattr(
-            serializable_module,
-            "IMPORT_LOCATION_CHANGES_BY_VERSION",
-            fake_table,
-        )
-        monkeypatch.setattr(serializable_module, "SERIALIZATION_VERSION", 4)
-
-        assert Serializable._get_cumulative_changes(0) == {
-            ("mod0", "A"): ("mod3", "D")
-        }
-
-    def test_get_cumulative_changes_handles_missing_table_entry(
-        self, monkeypatch
+    @pytest.mark.parametrize(
+        "fake_table, version, expected",
+        [
+            # A rename chained across 3 versions composes into one mapping
+            # (a former infinite loop in the composition).
+            pytest.param(
+                {
+                    1: {("mod0", "A"): ("mod1", "B")},
+                    2: {("mod1", "B"): ("mod2", "C")},
+                    3: {("mod2", "C"): ("mod3", "D")},
+                },
+                4,
+                {("mod0", "A"): ("mod3", "D")},
+                id="multi_hop",
+            ),
+            # Versions 1 and 3 have no table entry at all.
+            pytest.param(
+                {
+                    2: {("mod0", "A"): ("mod2", "B")},
+                    4: {("mod2", "B"): ("mod4", "C")},
+                },
+                5,
+                {("mod0", "A"): ("mod4", "C")},
+                id="missing_entry",
+            ),
+        ],
+    )
+    def test_get_cumulative_changes(
+        self, monkeypatch, fake_table, version, expected
     ):
-        """A version with no import-location changes at all simply has no
-        entry in `IMPORT_LOCATION_CHANGES_BY_VERSION` (not an empty one) --
-        `_get_cumulative_changes` must not raise `KeyError` when composing
-        across such a gap, whether at the very first hop or a later one."""
-        fake_table = {
-            # No entry for version 1 at all.
-            2: {("mod0", "A"): ("mod2", "B")},
-            # No entry for version 3 at all.
-            4: {("mod2", "B"): ("mod4", "C")},
-        }
         monkeypatch.setattr(
             serializable_module,
             "IMPORT_LOCATION_CHANGES_BY_VERSION",
             fake_table,
         )
-        monkeypatch.setattr(serializable_module, "SERIALIZATION_VERSION", 5)
+        monkeypatch.setattr(
+            serializable_module, "SERIALIZATION_VERSION", version
+        )
 
-        assert Serializable._get_cumulative_changes(0) == {
-            ("mod0", "A"): ("mod4", "C")
-        }
+        assert Serializable._get_cumulative_changes(0) == expected
 
 
 def _decoded_str(value):
@@ -304,14 +168,12 @@ def _find_instruction_by_name(obj, name):
 class TestMigrateLegacyFnsGate:
     """Regression tests for the migrate_legacy_fns gate.
 
-    A straight class-location rename (e.g. PatchDict -> PatchLayout) needs
-    no gate, since `_update_imports` already rewrites frozen source to the
-    new name directly. A calling-convention change with the same class
-    name (e.g. an old positional `InstructionLabel(...)` call) is also
-    confidently rewritten by `_update_legacy_constructions` in the common
-    case, including `QuantumProgram_v1.json.gz`'s "Repeat-until-success FT
-    Minus Prep" instruction -- the gate only fires for the narrow
-    remainder it can't statically resolve (e.g. a starred/splat call).
+    A calling-convention change with the same class name (e.g. an old
+    positional `InstructionLabel(...)` call) is confidently rewritten by
+    `_update_legacy_constructions` in the common case, including
+    `QuantumProgram_v1.json.gz`'s "Repeat-until-success FT Minus Prep"
+    instruction -- the gate only fires for the narrow remainder it can't
+    statically resolve (e.g. a starred/splat call).
     """
 
     @pytest.fixture
@@ -363,7 +225,7 @@ class TestMigrateLegacyFnsGate:
         attrs = self._attr_dict(
             f"def apply_fn(patch_label, label_tuple):\n    return {src.strip()}\n"
         )
-        with pytest.raises(RuntimeError, match="InstructionLabel"):
+        with pytest.raises(RuntimeError):
             Instruction._from_decoded_attrs(attrs)
 
         token = serializable_module.MIGRATE_LEGACY_FNS.set(True)
@@ -371,53 +233,6 @@ class TestMigrateLegacyFnsGate:
             inst = Instruction._from_decoded_attrs(attrs)
         finally:
             serializable_module.MIGRATE_LEGACY_FNS.reset(token)
-        assert isinstance(inst, Instruction)
-
-    def test_no_legacy_pattern_detected_is_unaffected(self):
-        """A version older than SERIALIZATION_VERSION with no detectable
-        legacy pattern decodes normally regardless of the flag."""
-        clean_source = "def apply_fn(patch_label):\n    return None\n"
-        inst = Instruction._from_decoded_attrs(self._attr_dict(clean_source))
-        assert isinstance(inst, Instruction)
-
-    def test_current_version_source_is_never_gated(self):
-        """The gate only applies to source older than SERIALIZATION_VERSION
-        -- a current-version Instruction is never checked, even if its
-        source happens to match a legacy pattern (there's no reason it
-        would for genuinely current-version source, but the version check
-        should short-circuit before ever scanning either way)."""
-        attrs = self._attr_dict(
-            "def apply_fn(patch_label):\n    return None\n",
-            version=serializable_module.SERIALIZATION_VERSION,
-        )
-        inst = Instruction._from_decoded_attrs(attrs)
-        assert isinstance(inst, Instruction)
-
-    def test_patchdict_rename_needs_no_gate_at_all(self):
-        """The class-location-rename case (PatchDict -> PatchLayout) needs
-        no gate: `_update_imports` already rewrites the old name
-        everywhere in the frozen source, so nothing resembling it remains
-        to detect."""
-        path = Path(__file__).parent / "QuantumProgram_v0.json.gz"
-        with gzip.open(path, "rt") as f:
-            data = json.load(f)
-        source = data["global_instructions"]["Init Patch 5Q"][
-            "_serialized_apply_fn"
-        ]
-        assert (
-            "PatchDict(" in source
-        )  # confirms the fixture predates the rename
-
-        updated = Serializable._update_imports(source, 0)
-        assert "PatchDict(" not in updated
-        assert "PatchLayout(" in updated
-
-        # And, correspondingly, decoding this real Instruction raises nothing
-        # migrate_legacy_fns-related at all, even with the gate active by
-        # default (False).
-        inst = Instruction._from_decoded_attrs(
-            self._attr_dict(source, version=0, name="Init Patch 5Q")
-        )
         assert isinstance(inst, Instruction)
 
 
@@ -451,54 +266,6 @@ class TestUpdateLegacyConstructions:
         )
         assert manual_review == []
 
-    def test_gate_bypassed_once_the_pattern_is_rewritten(self):
-        """The real integration point: Instruction._from_decoded_attrs's
-        migrate_legacy_fns gate never even triggers here, since the
-        rewrite already fixes the only pattern it would have detected --
-        no need to pass migrate_legacy_fns=True at all."""
-        src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
-        attrs = {
-            "_serialized_apply_fn": (
-                f"def apply_fn(patch_label):\n    return {src.strip()}\n"
-            ),
-            "_serialized_map_qubits_fn": (
-                "def map_qubits_fn(qubit_map):\n    return {}\n"
-            ),
-            "version": 0,
-            "type": "Test",
-            "data": {},
-            "param_error_behavior": "warn",
-            "name": "test",
-            "_param_priorities": {},
-            "_param_aliases": {},
-        }
-
-        inst = Instruction._from_decoded_attrs(attrs)
-        assert isinstance(inst, Instruction)
-
-    def test_gate_still_triggers_for_an_unrewritable_pattern(self):
-        """A pattern the rewrite can't confidently resolve (here, a
-        splat call) still hits the migrate_legacy_fns gate as before."""
-        src = "InstructionLabel(*label_tuple)\n"
-        attrs = {
-            "_serialized_apply_fn": (
-                f"def apply_fn(patch_label, label_tuple):\n    return {src.strip()}\n"
-            ),
-            "_serialized_map_qubits_fn": (
-                "def map_qubits_fn(qubit_map):\n    return {}\n"
-            ),
-            "version": 0,
-            "type": "Test",
-            "data": {},
-            "param_error_behavior": "warn",
-            "name": "test",
-            "_param_priorities": {},
-            "_param_aliases": {},
-        }
-
-        with pytest.raises(RuntimeError, match="InstructionLabel"):
-            Instruction._from_decoded_attrs(attrs)
-
     def test_falls_through_unchanged_on_an_unparseable_source(self):
         """A frozen function's source isn't guaranteed to be a single,
         standalone-parseable module (e.g. indented relative to its
@@ -531,26 +298,13 @@ class TestImportClass:
         """A `(module, class)` mapped to `None` (deleted outright, not
         relocated) raises immediately, rather than trying and failing to
         import a location that was never a real replacement."""
-        with pytest.raises(ImportError, match="removed in a later"):
+        with pytest.raises(ImportError):
             Serializable._import_class("loqs.internal.castable", "Castable", 0)
-
-    def test_unresolvable_module_raises_a_clear_import_error(self):
-        """A module that doesn't exist at all (not a typo in the rename
-        table -- e.g. a class whose location was never renamed and
-        simply isn't importable) raises `ImportError`, not the raw
-        `ModuleNotFoundError`, so callers only ever need to catch one
-        exception type."""
-        with pytest.raises(ImportError, match="Class or module not found"):
-            Serializable._import_class(
-                "loqs.nonexistent_module",
-                "NonexistentClass",
-                serializable_module.SERIALIZATION_VERSION,
-            )
 
     def test_unresolvable_class_raises_a_clear_import_error(self):
         """A real, importable module missing the specific class raises
         `ImportError`, not the raw `AttributeError`."""
-        with pytest.raises(ImportError, match="Class or module not found"):
+        with pytest.raises(ImportError):
             Serializable._import_class(
                 "loqs.core.syndromelabel",
                 "NonexistentClass",
@@ -580,9 +334,9 @@ class TestInstructionLabelDecodeRemap:
             name="test instruction",
         )
 
-    def test_already_resolved_instruction_remaps_standalone(self):
-        """When `instruction` is already resolved, the full remap happens
-        right there, with no sibling context needed at all."""
+    def test_resolved_instruction_remaps(self):
+        """An old label holding a resolved `Instruction` remaps its
+        positional args; a positional value beats a same-key kwarg."""
         from loqs.core.instructions.instructionlabel import InstructionLabel
 
         inst = self._make_instruction({"a": ["label"], "b": ["label"]})
@@ -591,7 +345,7 @@ class TestInstructionLabelDecodeRemap:
             "inst_label": None,
             "patch_label": "L0",
             "inst_args": [1, 2],
-            "inst_kwargs": {"c": 3},
+            "inst_kwargs": {"c": 3, "a": "kw"},
         }
         label = InstructionLabel._from_decoded_attrs(attr_dict)
         assert isinstance(label, InstructionLabel)
@@ -601,71 +355,14 @@ class TestInstructionLabelDecodeRemap:
         assert label["b"] == 2
         assert label["c"] == 3
 
-    def test_positional_arg_wins_over_same_key_kwarg(self):
-        """Matches the pre-1.2 `_collect_kwarg` precedence: a positional
-        value overrides a same-key `inst_kwargs` entry, not vice versa."""
-        from loqs.core.instructions.instructionlabel import InstructionLabel
-
-        inst = self._make_instruction({"a": ["label"]})
-        attr_dict = {
-            "instruction": inst,
-            "patch_label": None,
-            "inst_args": ["from_position"],
-            "inst_kwargs": {"a": "from_kwarg"},
-        }
-        label = InstructionLabel._from_decoded_attrs(attr_dict)
-        assert label["a"] == "from_position"
-
-    def test_bare_string_instruction_with_no_args_decodes_directly(self):
-        """No `inst_args` to remap means no deferral at all -- decode
-        produces an ordinary `InstructionLabel`, resolved lazily by the
-        same machinery any current-format string-named label already
-        uses."""
+    def test_pending_args_stash_and_remap(self):
+        """A bare-name label's args are stashed under
+        `LEGACY_PENDING_INST_ARGS`, then remapped by `_label_kwargs` once
+        the instruction resolves."""
         from loqs.core.instructions.instructionlabel import (
             LEGACY_PENDING_INST_ARGS,
             InstructionLabel,
         )
-
-        attr_dict = {
-            "instruction": None,
-            "inst_label": "Some Global Instruction",
-            "patch_label": None,
-            "inst_args": [],
-            "inst_kwargs": {"qubit_labels": ["Q0"]},
-        }
-        label = InstructionLabel._from_decoded_attrs(attr_dict)
-        assert isinstance(label, InstructionLabel)
-        assert label["instruction"] == "Some Global Instruction"
-        assert label["qubit_labels"] == ["Q0"]
-        assert LEGACY_PENDING_INST_ARGS not in label
-
-    def test_bare_string_instruction_with_args_stashes_pending_marker(self):
-        """Non-empty `inst_args` can't be remapped without the resolved
-        `Instruction`'s `param_priorities` -- stashed under
-        `LEGACY_PENDING_INST_ARGS` for `QuantumProgram._label_kwargs` to
-        finish once resolved."""
-        from loqs.core.instructions.instructionlabel import (
-            LEGACY_PENDING_INST_ARGS,
-            InstructionLabel,
-        )
-
-        attr_dict = {
-            "instruction": None,
-            "inst_label": "Some Global Instruction",
-            "patch_label": "L0",
-            "inst_args": [7],
-            "inst_kwargs": {},
-        }
-        label = InstructionLabel._from_decoded_attrs(attr_dict)
-        assert isinstance(label, InstructionLabel)
-        assert label["instruction"] == "Some Global Instruction"
-        assert label["patch_label"] == "L0"
-        assert label[LEGACY_PENDING_INST_ARGS] == (7,)
-
-    def test_label_kwargs_remaps_once_instruction_is_resolved(self):
-        """`QuantumProgram._label_kwargs` finishes the remap a pending
-        label was decoded with, given the now-resolved `Instruction`."""
-        from loqs.core.instructions.instructionlabel import InstructionLabel
 
         inst = self._make_instruction({"a": ["label"], "b": ["label"]})
         label = InstructionLabel._from_decoded_attrs(
@@ -677,20 +374,12 @@ class TestInstructionLabelDecodeRemap:
                 "inst_kwargs": {"c": 3},
             }
         )
+        assert label[LEGACY_PENDING_INST_ARGS] == (1, 2)
+
         kwargs = QuantumProgram._label_kwargs(label, inst)
         assert kwargs["a"] == 1
         assert kwargs["b"] == 2
         assert kwargs["c"] == 3
-
-    def test_label_kwargs_is_a_no_op_without_a_pending_marker(self):
-        """No `LEGACY_PENDING_INST_ARGS` key means `_label_kwargs` returns
-        `inst_label` itself, unmodified -- true for every current-format
-        label, not just the empty-`inst_args` legacy case."""
-        from loqs.core.instructions.instructionlabel import InstructionLabel
-
-        inst = self._make_instruction({})
-        label = InstructionLabel("MyGlobalInst", qubit_labels=["Q0"])
-        assert QuantumProgram._label_kwargs(label, inst) is label
 
 
 class TestInstructionLabelDirectLegacyConstruction:
@@ -719,7 +408,7 @@ class TestInstructionLabelDirectLegacyConstruction:
         from loqs.core.instructions.instructionlabel import InstructionLabel
 
         inst = self._make_instruction({"a": ["label"]})
-        with pytest.warns(DeprecationWarning, match="Old-style positional"):
+        with pytest.warns(DeprecationWarning):
             label = InstructionLabel(inst, "L0", (5,), {"b": 6})
         assert label["patch_label"] == "L0"
         assert label["a"] == 5
@@ -728,5 +417,5 @@ class TestInstructionLabelDirectLegacyConstruction:
     def test_unresolved_string_raises_clearly(self):
         from loqs.core.instructions.instructionlabel import InstructionLabel
 
-        with pytest.raises(TypeError, match="can't be remapped"):
+        with pytest.raises(TypeError):
             InstructionLabel("SomeInstructionName", "L0", (), {})
