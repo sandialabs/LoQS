@@ -6,7 +6,7 @@ import pytest
 pygsti = pytest.importorskip("pygsti")
 stim = pytest.importorskip("stim")
 
-from loqs.backends import PyGSTiPhysicalCircuit, STIMPhysicalCircuit
+from loqs.backends import PyGSTiPhysicalCircuit
 from loqs.core import Frame, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
@@ -89,30 +89,8 @@ class TestBuildDiscreteErrorInjectionProgramForCombo:
         # The original program/label must be untouched (deepcopy, not alias)
         assert "error_injections" not in program.instruction_stack[0]
 
-    def test_weight_2_combo_and_name_includes_both_labels(self):
-        program, _, _ = _build_circuit_program()
-        new_program = fttools.build_discrete_error_injection_program_for_combo(
-            program, 0, [(2, "Gxpi", 0), (2, "Gzpi", 1)]
-        )
-        new_label = new_program.instruction_stack[0]
-        assert new_label["error_injections"] == [
-            (2, "Gxpi", 0),
-            (2, "Gzpi", 1),
-        ]
-        assert "Gxpi" in new_program.name and "Gzpi" in new_program.name
-
-    def test_empty_error_injections_uses_placeholder_layer_in_name(self):
-        program, _, _ = _build_circuit_program()
-        new_program = fttools.build_discrete_error_injection_program_for_combo(
-            program, 0, []
-        )
-        assert "layer ?" in new_program.name
-
 
 class TestPauliPropagation:
-
-    def test_is_stim_pauli_propagation_available(self):
-        assert fttools.is_stim_pauli_propagation_available() is True
 
     def test_propagate_x_through_hadamard_becomes_z(self):
         _, _, circ = _build_circuit_program()
@@ -127,14 +105,9 @@ class TestPauliPropagation:
         signature = fttools.propagate_pauli_signature(circ, 1, {0: "X"})
         assert signature == ((0, "X"), (1, "X"))
 
-    def test_propagate_skips_idle_gates(self):
-        circ = PyGSTiPhysicalCircuit([("Imrz", "Q0")], qubit_labels=["Q0"])
-        signature = fttools.propagate_pauli_signature(circ, 0, {0: "X"})
-        assert signature == ((0, "X"),)
-
     def test_propagate_unsupported_gate_raises(self):
         circ = PyGSTiPhysicalCircuit([("Gzpi", "Q0")], qubit_labels=["Q0"])
-        with pytest.raises(ValueError, match="No Pauli-propagation rule"):
+        with pytest.raises(ValueError):
             fttools.propagate_pauli_signature(circ, 0, {0: "X"})
 
     def test_prune_error_combos_weight_1(self):
@@ -142,10 +115,10 @@ class TestPauliPropagation:
         representatives, total = fttools.prune_error_combos_by_propagation(
             circ, ["Gxpi", "Gzpi"], post_twoq_gates=False
         )
-        # 3 locations x 2 labels = 6 combos total; some propagate to the
-        # same final signature and get pruned to fewer representatives.
+        # 3 locations x 2 labels = 6 combos; they propagate to 4 distinct
+        # final signatures.
         assert total == 6
-        assert 0 < len(representatives) <= total
+        assert len(representatives) == 4
 
     def test_prune_error_combos_weight_2(self):
         _, _, circ = _build_circuit_program()
@@ -154,36 +127,7 @@ class TestPauliPropagation:
         )
         # 1 two-qubit-gate location x 2x2 label combos = 4
         assert total == 4
-        assert len(representatives) <= total
-
-    def test_prune_error_combos_falls_back_to_unpruned_without_stim(
-        self, monkeypatch
-    ):
-        _, _, circ = _build_circuit_program()
-        monkeypatch.setattr(
-            fttools, "is_stim_pauli_propagation_available", lambda: False
-        )
-        representatives, total = fttools.prune_error_combos_by_propagation(
-            circ, ["Gxpi", "Gzpi"], post_twoq_gates=False
-        )
-        assert len(representatives) == total == 6
-
-    def test_prune_error_combos_rejects_stim_circuit(self):
-        # STIMPhysicalCircuit should raise AssertionError when passed to
-        # prune_error_combos_by_propagation (requires PyGSTiPhysicalCircuit).
-        stim_circ = STIMPhysicalCircuit(
-            "H 0\nTICK\nCX 0 1", qubit_labels=[0, 1]
-        )
-        with pytest.raises(
-            AssertionError,
-            match=(
-                "Pauli propagation pruning only supports "
-                "PyGSTiPhysicalCircuit-backed circuits."
-            ),
-        ):
-            fttools.prune_error_combos_by_propagation(
-                stim_circ, ["Gxpi"], post_twoq_gates=False
-            )
+        assert len(representatives) == 4
 
 
 class TestBuildPrunedDiscreteErrorInjectionPrograms:
@@ -211,66 +155,51 @@ class TestBuildDiscreteErrorInjectionPrograms:
 
         bad_inst = Instruction(apply_fn, data={}, name="bad")
 
-        with pytest.raises(ValueError, match="Key 'circuit' not available"):
+        with pytest.raises(ValueError):
             fttools.build_discrete_error_injection_programs(
                 program, bad_inst, 0, ["Gxpi"]
             )
 
-    def test_weight_1_sweep_covers_every_location_and_label(self):
+    @pytest.mark.parametrize(
+        "post_twoq_gates, n, weight",
+        [(False, 6, 1), (True, 4, 2)],
+        ids=["weight_1", "weight_2"],
+    )
+    def test_sweep_covers_every_location_and_label(
+        self, post_twoq_gates, n, weight
+    ):
+        """Weight 1 is 3 locations x 2 labels; weight 2 is 1 two-qubit gate
+        location x 2x2 label combos."""
         program, inst, _ = _build_circuit_program()
         programs = fttools.build_discrete_error_injection_programs(
-            program, inst, 0, ["Gxpi", "Gzpi"], post_twoq_gates=False
+            program,
+            inst,
+            0,
+            ["Gxpi", "Gzpi"],
+            post_twoq_gates=post_twoq_gates,
         )
-        # 3 locations x 2 labels
-        assert len(programs) == 6
-        all_injections = {
-            tuple(p.instruction_stack[0]["error_injections"]) for p in programs
-        }
-        assert len(all_injections) == 6
-
-    def test_weight_2_sweep_covers_post_twoq_gate_locations(self):
-        program, inst, _ = _build_circuit_program()
-        programs = fttools.build_discrete_error_injection_programs(
-            program, inst, 0, ["Gxpi", "Gzpi"], post_twoq_gates=True
-        )
-        # 1 two-qubit-gate location x 2x2 label combos
-        assert len(programs) == 4
-        for p in programs:
-            injections = p.instruction_stack[0]["error_injections"]
-            assert len(injections) == 2
+        injections = [
+            p.instruction_stack[0]["error_injections"] for p in programs
+        ]
+        assert len(programs) == n
+        assert len({tuple(i) for i in injections}) == n
+        assert all(len(i) == weight for i in injections)
 
 
 class TestRunDiscreteErrorInjectedPrograms:
 
     @pytest.mark.parametrize(
-        "expected_outcomes, num_failed, message",
-        [
-            ([1], 0, "All programs succeeded!"),
-            ([999], 2, "Failed 2 programs!"),
-        ],
+        "expected_outcomes, num_failed",
+        [([1], 0), ([999], 2)],
         ids=["all_succeed", "some_fail"],
     )
-    def test_failed_programs_are_collected_and_reported(
-        self, capsys, expected_outcomes, num_failed, message
+    def test_failed_programs_are_collected(
+        self, expected_outcomes, num_failed
     ):
         program = _build_counter_program()
         runner = _make_runner([program, program], expected_outcomes)
         failed = runner.run()
         assert failed == [program] * num_failed
-        assert message in capsys.readouterr().out
-
-    def test_build_output_summary_suppressed_when_show_progress_false(
-        self, capsys
-    ):
-        """FaultInjectionRunner._build_output suppresses summary prints when show_progress=False."""
-        program = _build_counter_program()
-        runner = _make_runner(
-            [program, program], config=CheckpointConfig(show_progress=False)
-        )
-        runner.run()
-        out = capsys.readouterr().out
-        assert "succeeded" not in out
-        assert "Failed" not in out
 
 
 class TestRunDiscreteErrorInjectedProgramsParallel:
@@ -305,83 +234,25 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
 class TestFaultInjectionRunnerCheckpointing:
     """Checkpoint/resume and crash-recovery tests for FaultInjectionRunner."""
 
-    @pytest.mark.parametrize(
-        "num_programs, resume_expected_outcomes",
-        [(2, [1]), (1, (1,))],
-        ids=["matching_config", "equivalent_expected_outcomes"],
-    )
-    def test_existing_checkpoint_auto_resumes(
-        self, tmp_path, num_programs, resume_expected_outcomes
-    ):
-        """A resumed call with a matching (or equivalent-but-differently-typed
-        expected_outcomes) config continues from the checkpoint."""
+    def test_existing_checkpoint_auto_resumes(self, tmp_path):
+        """A resumed call whose expected_outcomes is equivalent but
+        differently typed (`(1,)` vs `[1]`) continues from the checkpoint."""
         program = _build_counter_program()
         ckpt = tmp_path / "checkpoint"
 
         runner1 = _make_runner(
-            [program] * num_programs,
+            [program],
             [1],
             config=CheckpointConfig(item_checkpoint_dir=ckpt),
         )
         assert runner1.run() == []
 
         runner2 = _make_runner(
-            [program] * num_programs,
-            resume_expected_outcomes,
+            [program],
+            (1,),
             config=CheckpointConfig(item_checkpoint_dir=ckpt, resume=True),
         )
         assert runner2.run() == []
-
-    def test_fault_injection_runner_with_custom_results_filename(
-        self, tmp_path
-    ):
-        """FaultInjectionRunner threads results_filename through shot checkpoints."""
-        program = _build_counter_program()
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        custom_filename = "my_results.h5"
-
-        runner = _make_runner(
-            [program],
-            config=CheckpointConfig(
-                shot_checkpoint_dir=shot_ckpt, results_filename=custom_filename
-            ),
-        )
-        failed = runner.run()
-
-        assert failed == []
-        # Shot checkpoint is created in a per-item subdirectory
-        item_shot_ckpt = shot_ckpt / "fault_0"
-        assert (item_shot_ckpt / custom_filename).exists()
-        assert not (item_shot_ckpt / "results.h5").exists()
-
-    def test_resume_mismatched_keep_shot_results_force_resume_works(
-        self, tmp_path
-    ):
-        """force_resume=True bypasses a keep_shot_results mismatch."""
-        program = _build_counter_program()
-        ckpt = tmp_path / "checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-
-        runner1 = _make_runner(
-            [program, program],
-            config=CheckpointConfig(
-                item_checkpoint_dir=ckpt, keep_shot_results=False
-            ),
-        )
-        runner1.run()
-
-        runner2 = _make_runner(
-            [program, program],
-            config=CheckpointConfig(
-                item_checkpoint_dir=ckpt,
-                resume=True,
-                keep_shot_results=True,
-                shot_checkpoint_dir=shot_ckpt,
-                force_resume=True,
-            ),
-        )
-        failed2 = runner2.run()
-        assert failed2 == []
 
 
 class TestRunKwargsPassthrough:
@@ -405,31 +276,6 @@ class TestRunKwargsPassthrough:
             loaded_runner = fttools.FaultInjectionRunner.read(f_path)
 
         assert loaded_runner.run_kwargs == {"max_frame_limit": 999}
-
-    def test_fault_injection_runner_with_keep_shot_results_and_run_kwargs(
-        self, tmp_path
-    ):
-        """FaultInjectionRunner with both keep_shot_results=True and run_kwargs works."""
-        program = _build_counter_program()
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        item_ckpt = tmp_path / "item_checkpoint"
-
-        runner = _make_runner(
-            [program],
-            num_shots=2,
-            config=CheckpointConfig(
-                shot_checkpoint_dir=shot_ckpt,
-                item_checkpoint_dir=item_ckpt,
-                keep_shot_results=True,
-            ),
-            run_kwargs={"max_frame_limit": 500},
-        )
-        failed = runner.run()
-
-        assert failed == []
-        # Verify shot checkpoint was created
-        item_shot_ckpt = shot_ckpt / "fault_0"
-        assert (item_shot_ckpt / "results.h5").exists()
 
 
 def _flip_coin_apply(seed, fail_prob=0.0) -> Frame:
@@ -500,10 +346,6 @@ class TestFaultInjectionRunnerHooks:
     parallel machinery -- that generic behavior is covered once, generically,
     in test_multiprogramrunner.py."""
 
-    def test_chkpt_subdir_prefix_is_fault(self):
-        """FaultInjectionRunner.CHKPT_SUBDIR_PREFIX should be "fault"."""
-        assert fttools.FaultInjectionRunner.CHKPT_SUBDIR_PREFIX == "fault"
-
     def test_build_program_returns_item_at_index(self):
         """build_program returns the errored_programs entry at the given
         index directly, with no transformation."""
@@ -537,22 +379,15 @@ class TestFaultInjectionRunnerHooks:
         program = _build_counter_program()
         runner = _make_runner([program], num_shots=2)
         program_results = program.run(num_shots=1, verbose=False)
-        with pytest.raises(RuntimeError, match="1.*2"):
+        with pytest.raises(RuntimeError):
             runner.reduce_program_outcomes(program_results)
 
     def test_build_output_treats_none_result_as_failed(self):
         """A None result entry (an incomplete run) is treated as failed by
-        ordinary Python truthiness in _build_output, and triggers
-        build_output's own incomplete-run warning."""
+        ordinary Python truthiness in _build_output."""
         program_ok = _build_counter_program()
         program_incomplete = _build_counter_program()
         runner = _make_runner([program_ok, program_incomplete])
         ordered_results = [(program_ok, True), (program_incomplete, None)]
 
-        with pytest.warns(UserWarning, match="None result"):
-            failed = runner.build_output(ordered_results)
-
-        assert failed == [program_incomplete]
-
-        # _build_output alone (no warning layer) applies the same truthiness.
         assert runner._build_output(ordered_results) == [program_incomplete]

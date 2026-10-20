@@ -239,6 +239,8 @@ def test_bad_files_are_skipped_with_reasons(tmp_path, monkeypatch):
     with h5py.File(legacy, "w", libver="latest") as f:
         f.attrs["current_item_index"] = 4
     missing = tmp_path / "worker_nodeD_4_0000abcd_runner.h5"
+    unrecognized = tmp_path / "worker_nodeA_notapid_0000abcd_runner.h5"
+    unrecognized.write_bytes(b"x")
     real_list = monitor_state._list_worker_files
     monkeypatch.setattr(
         monitor_state,
@@ -252,17 +254,8 @@ def test_bad_files_are_skipped_with_reasons(tmp_path, monkeypatch):
         garbage.name: "unreadable",
         legacy.name: "legacy",
         missing.name: "unreadable",
+        unrecognized.name: "unrecognized",
     }
-    assert snap.notes
-
-
-def test_unrecognized_name_is_skipped_unread(tmp_path):
-    bad = tmp_path / "worker_nodeA_notapid_0000abcd_runner.h5"
-    bad.write_bytes(b"x")
-    snap = _tracker(tmp_path).poll()
-    assert [(s.path.name, s.reason) for s in snap.skipped] == [
-        (bad.name, "unrecognized")
-    ]
     assert snap.notes
 
 

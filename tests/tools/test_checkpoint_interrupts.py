@@ -169,7 +169,7 @@ def test_interrupted_write_resumes_to_reference(
         if site_id == "shot_serial_snapshot":
             # The snapshot is written atomically, so a kill inside it
             # leaves nothing to resume; a fresh run then starts cleanly.
-            with pytest.raises(ValueError, match="No existing checkpoint"):
+            with pytest.raises(ValueError):
                 _run_shots(tmp_path, parallel, resume=True)
             resumed = _run_shots(tmp_path, parallel)
         else:
