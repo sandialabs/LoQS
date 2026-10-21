@@ -1073,10 +1073,6 @@ class TestConcurrentCheckpointing:
 class TestParentProgramFileWriting:
     """Test parent program file writing with correct checkpoint_dir handling."""
 
-    @pytest.mark.skipif(
-        os.getenv("CI", "false") == "true",
-        reason="Requires QuantumProgram dependencies",
-    )
     def test_parent_program_reuses_existing_results_h5(self, tmp_path):
         """Regression test: results.h5 (containing the whole ProgramResults)
         should be written to the explicit checkpoint_dir, and when it already
@@ -1117,10 +1113,6 @@ class TestParentProgramFileWriting:
         mtime2 = file2.stat().st_mtime
         assert mtime1 == mtime2
 
-    @pytest.mark.skipif(
-        os.getenv("CI", "false") == "true",
-        reason="Requires QuantumProgram dependencies",
-    )
     def test_seeding_over_a_corrupt_parent_program_names_the_file(
         self, tmp_path
     ):

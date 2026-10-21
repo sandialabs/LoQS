@@ -173,9 +173,6 @@ def inline_patches():
         yield
 
 
-@pytest.mark.skipif(
-    os.getenv("CI", "false") == "true", reason="Breaks GitHub runners?"
-)
 class TestQuantumProgram:
 
     # TODO: This is currently only an integrated test depending on a codepack
