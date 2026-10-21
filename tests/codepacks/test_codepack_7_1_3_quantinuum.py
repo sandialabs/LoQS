@@ -324,6 +324,123 @@ class TestSteaneCodepack:
         failed = runner.run()
         return len(failed)
 
+    @staticmethod
+    def _shshs_stack(gate):
+        # (gate H)^3 is the identity up to a phase, so this block acts as a
+        # logical H, with a QEC round after every gate
+        block = []
+        for g in (gate, "H", gate, "H", gate):
+            block += [(g, "L0"), ("Adaptive QEC", "L0")]
+        return block
+
+    @staticmethod
+    def _logical_prep_stack(qubits):
+        # Logical |+>
+        return [
+            {
+                "instruction": "Init State",
+                "state": len(qubits),
+                "qubit_labels": qubits,
+            },
+            {
+                "instruction": "Init Patch Steane",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
+            ("FT Zero Prep", "L0"),
+            ("H", "L0"),
+        ]
+
+    def _make_s_program(self, code, stack):
+        model = codepack_steane.create_ideal_model(
+            self.qubits,
+            gaterep=StimCircuitGateRep,
+            model_backend=DictNoiseModel,
+        )
+        return QuantumProgram(
+            InstructionStack(stack),
+            default_noise_model=model,
+            state_type=STIMQuantumState,
+            patch_types={"Steane": code},
+            name="logical S frame update",
+        )
+
+    # Two X errors, each corrected in the frame before the gate, must not
+    # leave the logical frame or stored syndrome stale across S/Sdag.
+    @pytest.mark.parametrize("gate", ["S", "Sdag"])
+    def test_s_frame_update_tracked_x_errors(self, gate):
+        circuit_backend = ListPhysicalCircuit
+        code = codepack_steane.create_qec_code(circuit_backend=circuit_backend)
+        data_qubits = self.qubits[3:]
+        for q in data_qubits:
+            code.instructions[f"Injected Data Error {q}"] = (
+                builders.build_physical_circuit_instruction(
+                    circuit_backend([[("Gxpi", q)]], qubit_labels=self.qubits),
+                    name=f"Injected Data Error {q}",
+                )
+            )
+
+        failed = []
+        for q1 in data_qubits:
+            for q2 in data_qubits:
+                if q1 == q2:
+                    continue
+                stack = self._logical_prep_stack(self.qubits) + [
+                    (f"Injected Data Error {q1}", "L0"),
+                    ("Adaptive QEC", "L0"),
+                    (f"Injected Data Error {q2}", "L0"),
+                    ("Adaptive QEC", "L0"),
+                ]
+                stack += self._shshs_stack(gate)
+                stack.append(("FT Logical Z Measure", "L0"))
+                results = self._make_s_program(code, stack).run()
+                if (
+                    results.collect_shot_data("logical_measurement", -1)[0]
+                    != 0
+                ):
+                    failed.append((q1, q2))
+        assert not failed
+
+    # A single fault inside a QEC round can leave a hook residual that the
+    # following S/Sdag must still track.
+    @pytest.mark.parametrize("gate", ["S", "Sdag"])
+    @pytest.mark.parametrize(
+        "check,feed_forward",
+        [
+            (
+                "Flagged Parallel S1-S5-S6 Check",
+                "Flagged S1-S5-S6 Feed-Forward",
+            ),
+            (
+                "Flagged Parallel S2-S3-S4 Check",
+                "Flagged S2-S3-S4 Feed-Forward",
+            ),
+        ],
+    )
+    def test_s_frame_update_single_fault(self, gate, check, feed_forward):
+        code = codepack_steane.create_qec_code(
+            circuit_backend=ListPhysicalCircuit
+        )
+        stack = self._logical_prep_stack(self.qubits) + [
+            (check, "L0"),
+            (feed_forward, "L0"),
+        ]
+        stack += self._shshs_stack(gate)
+        stack.append(("FT Logical Z Measure", "L0"))
+
+        programs = fttools.build_discrete_error_injection_programs(
+            base_program=self._make_s_program(code, stack),
+            instruction_to_analyze=code.instructions[check],
+            stack_idx_to_modify=4,
+            error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+        )
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=programs,
+            collect_shot_data_args=[("logical_measurement", -1)],
+            expected_outcomes=[0],
+        )
+        assert not runner.run()
+
     def test_qec_ft_branch1(self):
         stack_ftqec1 = InstructionStack(
             [
