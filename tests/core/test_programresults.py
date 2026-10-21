@@ -1,7 +1,6 @@
 """Tester for loqs.core.programresults"""
 
 import multiprocessing as mp
-import os
 import re
 import shutil
 import sys

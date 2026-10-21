@@ -1,6 +1,5 @@
 """Tester for loqs.core.quantumprogram"""
 
-import os
 import pytest
 from pathlib import Path
 
