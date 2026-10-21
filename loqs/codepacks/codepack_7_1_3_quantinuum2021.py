@@ -210,8 +210,8 @@ def create_qec_code(  # noqa: C901 -- constructs [[7,1,3]] QEC code with multipl
         "Y": "Gypi",
         "Z": "Gzpi",
         "H Circuit": "Gh",
-        "S": "Gzmpi2",  # Logical S is really all Sdagger...
-        "Sdag": "Gzpi2",  # ...and vice versa
+        "S Circuit": "Gzmpi2",  # Logical S is really all Sdagger...
+        "Sdag Circuit": "Gzpi2",  # ...and vice versa
         "I": "Gi",
     }
     # Paulis only act on last three data qubits (bottom row)
@@ -229,7 +229,7 @@ def create_qec_code(  # noqa: C901 -- constructs [[7,1,3]] QEC code with multipl
             )
         instructions[n] = builders.build_physical_circuit_instruction(
             logical_circ,
-            pauli_frame_update="H" if n == "H Circuit" else n,
+            pauli_frame_update=n.removesuffix(" Circuit"),
             name=f"Logical {n}",
         )
 
@@ -275,6 +275,49 @@ def create_qec_code(  # noqa: C901 -- constructs [[7,1,3]] QEC code with multipl
     instructions["H"] = builders.build_composite_instruction(
         [instructions["H Circuit"], instructions["H Frame Update"]],
         name="Logical H",
+    )
+
+    # S and Sdag map X to +-Y and fix Z, so one update serves both: a tracked X
+    # correction gains a Z part, and each X-type check's stored value picks up
+    # its Z-type partner on the same plaquette (see `mappings` below)
+    def S_frame_update_apply_fn(
+        patches: PatchLayout,
+        patch_label: str,
+    ):
+        patch = patches[patch_label]
+        logical_pauli_frame = list(
+            patch.data.get("logical_pauli_frame", [0, 0])
+        )
+        logical_pauli_frame[0] ^= logical_pauli_frame[1]
+
+        latest_syndrome = list(patch.data.get("latest_syndrome", [0] * 6))
+        for i in range(3):
+            latest_syndrome[i] ^= latest_syndrome[3 + i]
+
+        new_patch = patch.copy()
+        new_patch.data["logical_pauli_frame"] = logical_pauli_frame
+        new_patch.data["latest_syndrome"] = latest_syndrome
+
+        patches[patch_label] = new_patch
+
+        return Frame(
+            {
+                "new_logical_pauli_frame": logical_pauli_frame,
+                "patches": patches,
+            }
+        )
+
+    instructions["S Frame Update"] = Instruction(
+        S_frame_update_apply_fn, name="Logical S Frame Update"
+    )
+
+    instructions["S"] = builders.build_composite_instruction(
+        [instructions["S Circuit"], instructions["S Frame Update"]],
+        name="Logical S",
+    )
+    instructions["Sdag"] = builders.build_composite_instruction(
+        [instructions["Sdag Circuit"], instructions["S Frame Update"]],
+        name="Logical Sdag",
     )
 
     ## QEC
