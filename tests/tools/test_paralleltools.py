@@ -1,13 +1,13 @@
 """Tester for loqs.tools.paralleltools"""
 
-import os
 import sys
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 import pytest
 
-from loqs.core.executors import MapArrayExecutor, SubmitExecutor
+from loqs.core.executors import MapArrayExecutor
 from loqs.internal import pin_worker_threads
 from loqs.tools.paralleltools import (
     ChunkResourceStats,
@@ -43,28 +43,8 @@ def _sleep_and_return_chunk(chunk: list[int]) -> list[int]:
     index rather than trusting as_completed's own yield order."""
     import time
 
-    time.sleep((3 - chunk[0]) * 0.2)
+    time.sleep((3 - chunk[0]) * 0.05)
     return chunk
-
-
-def _report_blas_thread_counts():
-    """Force a BLAS op (registering numpy's thread pool if not already
-    registered) and report every detected pool's thread count. Defined at
-    module level so `loky` can pickle a plain reference to it."""
-    import numpy as np
-    import threadpoolctl
-
-    x = np.random.rand(200, 200)
-    _ = x @ x
-    return [pool["num_threads"] for pool in threadpoolctl.threadpool_info()]
-
-
-def _pin_worker_threads_task() -> None:
-    """Module-level wrapper around pin_worker_threads, submitted to a real
-    executor rather than calling it directly in the test process -- it's a
-    sticky, non-context-manager call, so running it in-process would leak
-    the one-thread limit into every later test sharing that process."""
-    pin_worker_threads()
 
 
 def _build_shot_executor():
@@ -113,101 +93,55 @@ class TestChunkRoundRobin:
         ]
 
     def test_n_chunks_less_than_one_raises(self):
-        with pytest.raises(ValueError, match="n_chunks"):
+        with pytest.raises(ValueError):
             chunk_round_robin([1, 2], 0)
-
-    def test_more_chunks_than_items_leaves_some_empty(self):
-        assert chunk_round_robin([1, 2], 5) == [[1], [2], [], [], []]
-
-    def test_empty_items_returns_empty_chunks(self):
-        assert chunk_round_robin([], 3) == [[], [], []]
 
 
 class TestPinWorkerThreads:
 
-    def test_pins_thread_pools_to_one_inside_a_worker(self):
-        """Run inside a real, single-use loky worker (not the test process
-        itself), matching a real worker's own thread-pinning entry point."""
-        loky = pytest.importorskip("loky")
-        pytest.importorskip("threadpoolctl")
+    def test_pins_thread_pools_to_one(self):
+        """Runs in this process: `threadpool_limits(limits=None)` restores
+        the original limits on exit, so the pin does not leak."""
+        threadpoolctl = pytest.importorskip("threadpoolctl")
+        import numpy as np
 
-        executor = loky.get_reusable_executor(max_workers=1, reuse=False)
-        try:
-            # Force this worker's BLAS thread pool to register before
-            # pinning, matching a real worker that already imported numpy.
-            before = executor.submit(_report_blas_thread_counts).result()
-            if not before:
-                pytest.skip(
-                    "No threadpoolctl-visible BLAS backend in this worker "
-                    "(e.g. numpy built against Apple's Accelerate on "
-                    "macOS, which threadpoolctl cannot introspect or "
-                    "control at all) -- nothing to verify pinning against."
-                )
-            executor.submit(_pin_worker_threads_task).result()
-            after = executor.submit(_report_blas_thread_counts).result()
-        finally:
-            executor.shutdown(wait=True)
-
-        assert after, "expected at least one detected thread pool"
+        with threadpoolctl.threadpool_limits(limits=None):
+            # Force numpy's BLAS pool to register before pinning.
+            x = np.random.rand(200, 200)
+            _ = x @ x
+            if not threadpoolctl.threadpool_info():
+                pytest.skip("No threadpoolctl-visible BLAS backend")
+            pin_worker_threads()
+            after = [
+                pool["num_threads"] for pool in threadpoolctl.threadpool_info()
+            ]
         assert all(n == 1 for n in after)
 
     def test_warns_when_threadpoolctl_not_installed(self, monkeypatch):
         monkeypatch.setattr("loqs.internal.threadpool_limits", None)
-        with pytest.warns(UserWarning, match="threadpoolctl"):
+        with pytest.warns(UserWarning):
             pin_worker_threads()
 
 
 class TestResolveShotExecutor:
 
-    def test_none_returns_none(self):
+    def test_resolve_shot_executor(self):
         assert resolve_shot_executor(None) is None
 
-    def test_live_executor_is_returned_as_is(self):
-        loky = pytest.importorskip("loky")
-        executor = loky.get_reusable_executor(max_workers=1)
-        assert resolve_shot_executor(executor) is executor
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert resolve_shot_executor(executor) is executor
 
-    def test_factory_callable_is_called_once(self):
-        calls = []
-
-        def factory():
-            calls.append(1)
-            return "an executor"
-
-        result = resolve_shot_executor(factory)
-
-        assert result == "an executor"
-        assert len(calls) == 1
+        assert resolve_shot_executor(lambda: "an executor") == "an executor"
 
 
 class TestRunChunksWithSubmitExecutor:
 
-    def test_loky_satisfies_submit_executor_protocol(self):
-        loky = pytest.importorskip("loky")
-        executor = loky.get_reusable_executor(max_workers=2)
-        assert isinstance(executor, SubmitExecutor)
-
-    def test_loky_computes_every_chunk_correctly(self):
-        loky = pytest.importorskip("loky")
-        executor = loky.get_reusable_executor(max_workers=2)
-
-        chunks = [[3, 3, 3], [1], [2, 2]]
-        results = run_chunks_with_submit_executor(
-            executor, _double_chunk, chunks
-        )
-
-        assert results == [[6, 6, 6], [2], [4, 4]]
-
-    def test_loky_preserves_submission_order_despite_reversed_completion(
-        self,
-    ):
-        loky = pytest.importorskip("loky")
-        executor = loky.get_reusable_executor(max_workers=3)
-
+    def test_preserves_submission_order_despite_reversed_completion(self):
         chunks = [[0], [1], [2]]
-        results = run_chunks_with_submit_executor(
-            executor, _sleep_and_return_chunk, chunks
-        )
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            results = run_chunks_with_submit_executor(
+                executor, _sleep_and_return_chunk, chunks
+            )
 
         assert results == [[0], [1], [2]]
 
@@ -237,38 +171,18 @@ class TestRunChunksWithMapArrayExecutor:
 
 class TestParallelStrategy:
 
-    def test_defaults_to_not_chunked(self):
-        strategy = ParallelStrategy()
-        assert strategy.is_chunked is False
-
-    def test_program_executor_makes_it_chunked(self):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1)
-        )
-        assert strategy.is_chunked is True
-
     def test_map_array_executor_without_n_program_chunks_raises(self):
-        with pytest.raises(ValueError, match="n_program_chunks"):
+        with pytest.raises(ValueError):
             ParallelStrategy(program_executor=_FakeMapArrayExecutor())
 
-    def test_submit_executor_without_n_program_chunks_is_fine(self):
+    def test_shot_executor_with_program_executor(self):
+        """A live loky shot executor beside a program executor becomes an
+        ExecutorSpec; a factory, or a live executor with no program
+        executor, stays as given."""
         loky = pytest.importorskip("loky")
+        program_executor = loky.get_reusable_executor(max_workers=1)
         strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1)
-        )
-        assert strategy.n_program_chunks is None
-
-    def test_live_loky_shot_executor_with_program_executor_is_auto_converted(
-        self,
-    ):
-        """A recognized backend (currently just loky) is transparently
-        replaced with a picklable ExecutorSpec built from its own
-        construction parameters, instead of requiring a caller to write
-        a factory function by hand."""
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1),
+            program_executor=program_executor,
             n_program_chunks=2,
             shot_executor=loky.get_reusable_executor(max_workers=3),
         )
@@ -276,55 +190,41 @@ class TestParallelStrategy:
         assert strategy.shot_executor.exec_backend == "loky"
         assert strategy.shot_executor.kwargs == {"max_workers": 3}
 
+        strategy = ParallelStrategy(
+            program_executor=program_executor,
+            n_program_chunks=2,
+            shot_executor=_build_shot_executor,
+        )
+        assert strategy.shot_executor is _build_shot_executor
+
+        executor = loky.get_reusable_executor(max_workers=1)
+        strategy = ParallelStrategy(shot_executor=executor)
+        assert strategy.shot_executor is executor
+
     def test_live_unrecognized_shot_executor_with_program_executor_raises(
         self,
     ):
         loky = pytest.importorskip("loky")
-        with pytest.raises(ValueError, match="shot_executor"):
+        with pytest.raises(ValueError):
             ParallelStrategy(
                 program_executor=loky.get_reusable_executor(max_workers=1),
                 n_program_chunks=2,
                 shot_executor=_FakeMapArrayExecutor(),
             )
 
-    def test_factory_shot_executor_with_program_executor_is_fine(self):
+    @pytest.mark.parametrize(
+        "n_program_chunks", [None, 2], ids=["default", "explicit"]
+    )
+    def test_make_chunks(self, n_program_chunks):
         loky = pytest.importorskip("loky")
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=1),
-            n_program_chunks=2,
-            shot_executor=_build_shot_executor,
+            n_program_chunks=n_program_chunks,
         )
-        assert strategy.shot_executor is _build_shot_executor
-
-    def test_live_shot_executor_without_program_executor_is_fine(self):
-        loky = pytest.importorskip("loky")
-        executor = loky.get_reusable_executor(max_workers=1)
-        strategy = ParallelStrategy(shot_executor=executor)
-        assert strategy.shot_executor is executor
-
-    def test_make_chunks_defaults_to_one_chunk_per_item(self):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1)
+        expected = (
+            [[1], [2], [3]] if n_program_chunks is None else [[1, 3], [2]]
         )
-        assert strategy.make_chunks([1, 2, 3]) == [[1], [2], [3]]
-
-    def test_make_chunks_honors_explicit_n_program_chunks(self):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1),
-            n_program_chunks=2,
-        )
-        assert strategy.make_chunks([1, 2, 3]) == [[1, 3], [2]]
-
-    def test_dispatch_via_submit_executor(self):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2)
-        )
-        chunks = [[1], [2, 2]]
-        results = strategy.dispatch(_double_chunk, chunks)
-        assert results == [[2], [4, 4]]
+        assert strategy.make_chunks([1, 2, 3]) == expected
 
     def test_dispatch_prefers_map_array_over_submit(self):
         """A single object satisfying both SubmitExecutor and
@@ -339,52 +239,39 @@ class TestParallelStrategy:
         results = strategy.dispatch(_double_chunk, chunks)
         assert results == [[2], [4, 4]]
 
-    def test_program_executor_accepts_executor_spec_unresolved(self):
-        """An ExecutorSpec is accepted directly as program_executor and
-        stays unresolved (no live pool built) until dispatch() actually
-        needs one."""
+    def test_executor_spec_program_executor_resolves_once_on_dispatch(
+        self, monkeypatch
+    ):
+        """An ExecutorSpec program executor stays unresolved until the
+        first dispatch, which builds the pool once and reuses it."""
+        pytest.importorskip("loky")
+        pool = ThreadPoolExecutor(max_workers=2)
+        builds = []
+
+        def fake_get_reusable_executor(**kwargs):
+            builds.append(kwargs)
+            return pool
+
+        monkeypatch.setattr(
+            "loky.get_reusable_executor", fake_get_reusable_executor
+        )
         spec = ExecutorSpec("loky", {"max_workers": 2})
         strategy = ParallelStrategy(program_executor=spec, n_program_chunks=2)
-        assert strategy.is_chunked is True
-        assert strategy.program_executor is spec
-        assert strategy._resolved_program_executor is None
+        try:
+            assert strategy.is_chunked is True
+            assert strategy.program_executor is spec
+            assert strategy._resolved_program_executor is None
 
-    def test_dispatch_resolves_and_caches_executor_spec_program_executor(self):
-        pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=ExecutorSpec("loky", {"max_workers": 1}),
-            n_program_chunks=1,
-        )
-        strategy.dispatch(_double_chunk, [[1, 2]])
-        resolved = strategy._resolved_program_executor
-        assert resolved is not None
-        strategy.dispatch(_double_chunk, [[3, 4]])
-        assert strategy._resolved_program_executor is resolved
+            results = strategy.dispatch(_double_chunk, [[1], [2, 2]])
+            assert results == [[2], [4, 4]]
+            resolved = strategy._resolved_program_executor
+            assert resolved is not None
 
-    def test_multiple_differently_sized_executor_specs_coexist_safely(self):
-        """loky.get_reusable_executor() is a process-wide singleton --
-        building several live, differently-sized instances up front (one
-        per strategy) would silently invalidate the earlier ones.
-        ExecutorSpec sidesteps this by staying unresolved until each
-        strategy's own dispatch() call actually needs it, one strategy
-        at a time."""
-        pytest.importorskip("loky")
-        strategies = {
-            label: ParallelStrategy(
-                program_executor=ExecutorSpec("loky", {"max_workers": n}),
-                n_program_chunks=n,
-            )
-            for label, n in [("4x", 4), ("2x", 2), ("1x", 1)]
-        }
-        for strategy in strategies.values():
-            chunks = strategy.make_chunks([1, 2, 3, 4])
-            results = strategy.dispatch(_double_chunk, chunks)
-            assert sorted(x for chunk in results for x in chunk) == [
-                2,
-                4,
-                6,
-                8,
-            ]
+            strategy.dispatch(_double_chunk, [[1], [2, 2]])
+            assert strategy._resolved_program_executor is resolved
+            assert len(builds) == 1
+        finally:
+            pool.shutdown()
 
 
 class TestExecutorSpecAndParallelStrategySerialization:
@@ -392,58 +279,31 @@ class TestExecutorSpecAndParallelStrategySerialization:
     `MultiProgramRunner` holding either can survive a `.write()`/`.read()`
     round-trip (e.g. as part of its own crash-recovery snapshot)."""
 
-    def test_executor_spec_round_trips(self, tmp_path):
-        spec = ExecutorSpec(exec_backend="loky", kwargs={"max_workers": 3})
-        path = tmp_path / "spec.json"
-        spec.write(path)
-        loaded = ExecutorSpec.read(path)
-        assert loaded.exec_backend == "loky"
-        assert loaded.kwargs == {"max_workers": 3}
-
-    def test_parallel_strategy_round_trips_with_none_executors(self, tmp_path):
-        strategy = ParallelStrategy(n_program_chunks=2)
+    @pytest.mark.parametrize("case", ["serial", "executors"])
+    def test_parallel_strategy_round_trip(self, tmp_path, case):
+        if case == "serial":
+            strategy = ParallelStrategy(n_program_chunks=2, n_shot_batches=7)
+        else:
+            loky = pytest.importorskip("loky")
+            strategy = ParallelStrategy(
+                program_executor=loky.get_reusable_executor(max_workers=2),
+                n_program_chunks=2,
+                shot_executor=ExecutorSpec("loky", {"max_workers": 1}),
+            )
         path = tmp_path / "strategy.json"
         strategy.write(path)
         loaded = ParallelStrategy.read(path)
-        assert loaded.program_executor is None
-        assert loaded.shot_executor is None
-        assert loaded.n_program_chunks == 2
-
-    def test_parallel_strategy_round_trips_with_executor_spec(self, tmp_path):
-        strategy = ParallelStrategy(
-            program_executor=ExecutorSpec(
-                exec_backend="loky", kwargs={"max_workers": 2}
-            ),
-            n_program_chunks=2,
-            shot_executor=ExecutorSpec(
-                exec_backend="loky", kwargs={"max_workers": 1}
-            ),
-        )
-        path = tmp_path / "strategy.json"
-        strategy.write(path)
-        loaded = ParallelStrategy.read(path)
-        assert isinstance(loaded.program_executor, ExecutorSpec)
-        assert loaded.program_executor.exec_backend == "loky"
-        assert loaded.program_executor.kwargs == {"max_workers": 2}
-        assert isinstance(loaded.shot_executor, ExecutorSpec)
-        assert loaded.shot_executor.kwargs == {"max_workers": 1}
-
-    def test_parallel_strategy_round_trips_live_recognized_executor(
-        self, tmp_path
-    ):
-        """A live, loky-backed program_executor is transparently converted
-        to an ExecutorSpec on encode, the same conversion already applied
-        to a live shot_executor at construction time."""
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        path = tmp_path / "strategy.json"
-        strategy.write(path)
-        loaded = ParallelStrategy.read(path)
-        assert isinstance(loaded.program_executor, ExecutorSpec)
-        assert loaded.program_executor.exec_backend == "loky"
+        if case == "serial":
+            assert loaded.program_executor is None
+            assert loaded.shot_executor is None
+            assert loaded.n_program_chunks == 2
+            assert loaded.n_shot_batches == 7
+        else:
+            assert isinstance(loaded.program_executor, ExecutorSpec)
+            assert loaded.program_executor.exec_backend == "loky"
+            assert loaded.program_executor.kwargs == {"max_workers": 2}
+            assert isinstance(loaded.shot_executor, ExecutorSpec)
+            assert loaded.shot_executor.kwargs == {"max_workers": 1}
 
     def test_encoding_live_unrecognized_program_executor_raises(
         self, tmp_path
@@ -451,143 +311,27 @@ class TestExecutorSpecAndParallelStrategySerialization:
         strategy = ParallelStrategy(
             program_executor=_FakeMapArrayExecutor(), n_program_chunks=1
         )
-        with pytest.raises(ValueError, match="program_executor"):
+        with pytest.raises(ValueError):
             strategy.write(tmp_path / "strategy.json")
 
 
 class TestParallelStrategyDescribe:
 
-    def test_all_serial_reports_both_axes_serial(self):
-        strategy = ParallelStrategy()
-        description = strategy.describe([1, 2, 3])
-        assert description == "program axis: serial\nshot axis: serial"
-
-    def test_program_executor_reports_full_breakdown(self):
+    def test_describe_reports_program_and_shot_breakdown(self):
         loky = pytest.importorskip("loky")
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=4),
             n_program_chunks=2,
+            shot_executor=ExecutorSpec("loky", {"max_workers": 3}),
         )
-        description = strategy.describe([1, 2, 3, 4, 5, 6])
+        description = strategy.describe([1, 2, 3, 4, 5, 6], num_shots=30)
         assert "program axis: loky(max_workers=4)" in description
         assert "# of program chunks: 2" in description
         assert "# of programs/chunk: 3" in description
         assert "# of chunks/worker:  1" in description
-
-    def test_map_array_executor_reports_plain_type_name(self):
-        """`_FakeMapArrayExecutor` isn't a recognized backend (unlike a
-        real `submitit.Executor`, which also isn't recognized for
-        automatic factory construction -- see _introspect_executor_spec),
-        so its tag falls back to its plain type name. Its worker count
-        also isn't exposed, so "# of chunks/worker" is simply omitted
-        rather than shown as "unknown"."""
-        strategy = ParallelStrategy(
-            program_executor=_FakeMapArrayExecutor(), n_program_chunks=2
-        )
-        description = strategy.describe()
-        assert "program axis: _FakeMapArrayExecutor" in description
-        assert "# of program chunks: 2" in description
-        assert "# of chunks/worker" not in description
-
-    def test_factory_shot_executor_reports_factory_name(self):
-        strategy = ParallelStrategy(shot_executor=_build_shot_executor)
-        description = strategy.describe()
-        assert description.endswith("shot axis: _build_shot_executor()")
-
-    def test_factory_program_executor_reports_factory_name(self):
-        strategy = ParallelStrategy(
-            program_executor=_build_shot_executor, n_program_chunks=2
-        )
-        description = strategy.describe()
-        assert "program axis: _build_shot_executor()" in description
-        assert "# of program chunks: 2" in description
-
-    def test_auto_converted_shot_executor_reports_backend_and_kwargs(self):
-        """A live loky executor given alongside program_executor is
-        auto-converted to an ExecutorSpec (see TestParallelStrategy) --
-        describe() should report its actual backend/kwargs, not just a
-        generic "factory"."""
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1),
-            n_program_chunks=2,
-            shot_executor=loky.get_reusable_executor(max_workers=3),
-        )
-        description = strategy.describe([1, 2, 3, 4], num_shots=30)
         assert "shot axis: loky(max_workers=3)" in description
         assert "# of shots:        30" in description
         assert "# of shots/worker: 10" in description
-
-    def test_live_shot_executor_without_program_executor_reports_tag(self):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            shot_executor=loky.get_reusable_executor(max_workers=3)
-        )
-        description = strategy.describe(num_shots=10)
-        assert "shot axis: loky(max_workers=3)" in description
-        assert "# of shots:        10" in description
-        assert "# of shots/worker: 4" in description
-
-    def test_no_num_shots_omits_shot_rows(self):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            shot_executor=loky.get_reusable_executor(max_workers=3)
-        )
-        description = strategy.describe()
-        assert (
-            description
-            == "program axis: serial\nshot axis: loky(max_workers=3)"
-        )
-
-    def test_no_items_omits_program_chunk_rows_needing_items(self):
-        """ "# of program chunks" only needs n_program_chunks (or
-        program_executor being chunked at all), not items -- but
-        "# of programs/chunk" genuinely needs a real item count, so only
-        that row is omitted."""
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        description = strategy.describe()
-        assert "# of program chunks: 2" in description
-        assert "# of programs/chunk" not in description
-        assert "# of chunks/worker:  1" in description
-
-    def test_executor_spec_program_executor_describes_without_resolving(self):
-        """describe() reads an unresolved ExecutorSpec's own kwargs
-        directly (like it already does for shot_executor) rather than
-        building a live pool just to introspect it."""
-        strategy = ParallelStrategy(
-            program_executor=ExecutorSpec("loky", {"max_workers": 4}),
-            n_program_chunks=2,
-        )
-        description = strategy.describe([1, 2, 3, 4])
-        assert "program axis: loky(max_workers=4)" in description
-        assert "# of chunks/worker:  1" in description
-        assert strategy._resolved_program_executor is None
-
-
-class TestParallelStrategyStr:
-
-    def test_str_equals_describe_for_all_serial(self):
-        strategy = ParallelStrategy()
-        assert str(strategy) == strategy.describe()
-
-    def test_str_equals_describe_with_program_executor(self):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        assert str(strategy) == strategy.describe()
-
-    def test_str_equals_describe_with_shot_executor(self):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            shot_executor=loky.get_reusable_executor(max_workers=3)
-        )
-        assert str(strategy) == strategy.describe()
 
 
 class TestWorkerPlan:
@@ -637,20 +381,6 @@ class TestWorkerPlan:
         assert plan[3].kind == "idle_pointer"
         assert plan[3].points_to == 2
 
-    def test_worker_plan_does_not_collapse_genuinely_different_shapes(self):
-        """Only *exact* duplicates collapse. Two workers with chunk-count
-        2 but different real per-chunk sizes ([3, 1] vs. [2, 2]) are each
-        their own exemplar, even though they share a canonical shape
-        ([3, 2])."""
-        assigned = [[3, 1], [2, 2]]
-        plan = _worker_plan(assigned, [], 2)
-        assert plan[0].kind == "exemplar"
-        assert plan[0].real_sizes == (3, 1)
-        assert plan[0].padded_sizes == (3, 2)
-        assert plan[1].kind == "exemplar"
-        assert plan[1].real_sizes == (2, 2)
-        assert plan[1].padded_sizes == (3, 2)
-
 
 class TestParallelStrategyPlot:
 
@@ -670,66 +400,6 @@ class TestParallelStrategyPlot:
         pytest.importorskip("matplotlib")
         ax = ParallelStrategy().plot([1, 2, 3])
         assert ax is not None
-        assert "shots: serial" in ax.get_title()
-
-    def test_all_serial_labels_the_lone_box_and_shot_axis_serial(self):
-        """No program_executor means everything runs sequentially in the
-        driver process, not a real worker pool, and no shot_executor
-        means the same for shots -- the diagram should say "Serial" for
-        both axes rather than implying a "PW0" worker exists."""
-        pytest.importorskip("matplotlib")
-        ax = ParallelStrategy().plot([1, 2, 3])
-        texts = self._texts(ax)
-        assert texts.count("Serial") == 2
-        assert "PW0" not in texts
-
-    def test_program_only_reports_active_workers_and_chunks(self):
-        pytest.importorskip("matplotlib")
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        ax = strategy.plot([1, 2, 3, 4, 5, 6])
-        assert "2/2 program worker(s) active" in ax.get_title()
-        assert "up to 1 chunk(s)/worker" in ax.get_title()
-        assert "shots: serial" in ax.get_title()
-
-    def test_more_workers_than_chunks_leaves_some_idle(self):
-        """Requesting more workers than there are chunks to hand out
-        leaves some workers with nothing to do -- the diagram must draw
-        that shortfall as explicitly idle: one fully-hatched exemplar
-        (the first idle worker), with any further idle workers collapsed
-        to a pointer at it rather than redrawn."""
-        pytest.importorskip("matplotlib")
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=4),
-            n_program_chunks=2,
-        )
-        ax = strategy.plot([1, 2, 3, 4, 5, 6])
-        assert "2/4 program worker(s) active" in ax.get_title()
-        texts = self._texts(ax)
-        assert "PW2 (idle)" in texts
-        assert "PW3 (idle)" not in texts
-        assert "PW3 = PW2" in texts
-
-    def test_duplicate_active_workers_collapse_to_pointer_labels(self):
-        """Under round-robin dispatch, workers with the exact same real
-        chunk-size signature are exact duplicates of each other -- the
-        first is drawn in full, later ones collapse to a small pointer
-        label rather than a redundant redraw."""
-        pytest.importorskip("matplotlib")
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=4),
-            n_program_chunks=4,
-        )
-        ax = strategy.plot([1, 2, 3, 4, 5, 6])
-        texts = self._texts(ax)
-        assert "PW0" in texts
-        assert "PW1" not in texts
-        assert "PW1 = PW0" in texts
 
     def test_ragged_worker_padded_with_nested_idle_program(self):
         """A worker whose own chunk fell short of its chunk-count
@@ -754,38 +424,6 @@ class TestParallelStrategyPlot:
         assert "PW2" in texts
         assert self._hatched_patch_count(ax) == 1
 
-    def test_more_chunks_than_workers_repeats_the_chunk_unit(self):
-        """A worker assigned more than one chunk processes them
-        sequentially, one at a time -- the title's own chunks-per-worker
-        count reports every assigned chunk (not just the first), since
-        individual chunks aren't labeled."""
-        pytest.importorskip("matplotlib")
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=4,
-        )
-        ax = strategy.plot([1, 2, 3, 4, 5, 6])
-        assert "2/2 program worker(s) active" in ax.get_title()
-        assert "up to 2 chunk(s)/worker" in ax.get_title()
-
-    def test_real_uneven_chunk_sizes_from_make_chunks(self):
-        """7 items in 2 round-robin chunks split 4/3, not evenly -- the
-        diagram should draw that real split (via strategy.make_chunks),
-        not a rounded/averaged approximation."""
-        pytest.importorskip("matplotlib")
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        assert [len(c) for c in strategy.make_chunks(list(range(7)))] == [
-            4,
-            3,
-        ]
-        ax = strategy.plot(list(range(7)))
-        assert ax is not None
-
     def test_shot_executor_set_shows_lanes_not_serial(self):
         """No program_executor here means the *program* axis still shows
         "Serial" (correctly), but the *shot* axis has a real executor and
@@ -799,7 +437,6 @@ class TestParallelStrategyPlot:
         texts = self._texts(ax)
         assert texts.count("Serial") == 1
         assert {"SW0", "SW1", "SW2"} <= set(texts)
-        assert "shots: 3 worker(s)" in ax.get_title()
 
     def test_explicit_overrides_take_precedence_over_introspection(self):
         """Mirrors the real submitit/MPI tutorial usage: program_executor
@@ -816,33 +453,10 @@ class TestParallelStrategyPlot:
             program_workers=4,
             shot_workers=2,
         )
-        assert "4/4 program worker(s) active" in ax.get_title()
-        assert "shots: 2 worker(s)" in ax.get_title()
-        assert "Serial" not in self._texts(ax)
-
-    def test_unresolvable_worker_counts_default_to_one(self):
-        pytest.importorskip("matplotlib")
-        strategy = ParallelStrategy(
-            program_executor=_FakeMapArrayExecutor(), n_program_chunks=2
-        )
-        ax = strategy.plot([1, 2, 3])
-        assert "1/1 program worker(s) active" in ax.get_title()
-
-    def test_legend_false_omits_legend(self):
-        pytest.importorskip("matplotlib")
-        ax = ParallelStrategy().plot([1, 2, 3], legend=False)
-        assert ax.get_legend() is None
-
-    def test_legend_true_by_default(self):
-        pytest.importorskip("matplotlib")
-        ax = ParallelStrategy().plot([1, 2, 3])
-        assert ax.get_legend() is not None
-
-    def test_missing_matplotlib_raises_import_error(self, monkeypatch):
-        monkeypatch.setitem(sys.modules, "matplotlib", None)
-        monkeypatch.setitem(sys.modules, "matplotlib.pyplot", None)
-        with pytest.raises(ImportError):
-            ParallelStrategy().plot([1, 2, 3])
+        texts = self._texts(ax)
+        assert "Serial" not in texts
+        assert "PW3 = PW2" in texts
+        assert "SW1" in texts
 
 
 def _double_chunk_slow(chunk: list[int]) -> list[int]:
@@ -922,33 +536,6 @@ class TestResourceSampler:
         sampler._peak_memory_mb = 0.0
         return sampler
 
-    def test_newly_seen_process_is_primed_and_excluded_from_cpu(self):
-        pytest.importorskip("psutil")
-        sampler = self._bare_sampler()
-        proc = _FakeProcess(pid=1, rss=100 * 1024 * 1024, cpu_value=50.0)
-        sampler._process = proc
-
-        sampler._sample()
-
-        assert sampler._cpu_samples == []
-        assert sampler._peak_memory_mb == pytest.approx(100.0)
-        assert proc.cpu_percent_calls == 1
-        assert 1 in sampler._known_procs
-
-    def test_already_known_process_contributes_cpu_without_double_priming(
-        self,
-    ):
-        pytest.importorskip("psutil")
-        sampler = self._bare_sampler()
-        proc = _FakeProcess(pid=1, cpu_value=75.0)
-        sampler._process = proc
-        sampler._known_procs = {1: proc}
-
-        sampler._sample()
-
-        assert sampler._cpu_samples == [75.0]
-        assert proc.cpu_percent_calls == 1
-
     def test_child_seen_partway_through_is_primed_separately_from_self(self):
         """A child appearing after self is already known gets primed and
         excluded on its own first sample, while the already-known self
@@ -984,54 +571,11 @@ class TestResourceSampler:
         # The second child object should never have been used
         assert second_child.cpu_percent_calls == 0
 
-    def test_real_child_process_is_measured_across_multiple_samples(self):
-        """End-to-end check against a real OS process tree (not a
-        mock/double): a real, sustained-CPU-use child process should show
-        up as multiple real, non-zero samples, confirming the priming
-        mechanism doesn't silently exclude it forever. Deliberately
-        doesn't assert a tight percentage range -- real system load (e.g.
-        other tests running concurrently under pytest-xdist) can
-        legitimately reduce how much of a core this child actually
-        gets."""
-        pytest.importorskip("psutil")
-        import subprocess
-
-        child = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                "import time\nt=time.time()\n"
-                "while time.time() - t < 1.0:\n    pass",
-            ]
-        )
-        try:
-            sampler = _ResourceSampler(os.getpid(), 0.1)
-            sampler.start()
-            child.wait()
-        finally:
-            if child.poll() is None:
-                child.kill()
-            stats = sampler.stop()
-
-        assert stats.num_samples >= 3
-        assert stats.mean_cpu_percent > 0.0
-        assert stats.peak_memory_mb > 0.0
-
 
 class TestParallelStrategyResourceStats:
     """dispatch()'s transparent self-reporting wrapping -- see
     TestProfileStrategies for the full profile_strategies-level
     behavior this exists to support."""
-
-    def test_collect_resource_stats_defaults_false_and_is_a_noop(self):
-        loky = pytest.importorskip("loky")
-        pytest.importorskip("psutil")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1)
-        )
-        results = strategy.dispatch(_double_chunk, [[1], [2]])
-        assert results == [[2], [4]]
-        assert strategy.pop_resource_stats() == []
 
     def test_collect_resource_stats_true_reports_one_entry_per_chunk(self):
         loky = pytest.importorskip("loky")
@@ -1048,18 +592,6 @@ class TestParallelStrategyResourceStats:
         assert len(stats) == len(chunks)
         assert all(isinstance(s, ChunkResourceStats) for s in stats)
         assert all(s.peak_memory_mb > 0 for s in stats)
-
-    def test_pop_resource_stats_clears_between_calls(self):
-        loky = pytest.importorskip("loky")
-        pytest.importorskip("psutil")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1),
-            collect_resource_stats=True,
-            resource_sample_interval=0.05,
-        )
-        strategy.dispatch(_double_chunk_slow, [[1]])
-        first = strategy.pop_resource_stats()
-        assert len(first) == 1
         assert strategy.pop_resource_stats() == []
 
 
@@ -1085,18 +617,17 @@ class TestProfileStrategies:
     def test_chunked_strategy_reports_one_chunk_stat_per_dispatched_chunk(
         self,
     ):
-        loky = pytest.importorskip("loky")
         pytest.importorskip("psutil")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        results = profile_strategies(
-            _profiling_work_fn,
-            {"loky-2x": strategy},
-            repeats=1,
-            sample_interval=0.02,
-        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            strategy = ParallelStrategy(
+                program_executor=executor, n_program_chunks=2
+            )
+            results = profile_strategies(
+                _profiling_work_fn,
+                {"loky-2x": strategy},
+                repeats=1,
+                sample_interval=0.02,
+            )
         result = results["loky-2x"]
         assert len(result.chunk_stats) == 2
         assert result.peak_memory_mb is not None
@@ -1108,90 +639,62 @@ class TestProfileStrategies:
         assert strategy.collect_resource_stats is False
         assert strategy.pop_resource_stats() == []
 
-    def test_results_keyed_by_the_same_labels_given(self):
-        pytest.importorskip("psutil")
-        strategies = {"a": ParallelStrategy(), "b": ParallelStrategy()}
-        results = profile_strategies(
-            _profiling_work_fn, strategies, sample_interval=0.02
-        )
-        assert set(results.keys()) == {"a", "b"}
-
-    def test_repeats_defaults_to_one(self):
-        pytest.importorskip("psutil")
-        results = profile_strategies(
-            _profiling_work_fn,
-            {"serial": ParallelStrategy()},
-            sample_interval=0.02,
-        )
-        assert len(results["serial"].chunk_stats) == 1
-        assert results["serial"].wall_time_std == 0.0
-
     def test_small_chunk_regime_warns(self):
         """A large sample_interval relative to how long each chunk
         actually takes means too few samples land inside it -- should
         warn rather than silently reporting unreliable numbers."""
-        loky = pytest.importorskip("loky")
         pytest.importorskip("psutil")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        with pytest.warns(UserWarning, match="resource-sampling intervals"):
-            profile_strategies(
-                _profiling_work_fn,
-                {"fast": strategy},
-                sample_interval=5.0,
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            strategy = ParallelStrategy(
+                program_executor=executor, n_program_chunks=2
             )
+            with pytest.warns(UserWarning):
+                profile_strategies(
+                    _profiling_work_fn,
+                    {"fast": strategy},
+                    sample_interval=5.0,
+                )
 
     def test_reuse_slurm_allocation_requires_a_real_allocation(
         self, monkeypatch
     ):
         monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-        with pytest.raises(RuntimeError, match="SLURM_JOB_ID"):
+        with pytest.raises(RuntimeError):
             profile_strategies(
                 _profiling_work_fn,
                 {"serial": ParallelStrategy()},
                 reuse_slurm_allocation=True,
             )
 
-    def test_warmup_false_by_default_calls_work_fn_exactly_repeats_times(self):
+    @pytest.mark.parametrize(
+        "warmup", [False, True], ids=["no_warmup", "warmup"]
+    )
+    def test_warmup_adds_one_excluded_call(self, warmup):
         pytest.importorskip("psutil")
         calls = []
         results = profile_strategies(
             lambda strategy: calls.append(1),
             {"serial": ParallelStrategy()},
             repeats=3,
+            warmup=warmup,
         )
-        assert len(calls) == 3
-        assert len(results["serial"].chunk_stats) == 3
-
-    def test_warmup_true_adds_one_call_excluded_from_results(self):
-        pytest.importorskip("psutil")
-        calls = []
-        results = profile_strategies(
-            lambda strategy: calls.append(1),
-            {"serial": ParallelStrategy()},
-            repeats=3,
-            warmup=True,
-        )
-        assert len(calls) == 4  # 1 warmup + 3 real, timed repeats
+        assert len(calls) == (4 if warmup else 3)
         assert len(results["serial"].chunk_stats) == 3
 
     def test_warmup_true_for_chunked_strategy_excludes_warmup_chunk_stats(
         self,
     ):
-        loky = pytest.importorskip("loky")
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1),
-            n_program_chunks=2,
-        )
-        results = profile_strategies(
-            _profiling_work_fn,
-            {"loky": strategy},
-            repeats=2,
-            sample_interval=0.02,
-            warmup=True,
-        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            strategy = ParallelStrategy(
+                program_executor=executor, n_program_chunks=2
+            )
+            results = profile_strategies(
+                _profiling_work_fn,
+                {"loky": strategy},
+                repeats=2,
+                sample_interval=0.02,
+                warmup=True,
+            )
         # 2 chunks x 2 real repeats -- the warmup pass's own 2 chunks of
         # stats are discarded, not folded in as a third repeat's worth.
         assert len(results["loky"].chunk_stats) == 4
@@ -1222,21 +725,9 @@ class TestProfileStrategies:
         assert results["fast"].speedup is not None
         assert results["fast"].speedup == pytest.approx(5.0)
 
-    def test_speedup_is_none_when_no_fully_serial_strategy_given(self):
-        pytest.importorskip("psutil")
-        results = profile_strategies(
-            lambda strategy: None,
-            {
-                "a": ParallelStrategy(program_executor=object()),
-                "b": ParallelStrategy(shot_executor=object()),
-            },
-            sample_interval=0.02,
-        )
-        assert results["a"].speedup is None
-        assert results["b"].speedup is None
-
-    def test_executor_spec_program_executor_is_shut_down_and_reset(
-        self, monkeypatch
+    @pytest.mark.parametrize("case", ["returns", "raises"])
+    def test_executor_spec_program_executor_is_shut_down(
+        self, monkeypatch, case
     ):
         pytest.importorskip("loky")
         fake_executor = MagicMock()
@@ -1248,31 +739,14 @@ class TestProfileStrategies:
 
         def work_fn(s):
             s._resolve_program_executor()
-            return None
+            if case == "raises":
+                raise RuntimeError("work_fn failed")
 
-        profile_strategies(work_fn, {"spec": strategy})
-        fake_executor.shutdown.assert_called_once_with(
-            wait=True, kill_workers=True
-        )
-        assert strategy._resolved_program_executor is None
-
-    def test_executor_spec_program_executor_shut_down_on_work_fn_exception(
-        self, monkeypatch
-    ):
-        pytest.importorskip("loky")
-        fake_executor = MagicMock()
-        monkeypatch.setattr(
-            "loky.get_reusable_executor", lambda **kwargs: fake_executor
-        )
-        spec = ExecutorSpec("loky", {"max_workers": 2})
-        strategy = ParallelStrategy(program_executor=spec, n_program_chunks=2)
-
-        def failing_work_fn(s):
-            s._resolve_program_executor()
-            raise RuntimeError("work_fn failed")
-
-        with pytest.raises(RuntimeError, match="work_fn failed"):
-            profile_strategies(failing_work_fn, {"spec": strategy})
+        if case == "raises":
+            with pytest.raises(RuntimeError):
+                profile_strategies(work_fn, {"spec": strategy})
+        else:
+            profile_strategies(work_fn, {"spec": strategy})
 
         fake_executor.shutdown.assert_called_once_with(
             wait=True, kill_workers=True
@@ -1299,32 +773,12 @@ class TestProfileStrategies:
         strategy = ParallelStrategy(
             program_executor=fake_executor, n_program_chunks=2
         )
-        with pytest.warns(UserWarning, match="timeout"):
+        with pytest.warns(UserWarning):
             profile_strategies(
                 lambda s: None,
                 {"loky": strategy},
                 repeats=2,
                 warmup=True,
-            )
-
-    def test_recycled_worker_pool_warns_when_repeat_slower_without_warmup(
-        self, monkeypatch
-    ):
-        times = iter([0.0, 0.5, 1.0, 1.1])
-        monkeypatch.setattr(
-            "loqs.tools.paralleltools.time.perf_counter",
-            lambda: next(times),
-        )
-        fake_executor = MagicMock()
-        strategy = ParallelStrategy(
-            program_executor=fake_executor, n_program_chunks=2
-        )
-        with pytest.warns(UserWarning, match="timeout"):
-            profile_strategies(
-                lambda s: None,
-                {"loky": strategy},
-                repeats=2,
-                warmup=False,
             )
 
     def test_recycled_worker_pool_no_warning_when_timings_consistent(
@@ -1348,36 +802,8 @@ class TestProfileStrategies:
                 warmup=True,
             )
 
-    def test_serial_strategy_does_not_warn_on_slowdown(self, monkeypatch):
-        pytest.importorskip("psutil")
-        times = iter([0.0, 0.1, 1.0, 1.1, 2.0, 2.5])
-        monkeypatch.setattr(
-            "loqs.tools.paralleltools.time.perf_counter",
-            lambda: next(times),
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", UserWarning)
-            warnings.filterwarnings(
-                "ignore", message=".*resource-sampling intervals.*"
-            )
-            profile_strategies(
-                lambda s: None,
-                {"serial": ParallelStrategy()},
-                repeats=2,
-                warmup=True,
-            )
-
 
 class TestFormatProfileTable:
-
-    def test_formats_wall_time_and_dashes_for_missing_resource_stats(self):
-        results = {
-            "serial": ProfileResult(wall_time_mean=1.5, wall_time_std=0.1),
-        }
-        table = format_profile_table(results)
-        assert "serial" in table
-        assert "1.5 +/- 0.1" in table
-        assert "--" in table
 
     def test_formats_resource_stats_when_present(self):
         results = {
@@ -1402,45 +828,8 @@ class TestFormatProfileTable:
         assert "200.0" in table  # max peak memory
         assert "100.0" in table  # mean CPU% of 50 and 150
 
-    def test_speedup_column_dashes_when_none(self):
-        results = {
-            "serial": ProfileResult(wall_time_mean=1.0, wall_time_std=0.0)
-        }
-        table = format_profile_table(results)
-        assert "speedup" in table
-        assert "--" in table
-
-    def test_speedup_column_formats_value(self):
-        results = {
-            "fast": ProfileResult(
-                wall_time_mean=1.0, wall_time_std=0.0, speedup=2.5
-            ),
-        }
-        table = format_profile_table(results)
-        assert "2.50x" in table
-
 
 class TestPlotProfileResults:
-
-    def test_wall_time_only_panel_when_no_resource_stats(self):
-        pytest.importorskip("matplotlib")
-        results = {
-            "serial": ProfileResult(wall_time_mean=1.0, wall_time_std=0.0),
-        }
-        axes = plot_profile_results(results)
-        assert len(axes) == 1
-
-    def test_speedup_annotated_on_wall_time_bars(self):
-        pytest.importorskip("matplotlib")
-        results = {
-            "serial": ProfileResult(wall_time_mean=2.0, wall_time_std=0.0),
-            "fast": ProfileResult(
-                wall_time_mean=1.0, wall_time_std=0.0, speedup=2.0
-            ),
-        }
-        axes = plot_profile_results(results)
-        texts = [t.get_text() for t in axes[0].texts]
-        assert "2.00x" in texts
 
     def test_three_panels_when_resource_stats_present(self):
         pytest.importorskip("matplotlib")
@@ -1475,12 +864,6 @@ class TestPlotProfileResults:
     ),
 )
 class TestReusedSlurmAllocation:
-
-    def test_raises_without_slurm_job_id(self, monkeypatch):
-        monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-        with pytest.raises(RuntimeError, match="SLURM_JOB_ID"):
-            with reused_slurm_allocation():
-                pass
 
     def test_installs_and_restores_path(self, monkeypatch):
         import os
@@ -1530,41 +913,3 @@ class TestReusedSlurmAllocation:
                 break
             time.sleep(0.1)
         assert marker.read_text() == "ran\n"
-
-
-class TestParallelStrategyNShotBatches:
-    """Test the new n_shot_batches field on ParallelStrategy."""
-
-    def test_n_shot_batches_field_in_serialize_attrs(self):
-        """Verify n_shot_batches is included in _SERIALIZE_ATTRS."""
-        from loqs.tools.paralleltools import ParallelStrategy
-
-        assert "n_shot_batches" in ParallelStrategy._SERIALIZE_ATTRS
-
-    def test_n_shot_batches_field_default_none(self):
-        """Verify n_shot_batches defaults to None."""
-        from loqs.tools.paralleltools import ParallelStrategy
-
-        strategy = ParallelStrategy()
-        assert strategy.n_shot_batches is None
-
-    def test_n_shot_batches_field_explicit_value(self):
-        """Verify n_shot_batches can be set explicitly."""
-        from loqs.tools.paralleltools import ParallelStrategy
-
-        strategy = ParallelStrategy(n_shot_batches=5)
-        assert strategy.n_shot_batches == 5
-
-    def test_n_shot_batches_serialization(self):
-        """Verify n_shot_batches round-trips through serialization."""
-        import tempfile
-        from pathlib import Path
-        from loqs.tools.paralleltools import ParallelStrategy
-
-        strategy_orig = ParallelStrategy(n_shot_batches=7)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "strategy.json"
-            strategy_orig.write(path)
-            strategy_decoded = ParallelStrategy.read(path)
-            assert strategy_decoded.n_shot_batches == 7

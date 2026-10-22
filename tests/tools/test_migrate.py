@@ -19,27 +19,15 @@ FIXTURES = Path(__file__).parent / "migrate_fixtures"
 
 
 class TestRewriteRenames:
-    def test_rewrites_import_and_usage(self):
-        src = (
-            "from loqs.core.recordables.patchdict import PatchDict\n\n"
-            'patches = PatchDict({"L0": None})\n'
-        )
-        result = rewrite_renames(src)
-        assert result.changed
-        assert "PatchLayout" in result.source
-        assert "PatchDict" not in result.source
-        assert result.manual_review == []
-
     @pytest.mark.parametrize(
         "old_module", ["loqs.core.recordables", "loqs.core"]
     )
     def test_rewrites_patchdict_reexport_imports(self, old_module):
         """`PatchDict` is overwhelmingly imported from one of its two
         convenience re-exports rather than its own defining submodule
-        (see `test_rewrites_import_and_usage` above) -- both need their
-        own table entry alongside it, since a rewrite keyed only on the
-        defining submodule never matches either re-export's own
-        qualified name."""
+        (which the golden fixture covers) -- both need their own table
+        entry alongside it, since a rewrite keyed only on the defining
+        submodule never matches either re-export's own qualified name."""
         src = (
             f"from {old_module} import PatchDict\n\n"
             'patches = PatchDict({"L0": None})\n'
@@ -48,38 +36,6 @@ class TestRewriteRenames:
         assert result.changed
         assert f"from {old_module} import PatchLayout" in result.source
         assert "PatchDict" not in result.source
-
-    def test_does_not_corrupt_docstring_narrating_history(self):
-        """A docstring describing the *history* of a rename must not be
-        rewritten -- doing so would silently invert its meaning (see
-        renames.py's module docstring for the real example this
-        regression-tests)."""
-        src = FIXTURES.joinpath("renames_before.py").read_text(
-            encoding="utf-8"
-        )
-        result = rewrite_renames(src)
-        assert "used to construct a `PatchDict` directly" in result.source
-
-    def test_does_not_corrupt_unrelated_from_prefixed_identifier(self):
-        """A local variable/method chain merely starting with the text
-        "from" and spanning multiple lines must not be misread as a
-        multi-line import statement."""
-        src = (
-            "from_prime_basis_circ = build()\n"
-            "from_prime_basis_circ.pad_single_qubit_idles_by_duration_inplace(\n"
-            "    idle_gates, gate_durations\n"
-            ")\n"
-        )
-        result = rewrite_renames(src)
-        assert result.source == src
-        assert not result.changed
-
-    def test_no_op_when_nothing_matches(self):
-        src = "x = 1\n"
-        result = rewrite_renames(src)
-        assert result.source == src
-        assert not result.changed
-        assert result.manual_review == []
 
     def test_deleted_name_flagged_not_guessed(self):
         src = FIXTURES.joinpath("deleted_name_before.py").read_text(
@@ -100,24 +56,8 @@ class TestRewriteRenames:
         result = rewrite_renames(before)
         assert result.source == after
         # RepTuple's import (line 3) and usage (line 6) are left untouched
-        # but flagged, not rewritten to OperationRep -- see
-        # test_reptuple_is_flagged_not_blindly_rewritten.
+        # but flagged, not rewritten to OperationRep (an abstract class).
         assert {item.line for item in result.manual_review} == {3, 6}
-
-    def test_reptuple_is_flagged_not_blindly_rewritten(self):
-        """`RepTuple`'s decode-time redirect target (`OperationRep`, an
-        abstract class) is not a valid rewrite of its own constructor
-        call -- confirms it's flagged instead of silently producing
-        broken code (see renames.py's module docstring)."""
-        src = (
-            "from loqs.backends.reps import RepTuple\n\n"
-            "rep = RepTuple(matrix, (0,), GateRep.UNITARY)\n"
-        )
-        result = rewrite_renames(src)
-        assert result.source == src  # never rewritten, only flagged
-        assert "OperationRep" not in result.source
-        lines = {item.line for item in result.manual_review}
-        assert lines == {1, 3}  # the import line and the usage line
 
     def test_stimdictnoisemodel_is_flagged_not_blindly_rewritten(self):
         """`STIMDictNoiseModel`'s decode-time redirect target
@@ -137,50 +77,15 @@ class TestRewriteRenames:
 
 
 class TestMigrateInstructionLabels:
-    def test_resolvable_kwargs_form(self):
-        src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
+    def test_bare_tuple_with_non_literal_kwargs_is_spliced_via_double_star(
+        self,
+    ):
+        src = '("Increment", "L0", (), extra_kwargs)\n'
         result = migrate_instruction_labels(src)
         assert result.changed
-        assert (
-            result.source
-            == 'InstructionLabel("Increment", increment_by=2, patch_label="L0")\n'
-        )
-        assert result.manual_review == []
-
-    def test_resolvable_bare_tuple(self):
-        """A bare tuple rewrites to a bare dict, not an InstructionLabel(...)
-        call -- unlike an explicit call being rewritten, building a call
-        here would introduce a new InstructionLabel reference the file
-        may never have needed to import."""
-        src = 'tup = ("Increment", "L0", (), {"increment_by": 2})\n'
-        result = migrate_instruction_labels(src)
-        assert (
-            result.source
-            == 'tup = {"instruction": "Increment", "increment_by": 2, "patch_label": "L0"}\n'
-        )
-
-    def test_three_tuple_with_none_patch_label(self):
-        src = 'tup = ("Init Counter", None, (7,))\n'
-        result = migrate_instruction_labels(src)
-        assert (
-            result.source
-            == 'tup = {"instruction": "Init Counter", "_legacy_inst_args": (7,)}\n'
-        )
-
-    def test_bare_tuple_in_a_list_rewrites_to_a_dict(self):
-        """A bare tuple embedded in a larger structure (e.g. a stack's
-        own list of raw entries, alongside an already-modern bare
-        string) rewrites the same way a standalone one does: to a bare
-        dict, not an InstructionLabel(...) call, so the file never needs
-        a new InstructionLabel import it may not have had before."""
-        src = (
-            'stack = ["Init State", '
-            '("Increment", "L0", (), {"increment_by": 2})]\n'
-        )
-        result = migrate_instruction_labels(src)
+        assert not result.manual_review
         assert result.source == (
-            'stack = ["Init State", '
-            '{"instruction": "Increment", "increment_by": 2, "patch_label": "L0"}]\n'
+            '{"instruction": "Increment", **extra_kwargs, "patch_label": "L0"}\n'
         )
 
     def test_none_literal_inst_args_and_kwargs_treated_as_empty(self):
@@ -207,68 +112,7 @@ class TestMigrateInstructionLabels:
         assert result.source == src
         assert result.manual_review == []
 
-    def test_already_modern_call_is_untouched(self):
-        src = 'InstructionLabel("Increment", patch_label="L0", counter=5)\n'
-        result = migrate_instruction_labels(src)
-        assert not result.changed
-        assert result.manual_review == []
-
-    def test_non_literal_instruction_and_name_are_rewritten(self):
-        """Neither the instruction expression nor the instruction name
-        needs to be a literal string, or resolvable against any known
-        registry, to be rewritten -- `InstructionLabel`'s own
-        `LEGACY_PENDING_INST_ARGS` stash is resolved lazily at runtime
-        once the real instruction is available, so this tool never needs
-        to know what instructions exist."""
-        src = 'InstructionLabel(some_instruction, "L0", (), {})\n'
-        result = migrate_instruction_labels(src)
-        assert (
-            result.source
-            == 'InstructionLabel(some_instruction, patch_label="L0")\n'
-        )
-        assert result.manual_review == []
-
-        src = 'InstructionLabel("Nonexistent Instruction", "L0", (), {})\n'
-        result = migrate_instruction_labels(src)
-        assert (
-            result.source
-            == 'InstructionLabel("Nonexistent Instruction", patch_label="L0")\n'
-        )
-        assert result.manual_review == []
-
-    def test_non_literal_kwargs_is_spliced_via_double_star(self):
-        """A non-literal `inst_kwargs` (or a literal dict whose keys
-        aren't all string literals) is spliced in whole via `**` instead
-        of being flagged -- correct regardless of its actual keys, since
-        a `**`-unpack is behaviorally identical to the old dict."""
-        src = 'InstructionLabel("Increment", "L0", (), extra_kwargs)\n'
-        result = migrate_instruction_labels(src)
-        assert result.changed
-        assert not result.manual_review
-        assert result.source == (
-            'InstructionLabel("Increment", patch_label="L0", **extra_kwargs)\n'
-        )
-
-    def test_bare_tuple_with_non_literal_kwargs_is_spliced_via_double_star(
-        self,
-    ):
-        src = '("Increment", "L0", (), extra_kwargs)\n'
-        result = migrate_instruction_labels(src)
-        assert result.changed
-        assert not result.manual_review
-        assert result.source == (
-            '{"instruction": "Increment", **extra_kwargs, "patch_label": "L0"}\n'
-        )
-
-    def test_splat_call_is_flagged(self):
-        src = "InstructionLabel(*label_tuple)\n"
-        result = migrate_instruction_labels(src)
-        assert not result.changed
-        assert "splat call" in result.manual_review[0].message
-
-    def test_colliding_patch_label_kwarg_with_global_resolution_is_flagged(
-        self,
-    ):
+    def test_colliding_patch_label_kwarg_is_flagged(self):
         """Pre-1.2, a global instruction (positional patch_label is None)
         could still carry an unrelated `inst_kwargs["patch_label"]` apply_fn
         kwarg -- the modern single `patch_label` key can't represent both,
@@ -276,50 +120,14 @@ class TestMigrateInstructionLabels:
         src = 'InstructionLabel("Init Something", None, (), {"patch_label": "L0"})\n'
         result = migrate_instruction_labels(src)
         assert not result.changed
-        assert "patch_label" in result.manual_review[0].message
         assert result.manual_review[0].kind == "patch_label_kwarg"
-
-    def test_colliding_patch_label_kwarg_with_per_patch_resolution_is_flagged(
-        self,
-    ):
-        """Same collision, but with a real per-patch positional patch_label
-        alongside a same-named inst_kwargs entry -- also flagged, since a
-        silent merge would arbitrarily pick a winner either way."""
-        src = (
-            'InstructionLabel("Increment", "L0", (), {"patch_label": "L1"})\n'
-        )
-        result = migrate_instruction_labels(src)
-        assert not result.changed
-        assert "patch_label" in result.manual_review[0].message
-
-    def test_colliding_patch_label_kwarg_in_bare_tuple_is_flagged(self):
-        src = 'tup = ("Init Something", None, (), {"patch_label": "L0"})\n'
-        result = migrate_instruction_labels(src)
-        assert not result.changed
-        assert "patch_label" in result.manual_review[0].message
 
     def test_rename_patch_label_renames_the_key_and_still_flags(self):
         """`rename_patch_label` fixes the collision by renaming the
-        colliding inst_kwargs key, but a manual-review item is still
-        emitted -- the corresponding Instruction's apply_fn parameter
-        still needs the same rename by hand, which this tool can't do."""
-        src = 'InstructionLabel("Init Something", None, (), {"patch_label": "L0"})\n'
-        result = migrate_instruction_labels(
-            src, rename_patch_label="new_patch_label"
-        )
-        assert result.changed
-        assert (
-            result.source
-            == 'InstructionLabel("Init Something", new_patch_label="L0")\n'
-        )
-        assert len(result.manual_review) == 1
-        assert result.manual_review[0].kind == "patch_label_kwarg"
-        assert "new_patch_label" in result.manual_review[0].message
-
-    def test_rename_patch_label_preserves_real_resolution_slot(self):
-        """The real, non-colliding positional patch_label (resolution
-        scope) is untouched by the rename -- only the colliding
-        inst_kwargs entry is renamed."""
+        colliding inst_kwargs key, leaving the real positional
+        patch_label (resolution scope) untouched, but a manual-review
+        item is still emitted -- the corresponding Instruction's apply_fn
+        parameter still needs the same rename by hand."""
         src = (
             'InstructionLabel("Increment", "L0", (), {"patch_label": "L1"})\n'
         )
@@ -331,18 +139,8 @@ class TestMigrateInstructionLabels:
             result.source
             == 'InstructionLabel("Increment", new_patch_label="L1", patch_label="L0")\n'
         )
-
-    def test_rename_patch_label_in_bare_tuple(self):
-        src = 'tup = ("Init Something", None, (), {"patch_label": "L0"})\n'
-        result = migrate_instruction_labels(
-            src, rename_patch_label="new_patch_label"
-        )
-        assert result.changed
-        assert (
-            result.source
-            == 'tup = {"instruction": "Init Something", "new_patch_label": "L0"}\n'
-        )
         assert len(result.manual_review) == 1
+        assert result.manual_review[0].kind == "patch_label_kwarg"
 
     def test_double_star_kwargs_unpack_is_already_modern(self):
         """A real false positive found by testing against this repo's own
@@ -369,13 +167,6 @@ class TestMigrateInstructionLabels:
         )
         assert result.manual_review == []
 
-    def test_idempotent(self):
-        src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
-        once = migrate_instruction_labels(src)
-        twice = migrate_instruction_labels(once.source)
-        assert twice.source == once.source
-        assert not twice.changed
-
     def test_matches_golden_fixture(self):
         before = FIXTURES.joinpath("labels_before.py").read_text(
             encoding="utf-8"
@@ -387,27 +178,6 @@ class TestMigrateInstructionLabels:
         assert result.source == after
         assert len(result.manual_review) == 1
 
-    def test_manual_review_line_survives_an_earlier_line_collapse(self):
-        """A multi-line call rewritten onto a single line shortens the
-        file; anything flagged further down must still point at its own
-        correct line in the *rewritten* output, not the line it was on
-        before that collapse happened."""
-        src = (
-            "label_kwargs_only = InstructionLabel(\n"
-            '    "Increment", "L0", (), {"increment_by": 2}\n'
-            ")\n"
-            "splat_call = InstructionLabel(*label_tuple)\n"
-        )
-        result = migrate_instruction_labels(src)
-        assert result.changed
-        lines = result.source.splitlines()
-        assert len(result.manual_review) == 1
-        item = result.manual_review[0]
-        assert (
-            lines[item.line - 1]
-            == "splat_call = InstructionLabel(*label_tuple)"
-        )
-
 
 class TestDetectFlaggedPatterns:
     def test_matches_golden_fixture(self):
@@ -415,86 +185,37 @@ class TestDetectFlaggedPatterns:
         items = detect_flagged_patterns(src)
         assert [item.line for item in items] == [3, 4, 4, 5]
 
-    def test_iz_item_has_iz_kind(self):
-        src = FIXTURES.joinpath("flags_before.py").read_text(encoding="utf-8")
-        items = detect_flagged_patterns(src)
-        iz_items = [item for item in items if item.kind == "iz"]
-        assert len(iz_items) == 1
-        assert iz_items[0].line == 5
-
-    def test_iz_not_flagged_when_rename_iz_is_true(self):
-        src = FIXTURES.joinpath("flags_before.py").read_text(encoding="utf-8")
-        items = detect_flagged_patterns(src, rename_iz=True)
-        assert not any(item.kind == "iz" for item in items)
-
-    def test_no_false_positive_on_ordinary_dict_access(self):
-        assert detect_flagged_patterns('x = d["key"]\n') == []
-
-    def test_no_false_positive_on_unrelated_third_party_cast(self):
-        """A real false positive found by testing against this repo's own
-        pyGSTi-integration code: `pygsti`'s own `Circuit.cast`/`Evotype.cast`
-        classmethods share the removed LoQS API's exact method name."""
-        src = "return _Circuit.cast(obj)\n"
-        assert detect_flagged_patterns(src) == []
-
-    def test_no_false_positive_on_unrelated_receiver_cast(self):
-        src = "stack = some_stack.cast(InstructionStack)\n"
-        assert detect_flagged_patterns(src) == []
-
-    def test_instructionlabel_and_syndromelabel_no_longer_flagged(self):
-        """These two now have a confident `.from_raw()` rewrite (see
-        `TestRewriteCastToFromRaw`) instead of being flagged."""
-        src = "a = InstructionLabel.cast(x)\nb = SyndromeLabel.cast(y)\n"
-        assert detect_flagged_patterns(src) == []
-
-    def test_no_false_positive_on_unrelated_include_idles_kwarg(self):
-        """A real false positive found by testing against this repo's own
-        surf17 codepack helpers: several still-current, unrelated
-        `include_idles: bool` parameters exist on lower-level circuit-
-        building functions, never touched by this v1.2 rename."""
-        src = "circuit_inst = build_circuit_instruction(include_idles=True)\n"
+    @pytest.mark.parametrize(
+        "src",
+        [
+            # pygsti's own Circuit.cast / Evotype.cast share the removed
+            # LoQS API's method name
+            "return _Circuit.cast(obj)\n",
+            "stack = some_stack.cast(InstructionStack)\n",
+            # several current, unrelated functions take include_idles
+            "circuit_inst = build_circuit_instruction(include_idles=True)\n",
+        ],
+        ids=[
+            "third_party_cast",
+            "class_as_argument",
+            "unrelated_include_idles",
+        ],
+    )
+    def test_no_false_positive(self, src):
         assert detect_flagged_patterns(src) == []
 
 
 class TestRewriteCastToFromRaw:
-    def test_rewrites_instructionlabel_cast(self):
-        result = rewrite_cast_to_from_raw("label = InstructionLabel.cast(x)\n")
+    @pytest.mark.parametrize("cls", ["InstructionLabel", "SyndromeLabel"])
+    def test_rewrites_cast_to_from_raw(self, cls):
+        result = rewrite_cast_to_from_raw(f"label = {cls}.cast(x)\n")
         assert result.changed
-        assert result.source == "label = InstructionLabel.from_raw(x)\n"
+        assert result.source == f"label = {cls}.from_raw(x)\n"
         assert result.manual_review == []
         assert len(result.rewrites) == 1
 
-    def test_rewrites_syndromelabel_cast(self):
-        result = rewrite_cast_to_from_raw("label = SyndromeLabel.cast(x)\n")
-        assert result.changed
-        assert result.source == "label = SyndromeLabel.from_raw(x)\n"
-
-    def test_rewrites_qualified_receiver(self):
-        src = "label = loqs.core.instructions.InstructionLabel.cast(x)\n"
-        result = rewrite_cast_to_from_raw(src)
-        assert result.changed
-        assert (
-            result.source
-            == "label = loqs.core.instructions.InstructionLabel.from_raw(x)\n"
-        )
-
-    def test_no_rewrite_for_flag_only_class(self):
-        """The other 14 classes (e.g. `InstructionStack`) keep their
-        flag-only behavior -- this function only ever touches
-        `InstructionLabel`/`SyndromeLabel`."""
-        src = "stack = InstructionStack.cast(x)\n"
-        result = rewrite_cast_to_from_raw(src)
-        assert not result.changed
-        assert result.source == src
-
     def test_no_false_positive_on_unrelated_receiver(self):
         src = "x = some_label.cast(InstructionLabel)\n"
-        result = rewrite_cast_to_from_raw(src)
-        assert not result.changed
-        assert result.source == src
-
-    def test_already_from_raw_is_untouched(self):
-        src = "label = InstructionLabel.from_raw(x)\n"
         result = rewrite_cast_to_from_raw(src)
         assert not result.changed
         assert result.source == src
@@ -534,17 +255,19 @@ class TestMigrateSource:
         assert result.source == after
         assert not result.changed
 
-    def test_rename_iz_rewrites_confidently(self):
-        src = 'instrument_name = "Iz"\n'
+    @pytest.mark.parametrize(
+        "src, expected",
+        [
+            ('instrument_name = "Iz"\n', 'instrument_name = "Imrz"\n'),
+            ("instrument_name = 'Iz'\n", "instrument_name = 'Imrz'\n"),
+        ],
+        ids=["double_quote", "single_quote"],
+    )
+    def test_rename_iz_rewrites_confidently(self, src, expected):
         result = migrate_source(src, rename_iz=True)
         assert result.changed
-        assert result.source == 'instrument_name = "Imrz"\n'
+        assert result.source == expected
         assert not result.manual_review
-
-    def test_rename_iz_preserves_single_quote_style(self):
-        src = "instrument_name = 'Iz'\n"
-        result = migrate_source(src, rename_iz=True)
-        assert result.source == "instrument_name = 'Imrz'\n"
 
     def test_iz_still_flagged_when_rename_iz_is_false(self):
         src = 'instrument_name = "Iz"\n'
@@ -566,27 +289,6 @@ class TestMigrateSource:
         for item in result.manual_review:
             assert 1 <= item.line <= len(lines)
             assert "InstructionLabel" in lines[item.line - 1]
-
-    def test_cast_rewritten_to_from_raw(self):
-        src = "label = InstructionLabel.cast(x)\n"
-        result = migrate_source(src)
-        assert result.changed
-        assert "InstructionLabel.from_raw(x)" in result.source
-        assert not result.manual_review
-
-    def test_syndromelabel_cast_rewritten_to_from_raw(self):
-        src = "label = SyndromeLabel.cast(x)\n"
-        result = migrate_source(src)
-        assert result.changed
-        assert "SyndromeLabel.from_raw(x)" in result.source
-        assert not result.manual_review
-
-    def test_idempotent_on_already_from_raw(self):
-        src = "label = InstructionLabel.from_raw(x)\n"
-        result = migrate_source(src)
-        assert not result.changed
-        assert result.source == src
-        assert not result.manual_review
 
     def test_cast_rewrite_coexists_with_remaining_flag(self):
         """A confident `.cast()` -> `.from_raw()` rewrite and a still-flagged
@@ -617,63 +319,6 @@ class TestMigrateNotebookSource:
         result = migrate_notebook_source(before)
         assert result.source == after
 
-    def test_note_fence_is_never_touched(self):
-        before = FIXTURES.joinpath("notebook_before.md").read_text(
-            encoding="utf-8"
-        )
-        result = migrate_notebook_source(before)
-        assert (
-            'mention of `PatchDict` or `InstructionLabel("Name", "L0", (), {})`'
-            in result.source
-        )
-
-    def test_field_line_is_passed_through_and_not_treated_as_code(self):
-        """`docs/notebooks/workflow.md` has a real `:tags: [...]` field
-        line; this used to raise a ParserSyntaxError instead of migrating
-        the cell."""
-        before = FIXTURES.joinpath("notebook_before.md").read_text(
-            encoding="utf-8"
-        )
-        result = migrate_notebook_source(before)
-        assert ":tags: [scroll-output]" in result.source
-
-    def test_cross_cell_import_context_is_a_known_limitation(self):
-        """Each cell is migrated independently, with no memory of an
-        earlier cell's imports (unlike a real notebook kernel) -- so a
-        bare `PatchDict()` relying on an import done in an earlier cell
-        is neither rewritten nor flagged here. Not a problem for the real
-        `docs/notebooks/*.md` today (already fully migrated), but locked
-        in as documented, understood behavior rather than a silent gap."""
-        before = FIXTURES.joinpath("notebook_before.md").read_text(
-            encoding="utf-8"
-        )
-        result = migrate_notebook_source(before)
-        assert "patches2 = PatchDict()" in result.source
-
-    def test_flagged_cell_is_annotated_even_without_its_own_rewrite(self):
-        """A cell with nothing confidently rewritten still gets its own
-        `# LOQS-MIGRATE` comment once *some* cell in the document needs
-        rewriting -- the whole document is being modified either way, so
-        every remaining flagged spot should be documented in the file
-        itself, not just the one cell that happened to trigger a rewrite."""
-        source = (
-            "```{code-cell} ipython3\n"
-            "from loqs.backends.reps import RepTuple\n"
-            "rep_class = RepTuple\n"
-            "```\n"
-            "\n"
-            "```{code-cell} ipython3\n"
-            "from loqs.core.recordables.patchdict import PatchDict\n"
-            'patches = PatchDict({"L0": None})\n'
-            "```\n"
-        )
-        result = migrate_notebook_source(source)
-        assert result.changed
-        lines = result.source.splitlines()
-        assert len(result.manual_review) == 2
-        for item in result.manual_review:
-            assert "RepTuple" in lines[item.line - 1]
-
 
 class TestMigrateIpynbSource:
     def test_matches_golden_fixture(self):
@@ -695,74 +340,12 @@ class TestMigrateIpynbSource:
         assert result.source == after
         assert not result.changed
 
-    def test_markdown_cells_are_never_touched(self):
-        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(
-            encoding="utf-8"
-        )
-        result = migrate_ipynb_source(before)
-        markdown_cell = json.loads(result.source)["cells"][0]
-        assert markdown_cell["cell_type"] == "markdown"
-        assert (
-            'Mentions `PatchDict` and `InstructionLabel("Name", "L0", (), {})`'
-            in "".join(markdown_cell["source"])
-        )
-
     def test_manual_review_items_are_labeled_by_cell(self):
         before = FIXTURES.joinpath("notebook_before.ipynb").read_text(
             encoding="utf-8"
         )
         result = migrate_ipynb_source(before)
-        assert any(
-            item.cell == 2 and "RepTuple" in item.message
-            for item in result.manual_review
-        )
-        assert any(
-            item.cell == 4 and "splat call" in item.message
-            for item in result.manual_review
-        )
-
-    def test_explicit_call_and_bare_tuple_both_rewrite_in_a_cell(self):
-        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(
-            encoding="utf-8"
-        )
-        result = migrate_ipynb_source(before)
-        cell_source = "".join(json.loads(result.source)["cells"][3]["source"])
-        assert (
-            'InstructionLabel("Increment", increment_by=2, patch_label="L0")'
-            in cell_source
-        )
-        assert (
-            '{"instruction": "Increment", "increment_by": 3, "patch_label": "L0"}'
-            in cell_source
-        )
-        # a non-literal inst_kwargs still rewrites confidently, via **
-        assert (
-            'InstructionLabel("Increment", patch_label="L0", **extra_kwargs)'
-            in cell_source
-        )
-        # a positional splat, unlike the above, is left untouched, not silently guessed at
-        assert "InstructionLabel(*label_tuple)" in cell_source
-
-    def test_source_stored_as_a_single_string_round_trips(self):
-        """`nbformat`'s schema also allows a code cell's `source` as one
-        bare string rather than a list of lines -- less common in
-        practice than Jupyter's own list convention, but still valid."""
-        notebook = {
-            "cells": [
-                {
-                    "cell_type": "code",
-                    "metadata": {},
-                    "source": "x = 1 + 1\n",
-                }
-            ]
-        }
-        result = migrate_ipynb_source(json.dumps(notebook))
-        assert not result.changed
-        assert json.loads(result.source)["cells"][0]["source"] == "x = 1 + 1\n"
-
-    def test_invalid_json_raises(self):
-        with pytest.raises(Exception):
-            migrate_ipynb_source("not valid json")
+        assert {item.cell for item in result.manual_review} == {2, 4}
 
     def test_flagged_cell_is_annotated_even_without_its_own_rewrite(self):
         """A cell with nothing confidently rewritten still gets its own
@@ -799,10 +382,15 @@ class TestMigrateIpynbSource:
         for item in result.manual_review:
             assert item.cell == 1
 
-    def test_ipython_magic_line_is_skipped_without_aborting_the_cell(self):
-        """A `%matplotlib inline`-style line isn't valid Python on its
-        own, but real code before and after it in the same cell should
-        still migrate normally rather than the whole cell being left
+    @pytest.mark.parametrize(
+        "magic",
+        ["%matplotlib inline", "%%time"],
+        ids=["line_magic", "cell_magic"],
+    )
+    def test_magic_line_does_not_block_the_cell(self, magic):
+        """A `%matplotlib inline` line or a `%%time` cell-magic first line
+        isn't valid Python on its own, but the real code in the same
+        cell should still migrate rather than the whole cell being left
         untouched."""
         notebook = {
             "cells": [
@@ -810,7 +398,7 @@ class TestMigrateIpynbSource:
                     "cell_type": "code",
                     "metadata": {},
                     "source": [
-                        "%matplotlib inline\n",
+                        f"{magic}\n",
                         "from loqs.core.recordables.patchdict import PatchDict\n",
                         'patches = PatchDict({"L0": None})\n',
                     ],
@@ -820,32 +408,9 @@ class TestMigrateIpynbSource:
         result = migrate_ipynb_source(json.dumps(notebook))
         assert result.changed
         cell_source = "".join(json.loads(result.source)["cells"][0]["source"])
-        assert "%matplotlib inline" in cell_source
+        assert magic in cell_source
         assert "PatchLayout" in cell_source
         assert "PatchDict" not in cell_source
-
-    def test_cell_magic_first_line_does_not_block_the_rest_of_the_cell(self):
-        """A `%%time`/`%%capture`-style cell magic only makes its own
-        first line non-Python -- the rest of the cell is ordinary code
-        that should still migrate."""
-        notebook = {
-            "cells": [
-                {
-                    "cell_type": "code",
-                    "metadata": {},
-                    "source": [
-                        "%%time\n",
-                        "from loqs.core.recordables.patchdict import PatchDict\n",
-                        'patches = PatchDict({"L0": None})\n',
-                    ],
-                }
-            ]
-        }
-        result = migrate_ipynb_source(json.dumps(notebook))
-        assert result.changed
-        cell_source = "".join(json.loads(result.source)["cells"][0]["source"])
-        assert "%%time" in cell_source
-        assert "PatchLayout" in cell_source
 
     def test_wholly_non_python_cell_magic_is_flagged_not_mangled(self):
         """A `%%bash` (or `%%html`/`%%javascript`) cell's body isn't

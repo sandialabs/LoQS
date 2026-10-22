@@ -629,6 +629,10 @@ def inherited_only_methods(
     present via inheritance but not declared on cls_obj.__dict__.
 
     kind in {"static", "class", "instance"}
+
+    base_ident is the nearest public base defining the method, since a private
+    base has no API page to link to. Only when no public base defines it is the
+    private base kept, and its unresolvable link then fails the build loudly.
     """
     out: dict[str, tuple[str, str]] = {}
 
@@ -638,6 +642,7 @@ def inherited_only_methods(
         if name in declared:
             continue
 
+        private_hit: tuple[str, str] | None = None
         for base in cls_obj.__mro__[1:]:
             if base is object:
                 continue
@@ -660,8 +665,16 @@ def inherited_only_methods(
             else:
                 break
 
-            out[name] = (kind, qualname_to_ident(base))
+            base_ident = qualname_to_ident(base)
+            if any(part.startswith("_") for part in base_ident.split(".")):
+                private_hit = private_hit or (kind, base_ident)
+                continue
+
+            out[name] = (kind, base_ident)
             break
+        else:
+            if private_hit is not None:
+                out[name] = private_hit
 
     return dict(
         sorted(

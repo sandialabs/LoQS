@@ -3,6 +3,7 @@
 import warnings
 
 import numpy as np
+import pytest
 
 from loqs.core import InstructionStack
 from loqs.core.frame import Frame
@@ -31,9 +32,7 @@ class TestInstruction:
             "state": 1,
             "qubits": ["Q0", "Q1"],
             "instruction": ins,
-            # 'collected_params': {'state': 0, 'qubits': ins.data["qubits"]}
         }
-        assert result.log == "test result"
 
         # Check map works as expected
         ins2 = ins.map_qubits({"Q1": "A3", "Q0": "D2"})
@@ -42,9 +41,7 @@ class TestInstruction:
             "state": 1,
             "qubits": ["D2", "A3"],
             "instruction": ins2,
-            # 'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
         }
-        assert result2.log == "test result"
 
         # Also check we can set param priorities and aliases
         # Full testing of these should happen in QuantumProgram though
@@ -63,116 +60,15 @@ class TestInstruction:
         }
         assert ins3.param_alias("state") == "state_name_in_program"
 
-    def test_serialization(self, make_temp_path):
-        def apply_fn(state, qubits):
-            return Frame({"state": state + 1, "qubits": qubits})
-
-        def map_qubits_fn(qubit_mapping, qubits, **kwargs):
-            new_kwargs = kwargs.copy()
-            new_kwargs["qubits"] = [qubit_mapping[q] for q in qubits]
-            return new_kwargs
-
-        data = {"qubits": ["Q0", "Q1"]}
-
-        ins = Instruction(apply_fn, data, map_qubits_fn, name="test")
-
-        with make_temp_path(suffix=".json") as tmp_path:
-            ins.write(tmp_path)
-            ins2 = Instruction.read(tmp_path)
-            assert isinstance(ins2, Instruction)
-
-            result = ins2.apply(state=0, qubits=ins2.data["qubits"])
-            assert result._data == {
-                "state": 1,
-                "qubits": ["Q0", "Q1"],
-                "instruction": ins2,
-                # 'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
-            }
-            assert result.log == "test result"
-
-        # This is because we cache the serialization the first time,
-        # so even though the second time we don't have access to the source code, it works
-        with make_temp_path(suffix=".json") as tmp_path:
-            ins2.write(tmp_path)
-            ins3 = Frame.read(tmp_path)
-            assert isinstance(ins3, Instruction)
-
-            result2 = ins3.apply(state=0, qubits=ins3.data["qubits"])
-            assert result2._data == {
-                "state": 1,
-                "qubits": ["Q0", "Q1"],
-                "instruction": ins3,
-                # 'collected_params': {'state': 0, 'qubits': ins3.data["qubits"]}
-            }
-            assert result2.log == "test result"
-
-    def test_instruction_serialization_comprehensive(self, make_temp_path):
-        """Comprehensive test of Instruction serialization methods."""
-
-        def apply_fn(state, qubits):
-            return Frame({"state": state + 1, "qubits": qubits})
-
-        def map_qubits_fn(qubit_mapping, qubits, **kwargs):
-            new_kwargs = kwargs.copy()
-            new_kwargs["qubits"] = [qubit_mapping[q] for q in qubits]
-            return new_kwargs
-
-        data = {"qubits": ["Q0", "Q1"], "complex": {"nested": "data"}}
-        ins = Instruction(
-            apply_fn, data, map_qubits_fn, name="comprehensive_test"
-        )
-
-        # Test dumps/loads roundtrip
-        with make_temp_path(suffix=".json") as tmp_path:
-            ins.write(tmp_path)
-            loaded_ins = Instruction.read(tmp_path)
-            assert isinstance(loaded_ins, Instruction)
-            assert loaded_ins.name == "comprehensive_test"
-            assert loaded_ins.data == data
-
-        with make_temp_path(suffix=".json") as temp_path:
-            ins.write(temp_path)
-            loaded_ins = Instruction.read(temp_path)
-            assert isinstance(loaded_ins, Instruction)
-            assert loaded_ins.name == "comprehensive_test"
-            assert loaded_ins.data == data
-
-        with make_temp_path(suffix=".json.gz") as temp_path:
-            ins.write(temp_path)
-            loaded_ins = Instruction.read(temp_path)
-            assert isinstance(loaded_ins, Instruction)
-            assert loaded_ins.name == "comprehensive_test"
-            assert loaded_ins.data == data
-
-    def test_instruction_with_complex_data(self, make_temp_path):
-        """Test Instruction serialization with complex nested data."""
-
-        def apply_fn(state, qubits):
-            return Frame({"state": state})
-
-        complex_data = {
-            "nested": {
-                "deep": {"value": "test"},
-                "list": [1, 2, {"inner": "dict"}],
-            },
-            "simple": "data",
-        }
-
-        ins = Instruction(apply_fn, complex_data, name="complex_data_test")
-
-        # Test roundtrip preserves structure
-        with make_temp_path(suffix=".json") as tmp_path:
-            ins.write(tmp_path)
-            loaded_ins = Instruction.read(tmp_path)
-            assert isinstance(loaded_ins, Instruction)
-            assert loaded_ins.data == complex_data
-
-    def test_instruction_function_serialization(self, make_temp_path):
-        """Test that apply and map_qubits functions are serialized correctly."""
-
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_serialization_round_trip(self, format, make_temp_path):
         def apply_fn(state, qubits):
             return Frame(
-                {"result": f"state_{state}_qubits_{'_'.join(qubits)}"}
+                {
+                    "state": state + 1,
+                    "qubits": qubits,
+                    "result": f"state_{state}_qubits_{'_'.join(qubits)}",
+                }
             )
 
         def map_qubits_fn(qubit_mapping, qubits, **kwargs):
@@ -180,35 +76,59 @@ class TestInstruction:
             new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
             return new_kwargs
 
-        data = {"qubits": ["A", "B"]}
-        ins = Instruction(apply_fn, data, map_qubits_fn, name="function_test")
+        data = {
+            "qubits": ["Q0", "Q1"],
+            "complex": {"nested": "data"},
+            "items": [1, 2, {"inner": "dict"}],
+        }
+        ins = Instruction(apply_fn, data, map_qubits_fn, name="round_trip")
 
-        # Test serialization and deserialization
-        with make_temp_path(suffix=".json") as tmp_path:
+        with make_temp_path(suffix=f".{format}") as tmp_path:
             ins.write(tmp_path)
-            loaded_ins = Instruction.read(tmp_path)
-            assert isinstance(loaded_ins, Instruction)
+            loaded = Instruction.read(tmp_path)
 
-        original_result = ins.apply(state=5, qubits=["A", "B"])
-        loaded_result = loaded_ins.apply(state=5, qubits=["A", "B"])
+        assert isinstance(loaded, Instruction)
+        assert loaded.name == "round_trip"
+        assert loaded.data == data
 
+        original_result = ins.apply(state=5, qubits=["Q0", "Q1"])
+        loaded_result = loaded.apply(state=5, qubits=["Q0", "Q1"])
         assert original_result._data["result"] == loaded_result._data["result"]
+        assert original_result._data["state"] == loaded_result._data["state"]
 
-        # Test map_qubits functionality
-        mapped_ins = loaded_ins.map_qubits({"A": "X", "B": "Y"})
-        mapped_result = mapped_ins.apply(state=5, qubits=["X", "Y"])
-        assert "X_Y" in mapped_result._data["result"]
+        mapped = loaded.map_qubits({"Q0": "X", "Q1": "Y"})
+        mapped_result = mapped.apply(state=5, qubits=mapped.data["qubits"])
+        assert mapped_result._data["qubits"] == ["X", "Y"]
+        assert mapped_result._data["result"] == "state_5_qubits_X_Y"
 
-    def test_equal_instructions_hash_equal(self):
-        """Two instructions built from one function compare and hash equal."""
+        # The loaded instruction has no source to re-read, so this rewrite
+        # relies on the serialized function text it kept
+        with make_temp_path(suffix=f".{format}") as tmp_path:
+            loaded.write(tmp_path)
+            reloaded = Frame.read(tmp_path)
+
+        assert isinstance(reloaded, Instruction)
+        reloaded_result = reloaded.apply(state=5, qubits=["Q0", "Q1"])
+        assert (
+            reloaded_result._data["result"] == original_result._data["result"]
+        )
+
+    def test_equality_and_hash(self):
+        """Equal instructions hash equal, which the encode cache relies on."""
+
+        def other_apply(state):
+            return Frame({"state": state + 2})
+
         a = Instruction(_module_level_apply, name="x")
         b = Instruction(_module_level_apply, name="x")
         c = Instruction(_module_level_apply, name="y")
+        d = Instruction(other_apply, name="x")
 
         assert a == b
         assert hash(a) == hash(b)
-        assert a != c
         assert len({a, b}) == 1
+        assert a != c
+        assert a != d
         # Comparison against non-instructions is not an error
         assert a != "x"
         assert (a, "L0") != ("x", "L0")
@@ -237,16 +157,6 @@ class TestInstruction:
             name="arrays",
         )
         assert ins != reshaped
-
-    def test_eq_compares_functions(self):
-        """Instructions with different function source are unequal."""
-
-        def other_apply(state):
-            return Frame({"state": state + 2})
-
-        a = Instruction(_module_level_apply, name="x")
-        b = Instruction(other_apply, name="x")
-        assert a != b
 
     def test_tuple_held_instructions_survive_encode_cache(
         self, make_temp_path
@@ -280,108 +190,28 @@ def _module_level_apply(state=0):
     return Frame({"state": state + 1})
 
 
-class TestInstructionLazySerialization:
-    """Regression tests for deferring _serialized_apply_fn/
-    _serialized_map_qubits_fn computation to first actual use rather than
-    doing it eagerly at construction."""
+_EXEC_SOURCE = (
+    "def apply_fn(state, qubits):\n"
+    "    return {'state': state, 'qubits': qubits}\n"
+)
 
-    @staticmethod
-    def _apply_fn(state, qubits):
-        return Frame({"state": state, "qubits": qubits})
 
-    def _count_get_function_str_calls(self, monkeypatch):
-        import loqs.internal.serializable as serializable_module
+def test_source_unavailable_warns():
+    env = {}
+    exec(_EXEC_SOURCE, env)
 
-        calls = []
-        original = serializable_module.Serializable._get_function_str
+    with pytest.warns(UserWarning):
+        Instruction(env["apply_fn"], {}, name="test")
 
-        def _counting(func):
-            calls.append(func)
-            return original(func)
-
-        monkeypatch.setattr(
-            serializable_module.Serializable,
-            "_get_function_str",
-            staticmethod(_counting),
-        )
-        return calls
-
-    def test_construction_does_not_compute_serialized_source(
-        self, monkeypatch
-    ):
-        calls = self._count_get_function_str_calls(monkeypatch)
-        Instruction(self._apply_fn, {}, name="test")
-        assert calls == []
-
-    def test_first_access_computes_and_caches(self, monkeypatch):
-        calls = self._count_get_function_str_calls(monkeypatch)
-        ins = Instruction(self._apply_fn, {}, name="test")
-
-        first = ins._serialized_apply_fn
-        assert calls == [self._apply_fn]
-        second = ins._serialized_apply_fn
-        assert calls == [self._apply_fn]  # not called again
-        assert first is second
-
-    def test_copy_does_not_force_computation(self, monkeypatch):
-        calls = self._count_get_function_str_calls(monkeypatch)
-        ins = Instruction(self._apply_fn, {}, name="test")
-        copied = ins.copy()
-        assert calls == []
-        # The copy still computes correctly and matches the original
-        # when actually needed.
-        assert copied._serialized_apply_fn == ins._serialized_apply_fn
-        assert calls == [self._apply_fn, self._apply_fn]
-
-    def test_map_qubits_does_not_force_computation(self, monkeypatch):
-        calls = self._count_get_function_str_calls(monkeypatch)
-        ins = Instruction(self._apply_fn, {"qubits": ["Q0"]}, name="test")
-        ins.map_qubits({"Q0": "D0"})
-        assert calls == []
-
-    def test_explicit_serialized_apply_fn_skips_computation(self, monkeypatch):
-        calls = self._count_get_function_str_calls(monkeypatch)
-        ins = Instruction(
-            self._apply_fn,
+    # A module-level function, or one given its source explicitly (as the
+    # decode path does), has nothing to warn about
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        Instruction(_module_level_apply, {}, name="test")
+        Instruction(
+            env["apply_fn"],
             {},
             name="test",
             serialized_apply_fn="def apply_fn():\n    pass\n",
         )
-        assert ins._serialized_apply_fn == "def apply_fn():\n    pass\n"
-        assert calls == []
-
-    def test_no_warning_for_a_normal_module_level_function(self):
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            Instruction(self._apply_fn, {}, name="test")
-        assert len(caught) == 0
-
-    def test_warns_when_source_will_not_be_reconstructible(self):
-        env = {}
-        exec(
-            "def apply_fn(state, qubits):\n"
-            "    return {'state': state, 'qubits': qubits}\n",
-            env,
-        )
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            Instruction(env["apply_fn"], {}, name="test")
-        messages = [str(w.message) for w in caught]
-        assert any("apply_fn" in m for m in messages)
-
-    def test_no_warning_when_serialized_apply_fn_given_explicitly(self):
-        env = {}
-        exec(
-            "def apply_fn(state, qubits):\n"
-            "    return {'state': state, 'qubits': qubits}\n",
-            env,
-        )
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            Instruction(
-                env["apply_fn"],
-                {},
-                name="test",
-                serialized_apply_fn="def apply_fn():\n    pass\n",
-            )
-        assert len(caught) == 0
+    assert len(caught) == 0

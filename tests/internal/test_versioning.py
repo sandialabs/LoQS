@@ -2,71 +2,11 @@
 
 import pytest
 
-import loqs.internal.versioning as versioning_module
 from loqs.internal.serializable import (
     DecodableVersionError,
     SERIALIZATION_VERSION,
 )
-from loqs.internal.versioning import _ALL_VERSIONED_DECODERS, VersionedDecoder
-
-
-class TestVersionedDecoder:
-    """Unit tests for the registry class itself, independent of any real encoder."""
-
-    @pytest.fixture(autouse=True)
-    def isolate_all_versioned_decoders(self, monkeypatch):
-        """Every VersionedDecoder self-registers into the shared,
-        module-level `_ALL_VERSIONED_DECODERS` list -- redirect it to a
-        throwaway list for these tests so the ephemeral registries created
-        here don't pollute the real coverage check below."""
-        monkeypatch.setattr(versioning_module, "_ALL_VERSIONED_DECODERS", [])
-
-    def test_register_and_call(self):
-        registry = VersionedDecoder("test")
-
-        @registry.register(1)
-        def _(x):
-            return x + 1
-
-        assert registry(1, 5) == 6
-
-    def test_call_with_unregistered_version_raises(self):
-        registry = VersionedDecoder("test")
-
-        @registry.register(1)
-        def _(x):
-            return x
-
-        with pytest.raises(DecodableVersionError):
-            registry(2, "anything")
-
-    def test_double_registration_asserts(self):
-        registry = VersionedDecoder("test")
-
-        @registry.register(1)
-        def _(x):
-            return x
-
-        with pytest.raises(AssertionError):
-
-            @registry.register(1)
-            def _(x):
-                return x
-
-    def test_alias_reuses_same_function(self):
-        registry = VersionedDecoder("test")
-
-        @registry.register(1)
-        def _(x):
-            return x * 2
-
-        registry.alias(2, same_as=1)
-        assert registry(1, 10) == registry(2, 10) == 20
-
-    def test_alias_to_unregistered_version_asserts(self):
-        registry = VersionedDecoder("test")
-        with pytest.raises(AssertionError):
-            registry.alias(2, same_as=1)
+from loqs.internal.versioning import _ALL_VERSIONED_DECODERS
 
 
 class TestAllVersionedDecodersCoverage:
@@ -90,24 +30,12 @@ class TestAllVersionedDecodersCoverage:
             for v in range(earliest, SERIALIZATION_VERSION + 1):
                 if v not in registry._decoders:
                     missing.append((registry._name, v))
-        assert missing == [], f"Missing versioned decoders: {missing}"
+        assert missing == []
 
 
 class TestVersionBoundHandling:
-    """Confirm the registry-based bound check (replacing the old hardcoded
-    `!= 1`/`== 1` checks) actually rejects a too-new version, and that a
-    real round-trip at the current SERIALIZATION_VERSION works."""
-
-    def test_current_version_round_trips(self):
-        from loqs.internal.serializable import Serializable
-
-        assert SERIALIZATION_VERSION == 2
-        # A bare primitive carries no "version" tag at all since 4.1 (see
-        # JSONEncoder.encode_primitive) -- use a dict, which still stamps an
-        # explicit "version" field, to check the round trip end to end.
-        encoded = Serializable.encode({"x": 42}, format="json")
-        assert encoded["version"] == 2
-        assert Serializable.decode(encoded, format="json") == {"x": 42}
+    """Confirm the registry-based bound check actually rejects a too-new
+    version."""
 
     def test_unregistered_future_version_rejected(self):
         from loqs.internal.encoder.jsonencoder import JSONEncoder

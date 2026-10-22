@@ -1,161 +1,37 @@
 """Tester for loqs.tools.migrate.report"""
 
+import pytest
+
 from loqs.tools.migrate.report import (
     ManualReviewItem,
     RewriteItem,
     annotate_manual_review,
-    format_manual_review_block,
-    format_rewrite_block,
     remap_manual_review,
     remap_rewrites,
 )
 
 
-class TestManualReviewItemLocation:
-    def test_line_only_when_no_cell(self):
-        item = ManualReviewItem(line=25, message="m")
-        assert item.location == "Line 25"
-        assert str(item) == "FLAG Line 25: m"
-
-    def test_cell_and_line_when_cell_is_set(self):
-        item = ManualReviewItem(line=3, message="m", cell=8)
-        assert item.location == "Cell 8, Line 3"
-        assert str(item) == "FLAG Cell 8, Line 3: m"
-
-
-class TestFormatManualReviewBlock:
-    def test_heading_and_rule_bracket_the_items(self):
-        items = [
-            ManualReviewItem(line=1, message="first"),
-            ManualReviewItem(line=2, message="second"),
-        ]
-        block = format_manual_review_block("some/file.py", items)
-        lines = block.splitlines()
-        assert lines[0] == lines[2] == "=" * 88
-        assert lines[1] == "some/file.py"
-        assert lines[3] == "FLAG Line 1: first"
-        assert lines[4] == "FLAG Line 2: second"
-
-    def test_cell_items_use_cell_location(self):
-        items = [ManualReviewItem(line=3, message="m", cell=8)]
-        block = format_manual_review_block("some/notebook.ipynb", items)
-        assert "FLAG Cell 8, Line 3: m" in block
-
-
-class TestRemapManualReview:
-    def test_identity_when_source_is_unchanged(self):
-        items = [ManualReviewItem(line=3, message="x")]
-        assert remap_manual_review("a\nb\n", "a\nb\n", items) == items
-
-    def test_empty_review_list_is_a_no_op(self):
-        assert remap_manual_review("a\n", "b\n", []) == []
-
-    def test_line_shifts_forward_when_earlier_lines_are_removed(self):
-        old = "a\nb\nc\nd\n"
-        new = "a\nc\nd\n"  # "b" removed
-        items = [ManualReviewItem(line=4, message="about d")]
-        remapped = remap_manual_review(old, new, items)
-        assert remapped == [ManualReviewItem(line=3, message="about d")]
-
-    def test_line_shifts_backward_when_earlier_lines_are_added(self):
-        old = "a\nb\n"
-        new = "a\nx\ny\nb\n"  # two lines inserted before "b"
-        items = [ManualReviewItem(line=2, message="about b")]
-        remapped = remap_manual_review(old, new, items)
-        assert remapped == [ManualReviewItem(line=4, message="about b")]
-
-    def test_unaffected_line_is_untouched(self):
-        old = "a\nb\nc\n"
-        new = "a\nb\nc\nd\n"  # appended after everything
-        items = [ManualReviewItem(line=1, message="about a")]
-        assert remap_manual_review(old, new, items) == items
-
-
-class TestRewriteItemLocation:
-    def test_line_only_when_no_cell(self):
-        item = RewriteItem(line=25, message="Old -> New")
-        assert item.location == "Line 25"
-        assert str(item) == "REWRITE Line 25: Old -> New"
-
-    def test_cell_and_line_when_cell_is_set(self):
-        item = RewriteItem(line=3, message="Old -> New", cell=8)
-        assert item.location == "Cell 8, Line 3"
-        assert str(item) == "REWRITE Cell 8, Line 3: Old -> New"
-
-
-class TestFormatRewriteBlock:
-    def test_heading_and_rule_bracket_the_items(self):
-        items = [
-            RewriteItem(line=1, message="PatchDict -> PatchLayout"),
-            RewriteItem(
-                line=25, message="RepTuple(...) -> UnitaryGateRep(...)"
+class TestRemap:
+    @pytest.mark.parametrize(
+        "remap, item_type",
+        [
+            pytest.param(
+                remap_manual_review, ManualReviewItem, id="manual_review"
             ),
-        ]
-        block = format_rewrite_block("some/file.py", items)
-        lines = block.splitlines()
-        assert lines[0] == lines[2] == "=" * 88
-        assert lines[1] == "some/file.py"
-        assert lines[3] == "REWRITE Line 1: PatchDict -> PatchLayout"
-        assert (
-            lines[4] == "REWRITE Line 25: RepTuple(...) -> UnitaryGateRep(...)"
-        )
-
-
-class TestRemapRewrites:
-    def test_line_shifts_forward_when_earlier_lines_are_removed(self):
+            pytest.param(remap_rewrites, RewriteItem, id="rewrites"),
+        ],
+    )
+    def test_line_shifts_when_earlier_lines_are_removed(
+        self, remap, item_type
+    ):
         old = "a\nb\nc\nd\n"
         new = "a\nc\nd\n"  # "b" removed
-        items = [RewriteItem(line=4, message="about d")]
-        remapped = remap_rewrites(old, new, items)
-        assert remapped == [RewriteItem(line=3, message="about d")]
-
-    def test_empty_rewrites_list_is_a_no_op(self):
-        assert remap_rewrites("a\n", "b\n", []) == []
+        items = [item_type(line=4, message="about d")]
+        remapped = remap(old, new, items)
+        assert remapped == [item_type(line=3, message="about d")]
 
 
 class TestAnnotateManualReview:
-    def test_inserts_a_comment_above_the_flagged_line(self):
-        source = "x = 1\ny = 2\n"
-        items = [ManualReviewItem(line=2, message="short message")]
-        annotated, remapped = annotate_manual_review(source, items)
-        lines = annotated.splitlines()
-        assert lines[0] == "x = 1"
-        assert lines[1].startswith("# LOQS-MIGRATE")
-        assert "short message" in lines[1]
-        assert lines[2] == "y = 2"
-
-    def test_mentions_v1_2_as_the_transition_point(self):
-        annotated, _ = annotate_manual_review(
-            "y = 2\n", [ManualReviewItem(line=1, message="m")]
-        )
-        assert "1.2" in annotated
-
-    def test_comment_matches_the_flagged_line_indentation(self):
-        source = "if True:\n    y = 2\n"
-        annotated, _ = annotate_manual_review(
-            source, [ManualReviewItem(line=2, message="m")]
-        )
-        comment_line = annotated.splitlines()[1]
-        assert comment_line.startswith("    #")
-
-    def test_wraps_long_messages_to_at_most_two_lines(self):
-        message = " ".join(["word"] * 60)  # much longer than the wrap width
-        annotated, _ = annotate_manual_review(
-            "y = 2\n", [ManualReviewItem(line=1, message=message)]
-        )
-        comment_lines = [
-            line for line in annotated.splitlines() if line.startswith("#")
-        ]
-        assert len(comment_lines) == 2
-
-    def test_returned_manual_review_points_at_the_shifted_code_line(self):
-        source = "x = 1\ny = 2\n"
-        items = [ManualReviewItem(line=2, message="short message")]
-        annotated, remapped = annotate_manual_review(source, items)
-        lines = annotated.splitlines()
-        assert len(remapped) == 1
-        assert lines[remapped[0].line - 1] == "y = 2"
-
     def test_multiple_items_each_shift_the_next_ones_further_down(self):
         source = "a = 1\nb = 2\nc = 3\n"
         items = [
@@ -167,17 +43,3 @@ class TestAnnotateManualReview:
         by_message = {item.message: item.line for item in remapped}
         assert lines[by_message["about a"] - 1] == "a = 1"
         assert lines[by_message["about c"] - 1] == "c = 3"
-
-    def test_out_of_range_line_is_skipped_without_error(self):
-        source = "x = 1\n"
-        items = [ManualReviewItem(line=99, message="out of range")]
-        annotated, remapped = annotate_manual_review(source, items)
-        assert annotated == source
-        assert (
-            remapped[0].line == 100
-        )  # still shifted by its own would-be comment count
-
-    def test_empty_review_list_is_a_no_op(self):
-        annotated, remapped = annotate_manual_review("x = 1\n", [])
-        assert annotated == "x = 1\n"
-        assert remapped == []

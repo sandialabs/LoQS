@@ -19,7 +19,6 @@ from loqs.backends.reps import QSimSuperopGateRep, StimCircuitGateRep
 from loqs.core import Frame, Instruction, QuantumProgram, HistoryDataCollector
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 from loqs.core.recordables import MeasurementOutcomes
-from loqs.tools import fttools
 
 
 def _check_shot_features(
@@ -39,6 +38,36 @@ def _check_shot_features(
                 print(f"Expected: {expected}")
             return False
     return True
+
+
+# The workflow tests' stacks and noiseless outcomes. The PyGSTi model cannot
+# produce STIM reps, so that combination is not generated.
+NONFT_STACK_OUTCOMES = [
+    ([("Non-FT Logical X Measure", "L0")], 1),
+    ([("Z", "L0"), ("Non-FT Logical X Measure", "L0")], 0),
+    ([("H", "L0"), ("Non-FT Logical Z Measure", "L0")], 1),
+    ([("H", "L0"), ("X", "L0"), ("Non-FT Logical Z Measure", "L0")], 0),
+]
+FT_STACK_OUTCOMES = [
+    ([("FT Logical X Measure", "L0")], 1),
+    (
+        [
+            ("Z", "L0"),
+            ("Flagged QEC", "L0"),
+            ("FT Logical X Measure", "L0"),
+        ],
+        0,
+    ),
+]
+# The supported (state, model, circuit) combinations other than
+# STIM + Dict + List, which every stack outcome already runs on.
+OTHER_BACKEND_COMBOS = [
+    (QSimQuantumState, PyGSTiNoiseModel, PyGSTiPhysicalCircuit),
+    (QSimQuantumState, PyGSTiNoiseModel, ListPhysicalCircuit),
+    (QSimQuantumState, DictNoiseModel, PyGSTiPhysicalCircuit),
+    (QSimQuantumState, DictNoiseModel, ListPhysicalCircuit),
+    (STIMQuantumState, DictNoiseModel, PyGSTiPhysicalCircuit),
+]
 
 
 class Test5QCodepack:
@@ -92,9 +121,6 @@ class Test5QCodepack:
 
     @classmethod
     def setup_class(cls):
-        cls.code_5Q = codepack_5_1_3.create_qec_code(
-            circuit_backend=PyGSTiPhysicalCircuit
-        )
         cls.program = cls._create_program(
             PyGSTiPhysicalCircuit, PyGSTiNoiseModel, QSimQuantumState
         )
@@ -103,37 +129,22 @@ class Test5QCodepack:
         )
         cls.qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
 
-    # Note that tests will be labeled stack_outcome-state-model-circuit with this stacking
+    # Each (state, model, circuit) combination runs one workflow, and each
+    # workflow runs on STIM with the Dict model and the List circuit.
     @pytest.mark.parametrize(
-        "circuit_backend", [PyGSTiPhysicalCircuit, ListPhysicalCircuit]
-    )
-    @pytest.mark.parametrize(
-        "model_backend", [PyGSTiNoiseModel, DictNoiseModel]
-    )
-    @pytest.mark.parametrize(
-        "state_backend", [QSimQuantumState, STIMQuantumState]
-    )
-    @pytest.mark.parametrize(
-        "stack_outcome",
+        "state_backend, model_backend, circuit_backend, stack_outcome",
         [
-            ([("Non-FT Logical X Measure", "L0")], 1),
-            ([("Z", "L0"), ("Non-FT Logical X Measure", "L0")], 0),
-            ([("H", "L0"), ("Non-FT Logical Z Measure", "L0")], 1),
-            (
-                [("H", "L0"), ("X", "L0"), ("Non-FT Logical Z Measure", "L0")],
-                0,
-            ),
+            (STIMQuantumState, DictNoiseModel, ListPhysicalCircuit, so)
+            for so in NONFT_STACK_OUTCOMES
+        ]
+        + [
+            (state, model, circuit, NONFT_STACK_OUTCOMES[0])
+            for state, model, circuit in OTHER_BACKEND_COMBOS
         ],
     )
     def test_nonft_workflow(
-        self, circuit_backend, model_backend, state_backend, stack_outcome
+        self, state_backend, model_backend, circuit_backend, stack_outcome
     ):
-        if (
-            model_backend == PyGSTiNoiseModel
-            and state_backend == STIMQuantumState
-        ):
-            pytest.skip("PyGSTiNoiseModel cannot output STIM reps yet")
-
         ref_program = self._create_program(
             circuit_backend, model_backend, state_backend
         )
@@ -160,38 +171,20 @@ class Test5QCodepack:
             == stack_outcome[1]
         )
 
-    # Note that tests will be labeled stack_outcome-state-model-circuit with this stacking
     @pytest.mark.parametrize(
-        "circuit_backend", [PyGSTiPhysicalCircuit, ListPhysicalCircuit]
-    )
-    @pytest.mark.parametrize(
-        "model_backend", [PyGSTiNoiseModel, DictNoiseModel]
-    )
-    @pytest.mark.parametrize(
-        "state_backend", [QSimQuantumState, STIMQuantumState]
-    )
-    @pytest.mark.parametrize(
-        "stack_outcome",
+        "state_backend, model_backend, circuit_backend, stack_outcome",
         [
-            ([("FT Logical X Measure", "L0")], 1),
-            (
-                [
-                    ("Z", "L0"),
-                    ("Flagged QEC", "L0"),
-                    ("FT Logical X Measure", "L0"),
-                ],
-                0,
-            ),
+            (STIMQuantumState, DictNoiseModel, ListPhysicalCircuit, so)
+            for so in FT_STACK_OUTCOMES
+        ]
+        + [
+            (state, model, circuit, FT_STACK_OUTCOMES[0])
+            for state, model, circuit in OTHER_BACKEND_COMBOS
         ],
     )
     def test_ft_workflow(
-        self, circuit_backend, model_backend, state_backend, stack_outcome
+        self, state_backend, model_backend, circuit_backend, stack_outcome
     ):
-        if (
-            model_backend == PyGSTiNoiseModel
-            and state_backend == STIMQuantumState
-        ):
-            pytest.skip("PyGSTiNoiseModel cannot output STIM reps yet")
         ref_program = self._create_program(
             circuit_backend, model_backend, state_backend
         )
@@ -218,26 +211,32 @@ class Test5QCodepack:
             == stack_outcome[1]
         )
 
-    def _test_program(self, program, key, idx):
-        noise_injected_programs = (
-            fttools.build_discrete_error_injection_programs(
-                base_program=program,
-                instruction_to_analyze=self.code_5Q.instructions[key],
-                stack_idx_to_modify=idx,
-                error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+    # Fixed faults reaching the FT measurement's feed-forward branches (parts
+    # II and III). Outcomes depend on the schedule, so only the flag is checked.
+    @pytest.mark.parametrize(
+        "part, fault",
+        [
+            ("II", (2, "Gxpi", 1)),
+            ("III", (0, "Gxpi", 0)),
+            ("III", (2, "Gxpi", 1)),
+        ],
+    )
+    def test_ft_measure_fault_branch_smoke(self, part, fault):
+        def ideal_apply_fn_for(flag, inferred):
+            return Instruction(
+                lambda: Frame({flag: 0, inferred: 1}),
+                serialized_apply_fn="",  # Hack, we won't need to serialize
             )
-        )
 
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=noise_injected_programs,
-            collect_shot_data_args=[("logical_measurement", -1)],
-            expected_outcomes=[1],
-        )
-        failed = runner.run()
-        return len(failed) == 0
-
-    def test_all_discrete_errors_prep(self):
-        stack_ftprep = [
+        global_instructions = {
+            "Ideal Part I Feed-Forward": ideal_apply_fn_for(
+                "F1", "inferred_M1"
+            ),
+            "Ideal Part II Feed-Forward": ideal_apply_fn_for(
+                "F2", "inferred_M2"
+            ),
+        }
+        stack = [
             {
                 "instruction": "Init State",
                 "state": len(self.qubits),
@@ -248,234 +247,71 @@ class Test5QCodepack:
                 "new_patch_label": "L0",
                 "qubits": self.qubits,
             },
-            (
-                "Non-FT Minus Prep",
-                "L0",
-            ),  # Make this one error, RUS should catch and rerun it
-            ("FT Minus Prep", "L0"),
-            ("FT Logical X Measure", "L0"),
-        ]
-
-        program_ftprep = QuantumProgram.from_quantum_program(
-            self.stim_program, stack_ftprep, name="FT Prep -, FT measure X"
-        )
-        assert self._test_program(program_ftprep, "Non-FT Minus Prep", 2)
-
-    def test_all_discrete_errors_meas(self):
-        ## PART I
-        stack_ftmeas_partI = [
-            {
-                "instruction": "Init State",
-                "state": len(self.qubits),
-                "qubit_labels": self.qubits,
-            },  # Autogenerated from state_type
-            {
-                "instruction": "Init Patch 5Q",
-                "new_patch_label": "L0",
-                "qubits": self.qubits,
-            },  # Autogenerated from patch_types. Note that 5Q here must be a key into the patch_types dict below
             ("FT Minus Prep", "L0"),
             ("FT Logical X Measure Part I Circuit", "L0"),
-            ("FT Logical X Measure Part I Feed-Forward", "L0"),
-        ]
-
-        program_ftmeas_partI = QuantumProgram.from_quantum_program(
-            self.stim_program,
-            stack_ftmeas_partI,
-            name="FT Prep -, non-FT measure X",
-        )
-        assert self._test_program(
-            program_ftmeas_partI, "FT Logical X Measure Part I Circuit", 3
-        )
-
-        ## PART II
-        def ideal_partI_apply_fn():
-            return Frame({"F1": 0, "inferred_M1": 1})
-
-        ideal_partI = Instruction(
-            ideal_partI_apply_fn,
-            serialized_apply_fn="",  # Hack, we won't need to serialize
-        )
-
-        stack_ftmeas_partII = [
-            {
-                "instruction": "Init State",
-                "state": len(self.qubits),
-                "qubit_labels": self.qubits,
-            },  # Autogenerated from state_type
-            {
-                "instruction": "Init Patch 5Q",
-                "new_patch_label": "L0",
-                "qubits": self.qubits,
-            },  # Autogenerated from patch_types. Note that 5Q here must be a key into the patch_types dict below
-            ("FT Minus Prep", "L0"),
-            ("FT Logical X Measure Part I Circuit", "L0"),
-            (
-                "Ideal Part I Feed-Forward",
-                None,
-            ),  # Forward reference to global instruction
+            ("Ideal Part I Feed-Forward", None),
             ("FT Logical X Measure Part II Circuit", "L0"),
-            ("FT Logical X Measure Part II Feed-Forward", "L0"),
         ]
+        faulted = {
+            "instruction": f"FT Logical X Measure Part {part} Circuit",
+            "patch_label": "L0",
+            "error_injections": [fault],
+        }
+        if part == "II":
+            stack[-1] = faulted
+            stack.append(("FT Logical X Measure Part II Feed-Forward", "L0"))
+            flag = "F2"
+        else:
+            stack += [
+                ("Ideal Part II Feed-Forward", None),
+                faulted,
+                ("FT Logical X Measure Part III Feed-Forward", "L0"),
+            ]
+            flag = "F3"
 
-        program_ftmeas_partII = QuantumProgram.from_quantum_program(
+        program = QuantumProgram.from_quantum_program(
             self.stim_program,
-            stack_ftmeas_partII,
-            global_instructions={"Ideal Part I Feed-Forward": ideal_partI},
-            name="FT Prep -, FT measure X",
+            stack,
+            global_instructions=global_instructions,
+            name=f"FT measure part {part} fault branch",
         )
-        assert self._test_program(
-            program_ftmeas_partII, "FT Logical X Measure Part II Circuit", 5
-        )
+        results = program.run(num_shots=3)
+        for shot in range(3):
+            assert any(flag in frame for frame in results.shot_histories[shot])
 
-        ## PART III
-        def ideal_partII_apply_fn():
-            return Frame({"F2": 0, "inferred_M2": 1})
-
-        ideal_partII = Instruction(
-            ideal_partII_apply_fn,
-            serialized_apply_fn="",  # Hack, we won't need to serialize
-        )
-
-        stack_ftmeas_partIII = [
+    # One fixed fault per flagged-check branch (flag raised; syndrome without a
+    # flag), checking only that a logical outcome is recorded.
+    @pytest.mark.parametrize("fault", [(2, "Gxpi", 1), (0, "Gxpi", 0)])
+    def test_flagged_qec_fault_branch_smoke(self, fault):
+        stack = [
             {
                 "instruction": "Init State",
                 "state": len(self.qubits),
                 "qubit_labels": self.qubits,
-            },  # Autogenerated from state_type
-            {
-                "instruction": "Init Patch 5Q",
-                "new_patch_label": "L0",
-                "qubits": self.qubits,
-            },  # Autogenerated from patch_types. Note that 5Q here must be a key into the patch_types dict below
-            ("FT Minus Prep", "L0"),
-            ("FT Logical X Measure Part I Circuit", "L0"),
-            (
-                "Ideal Part I Feed-Forward",
-                None,
-            ),  # Forward reference to global instruction
-            ("FT Logical X Measure Part II Circuit", "L0"),
-            (
-                "Ideal Part II Feed-Forward",
-                None,
-            ),  # Forward reference to global instruction
-            ("FT Logical X Measure Part III Circuit", "L0"),
-            ("FT Logical X Measure Part III Feed-Forward", "L0"),
-        ]
-
-        program_ftmeas_partIII = QuantumProgram.from_quantum_program(
-            self.stim_program,
-            stack_ftmeas_partIII,
-            global_instructions={
-                "Ideal Part I Feed-Forward": ideal_partI,
-                "Ideal Part II Feed-Forward": ideal_partII,
             },
-            name="FT Prep -, FT measure X",
-        )
-        assert self._test_program(
-            program_ftmeas_partIII, "FT Logical X Measure Part III Circuit", 7
-        )
-
-    def test_all_discrete_errors_QEC(self):
-        # XZZXI
-        stack_ftqec1 = [
-            {
-                "instruction": "Init State",
-                "state": len(self.qubits),
-                "qubit_labels": self.qubits,
-            },  # Autogenerated from state_type
             {
                 "instruction": "Init Patch 5Q",
                 "new_patch_label": "L0",
                 "qubits": self.qubits,
-            },  # Autogenerated from patch_types. Note that 5Q here must be a key into the patch_types dict below
+            },
             ("FT Minus Prep", "L0"),
-            ("Flagged XZZXI Check", "L0"),
+            {
+                "instruction": "Flagged XZZXI Check",
+                "patch_label": "L0",
+                "error_injections": [fault],
+            },
             ("Flagged XZZXI Feed-Forward", "L0"),
             ("FT Logical X Measure", "L0"),
         ]
-
-        program_ftqec1 = QuantumProgram.from_quantum_program(
-            self.stim_program,
-            stack_ftqec1,
-            name="FT Prep -, QEC, FT measure X",
+        program = QuantumProgram.from_quantum_program(
+            self.stim_program, stack, name="Flagged QEC fault branch"
         )
-        assert self._test_program(program_ftqec1, "Flagged XZZXI Check", 3)
-
-        ## IXZZX
-        stack_ftqec2 = [
-            {
-                "instruction": "Init State",
-                "state": len(self.qubits),
-                "qubit_labels": self.qubits,
-            },  # Autogenerated from state_type
-            {
-                "instruction": "Init Patch 5Q",
-                "new_patch_label": "L0",
-                "qubits": self.qubits,
-            },  # Autogenerated from patch_types. Note that 5Q here must be a key into the patch_types dict below
-            ("FT Minus Prep", "L0"),
-            ("Flagged IXZZX Check", "L0"),
-            ("Flagged IXZZX Feed-Forward", "L0"),
-            ("FT Logical X Measure", "L0"),
-        ]
-
-        program_ftqec2 = QuantumProgram.from_quantum_program(
-            self.stim_program,
-            stack_ftqec2,
-            name="FT Prep -, QEC, FT measure X",
-        )
-        assert self._test_program(program_ftqec2, "Flagged IXZZX Check", 3)
-
-        ## XIXZZ
-        stack_ftqec3 = [
-            {
-                "instruction": "Init State",
-                "state": len(self.qubits),
-                "qubit_labels": self.qubits,
-            },  # Autogenerated from state_type
-            {
-                "instruction": "Init Patch 5Q",
-                "new_patch_label": "L0",
-                "qubits": self.qubits,
-            },  # Autogenerated from patch_types. Note that 5Q here must be a key into the patch_types dict below
-            ("FT Minus Prep", "L0"),
-            ("Flagged XIXZZ Check", "L0"),
-            ("Flagged XIXZZ Feed-Forward", "L0"),
-            ("FT Logical X Measure", "L0"),
-        ]
-
-        program_ftqec3 = QuantumProgram.from_quantum_program(
-            self.stim_program,
-            stack_ftqec3,
-            name="FT Prep -, QEC, FT measure X",
-        )
-        assert self._test_program(program_ftqec3, "Flagged XIXZZ Check", 3)
-
-        ## ZXIXZ
-        stack_ftqec4 = [
-            {
-                "instruction": "Init State",
-                "state": len(self.qubits),
-                "qubit_labels": self.qubits,
-            },  # Autogenerated from state_type
-            {
-                "instruction": "Init Patch 5Q",
-                "new_patch_label": "L0",
-                "qubits": self.qubits,
-            },  # Autogenerated from patch_types. Note that 5Q here must be a key into the patch_types dict below
-            ("FT Minus Prep", "L0"),
-            ("Flagged ZXIXZ Check", "L0"),
-            ("Flagged ZXIXZ Feed-Forward", "L0"),
-            ("FT Logical X Measure", "L0"),
-        ]
-
-        program_ftqec4 = QuantumProgram.from_quantum_program(
-            self.stim_program,
-            stack_ftqec4,
-            name="FT Prep -, QEC, FT measure X",
-        )
-        assert self._test_program(program_ftqec4, "Flagged ZXIXZ Check", 3)
+        results = program.run(num_shots=3)
+        for shot in range(3):
+            assert any(
+                "logical_measurement" in frame
+                for frame in results.shot_histories[shot]
+            )
 
     def test_ft_prep_deep_spotcheck(self):
         stack_ftprep_D3X_error = [

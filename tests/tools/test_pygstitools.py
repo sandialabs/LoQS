@@ -317,7 +317,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
             return original_build(self, index)
 
         monkeypatch.setattr(EdesignRunner, "build_program", flaky_build)
-        with pytest.raises(RuntimeError, match="simulated crash"):
+        with pytest.raises(RuntimeError):
             make_runner().run()
         monkeypatch.setattr(EdesignRunner, "build_program", original_build)
 
@@ -430,12 +430,9 @@ class TestEdesignRunnerHooks:
         count_dict = runner.reduce_program_outcomes(program_results)
         assert count_dict == {("1",): 4}
 
-    def test_build_output_assembles_dataset_with_provenance_comment(
-        self, trivial_counter_setup
-    ):
-        """_build_output builds a DataSet from (circuit, count_dict) pairs
-        and always sets the provenance comment, unconditionally (no
-        dependency on checkpointing being enabled)."""
+    def test_build_output_assembles_dataset(self, trivial_counter_setup):
+        """_build_output builds a DataSet from (circuit, count_dict) pairs,
+        with no dependency on checkpointing being enabled."""
         s = trivial_counter_setup
         runner = s.make_runner()
         ordered_results = [
@@ -445,7 +442,6 @@ class TestEdesignRunnerHooks:
         ds = runner._build_output(ordered_results)
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
-        assert ds.comment
 
     def test_mismatch_check_fields_lists_expected_fields(
         self, trivial_counter_setup

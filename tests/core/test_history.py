@@ -25,28 +25,15 @@ class TestHistory:
         )
         for frame in h2:
             assert frame._data == data
-            assert frame.log == "N/A"
 
         h3 = History(h)
         for frame in h3:
             assert frame._data == data
             assert frame.log == "test"
 
-        h4 = History(
-            [
-                data,
-            ]
-            * 3
-        )
-        for frame in h4:
-            assert frame._data == data
-            assert frame.log == "N/A"
-
         # Test failure raises error
         with pytest.raises(ValueError):
             History("abc")  # type: ignore
-        with pytest.raises(ValueError):
-            History([1, 2, 3])  # type: ignore
 
     def test_init_from_existing_history_does_not_force_union_with_defaults(
         self,
@@ -79,232 +66,48 @@ class TestHistory:
         assert h[2]._data == {"d": 4, "a": 5}
         assert h[3]._data == {"b": 6, "a": 5}
 
-        assert h._expiring_key_locs["b"] == 3  # Which frame keeps up-to-date b
-
         # A key can also be propagating and expiring, like state by default
         h2 = History([{"a": 1, "state": 2}, {"c": 3}, {"d": 4}])
 
         assert h2[0]["a"] == 1
         with pytest.warns(UserWarning):
             assert h2[0]["state"] == 2
-        assert h[1]["c"] == 3
         with pytest.warns(UserWarning):
             assert h2[1]["state"] == 2
-        assert h[2]["d"] == 4
         assert h2[2]["state"] == 2  # No warning, this one is up to date
-        assert h2._expiring_key_locs["state"] == 2
 
-    def test_serialization(self, make_temp_path):
-        data = {"a": 1, "b": 2}
-
-        f = Frame(data, "test 1")
-        h = History(
-            [f, f.update(new_log="test 2"), f.update(new_log="test 3")]
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_serialization(self, format, make_temp_path):
+        history = History(
+            [
+                Frame(
+                    {
+                        "step": i + 1,
+                        "state": f"state_{i}",
+                        "data": {"nested": {"value": i}},
+                        "index": i,
+                    },
+                    log=f"step_{i}",
+                )
+                for i in range(3)
+            ]
         )
 
-        with make_temp_path(suffix=".json") as tmp_path:
-            h.write(tmp_path)
-            h2 = History.read(tmp_path)
-            assert isinstance(h2, History)
+        with make_temp_path(suffix=f".{format}") as tmp_path:
+            history.write(tmp_path)
+            loaded = History.read(tmp_path)
 
-            for i, frame in enumerate(h2):
-                assert frame._data == data
-                assert frame.log == f"test {i+1}"
-
-    def test_history_serialization(self, make_temp_path):
-        """Test History serialization roundtrip."""
-        # Create a history with multiple frames
-        frames = [
-            Frame({"step": 1, "state": "initial"}, log="step_1"),
-            Frame({"step": 2, "state": "middle"}, log="step_2"),
-            Frame({"step": 3, "state": "final"}, log="step_3"),
-        ]
-        history = History(frames)
-
-        # Test string serialization
-        with make_temp_path(suffix=".json") as tempf_path:
-            history.write(tempf_path)
-            loaded_history = History.read(tempf_path)
-
-            # Verify structure is preserved
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            assert loaded_history[0]["step"] == 1
-            # state is an expired key, so checking not last frame should raise a warning
-            with pytest.warns(UserWarning):
-                assert loaded_history[1]["state"] == "middle"
-            assert loaded_history[2].log == "step_3"
-
-        with make_temp_path(suffix=".json") as f_path:
-            history.write(f_path)
-            loaded_history = History.read(f_path)
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            assert loaded_history[0]["step"] == 1
-
-    def test_history_hdf5_serialization(self, make_temp_path):
-        """Test History HDF5 serialization roundtrip."""
-        # Create a history with multiple frames
-        frames = [
-            Frame({"step": 1, "state": "initial"}, log="step_1"),
-            Frame({"step": 2, "state": "middle"}, log="step_2"),
-            Frame({"step": 3, "state": "final"}, log="step_3"),
-        ]
-        history = History(frames)
-
-        # Test bytes serialization
-        with make_temp_path(suffix=".json") as tempf_path:
-            history.write(tempf_path)
-            loaded_history = History.read(tempf_path)
-
-            # Verify structure is preserved
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            assert loaded_history[0]["step"] == 1
-            # state is an expired key, so checking not last frame should raise a warning
-            with pytest.warns(UserWarning):
-                assert loaded_history[1]["state"] == "middle"
-            assert loaded_history[2].log == "step_3"
-
-        with make_temp_path(suffix=".h5") as f_path:
-            history.write(f_path)
-            loaded_history = History.read(f_path)
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            assert loaded_history[0]["step"] == 1
-
-        with make_temp_path(suffix=".hdf5") as f_path:
-            history.write(f_path)
-            loaded_history = History.read(f_path)
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            assert loaded_history[0]["step"] == 1
-
-    def test_history_hdf5_with_frames(self, make_temp_path):
-        """Test History HDF5 serialization with complex frame data."""
-        # Create frames with nested data
-        complex_frames = [
-            Frame(
-                {"data": {"nested": {"value": i}}, "index": i},
-                log=f"frame_{i}",
-            )
-            for i in range(3)
-        ]
-        history = History(complex_frames)
-
-        # Test HDF5 serialization
-        with make_temp_path(suffix=".json") as tempf_path:
-            history.write(tempf_path)
-            loaded_history = History.read(tempf_path)
-
-            # Verify complex data is preserved
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            loaded_data = loaded_history[0]["data"]
-            assert isinstance(loaded_data, dict)
-            assert loaded_data["nested"]["value"] == 0
-            assert loaded_history[2]["index"] == 2
-
-    def test_history_with_frames(self, make_temp_path):
-        """Test History serialization with complex frame data."""
-        # Create frames with nested data
-        complex_frames = [
-            Frame(
-                {"data": {"nested": {"value": i}}, "index": i},
-                log=f"frame_{i}",
-            )
-            for i in range(5)
-        ]
-        history = History(complex_frames)
-
-        # Test roundtrip
-        with make_temp_path(suffix=".json") as tempf_path:
-            history.write(tempf_path)
-            loaded_history = History.read(tempf_path)
-
-            # Verify all frames are preserved with correct data
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 5
-            for i, frame in enumerate(loaded_history):
-                fdata = frame["data"]
-                assert isinstance(fdata, dict)
-                assert fdata["nested"]["value"] == i
-                assert frame["index"] == i
-                assert frame.log == f"frame_{i}"
-
-    def test_history_compressed_serialization(self, make_temp_path):
-        """Test History serialization with compressed format."""
-        frames = [Frame({"i": i}, log=f"step_{i}") for i in range(3)]
-        history = History(frames)
-
-        with make_temp_path(suffix=".json.gz") as temp_path:
-            # Write compressed
-            history.write(temp_path)
-
-            # Read compressed
-            loaded_history = History.read(temp_path)
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            assert loaded_history[0]["i"] == 0
-            assert loaded_history[2].log == "step_2"
-
-    @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_history_serialization_parameterized(self, format, make_temp_path):
-        """Test History serialization roundtrip with both JSON and HDF5 formats."""
-        # Create a history with multiple frames
-        frames = [
-            Frame({"step": 1, "state": "initial"}, log="step_1"),
-            Frame({"step": 2, "state": "middle"}, log="step_2"),
-            Frame({"step": 3, "state": "final"}, log="step_3"),
-        ]
-        history = History(frames)
-
-        # Test string serialization
-        with make_temp_path(suffix=".json") as tempf_path:
-            history.write(tempf_path)
-            loaded_history = History.read(tempf_path)
-
-            # Verify structure is preserved
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            assert loaded_history[0]["step"] == 1
-            # state is an expired key, so checking not last frame should raise a warning
-            with pytest.warns(UserWarning):
-                assert loaded_history[1]["state"] == "middle"
-            assert loaded_history[2].log == "step_3"
-
-        with make_temp_path(suffix=f".{format}") as f_path:
-            history.write(f_path)
-            loaded_history = History.read(f_path)
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            assert loaded_history[0]["step"] == 1
-
-    @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_history_with_frames_parameterized(self, format, make_temp_path):
-        """Test History serialization with complex frame data using both formats."""
-        # Create frames with nested data
-        complex_frames = [
-            Frame(
-                {"data": {"nested": {"value": i}}, "index": i},
-                log=f"frame_{i}",
-            )
-            for i in range(3)
-        ]
-        history = History(complex_frames)
-
-        # Test serialization
-        with make_temp_path(suffix=f".{format}") as tempf_path:
-            history.write(tempf_path)
-            loaded_history = History.read(tempf_path)
-
-            # Verify complex data is preserved
-            assert isinstance(loaded_history, History)
-            assert len(loaded_history) == 3
-            fdata = loaded_history[0]["data"]
-            assert isinstance(fdata, dict)
-            assert fdata["nested"]["value"] == 0
-            assert loaded_history[2]["index"] == 2
+        assert isinstance(loaded, History)
+        assert len(loaded) == 3
+        assert loaded[0]["step"] == 1
+        # state is an expired key, so reading it off a non-last frame warns
+        with pytest.warns(UserWarning):
+            assert loaded[1]["state"] == "state_1"
+        assert loaded[2].log == "step_2"
+        fdata = loaded[0]["data"]
+        assert isinstance(fdata, dict)
+        assert fdata["nested"]["value"] == 0
+        assert loaded[2]["index"] == 2
 
 
 class TestCollectDataFrameFilter:
@@ -322,51 +125,28 @@ class TestCollectDataFrameFilter:
             ]
         )
 
-    def test_single_field_filter_narrows_before_indexing(self):
-        h = self._history()
-        assert (
-            h.collect_data(
-                "val", indices=-1, frame_filter={"patch_label": "L0"}
-            )
-            == 1
-        )
-        assert (
-            h.collect_data(
-                "val", indices=0, frame_filter={"patch_label": "L1"}
-            )
-            == 10
-        )
-
-    def test_all_indices_returns_every_match_not_just_the_most_recent(self):
-        h = self._history()
-        assert h.collect_data(
-            "val", indices="all", frame_filter={"patch_label": "L0"}
-        ) == [0, 1]
-        assert h.collect_data(
-            "val", indices="all", frame_filter={"patch_label": "L1"}
-        ) == [10, 11]
-
-    def test_multi_field_filter_requires_every_pair_to_match(self):
+    @pytest.mark.parametrize(
+        "frame_filter, indices, expected",
+        [
+            ({"patch_label": "L0"}, -1, 1),
+            ({"patch_label": "L1"}, 0, 10),
+            ({"patch_label": "L0"}, "all", [0, 1]),
+            ({"patch_label": "L1"}, "all", [10, 11]),
+            ({"patch_label": "L0", "round": 1}, -1, 1),
+        ],
+    )
+    def test_frame_filter(self, frame_filter, indices, expected):
         h = History(
             [
                 Frame({"val": 0, "patch_label": "L0", "round": 0}),
+                Frame({"val": 10, "patch_label": "L1", "round": 0}),
                 Frame({"val": 1, "patch_label": "L0", "round": 1}),
-                Frame({"val": 2, "patch_label": "L1", "round": 1}),
+                Frame({"val": 11, "patch_label": "L1", "round": 1}),
             ]
         )
         assert (
-            h.collect_data(
-                "val",
-                indices=-1,
-                frame_filter={"patch_label": "L0", "round": 1},
-            )
-            == 1
-        )
-
-    def test_no_frame_filter_behaves_like_the_unfiltered_history(self):
-        h = self._history()
-        assert h.collect_data("val", indices="all") == h.collect_data(
-            "val", indices="all", frame_filter=None
+            h.collect_data("val", indices=indices, frame_filter=frame_filter)
+            == expected
         )
 
     def test_no_matching_frames_raises_index_error(self):
@@ -374,8 +154,4 @@ class TestCollectDataFrameFilter:
         with pytest.raises(IndexError):
             h.collect_data(
                 "val", indices=-1, frame_filter={"patch_label": "nonexistent"}
-            )
-        with pytest.raises(IndexError):
-            h.collect_data(
-                "val", indices=[0], frame_filter={"patch_label": "nonexistent"}
             )

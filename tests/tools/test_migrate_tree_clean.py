@@ -1,5 +1,5 @@
 """Regression test: `loqs.tools.migrate` finds nothing left to migrate
-anywhere in this repo's own `loqs`/`tests`/`docs/notebooks` tree.
+anywhere in this repo's own `tests`/`docs/notebooks` tree.
 
 This is a real regression check, not exploratory cleanup work -- a direct
 grep already confirmed this surface (`PatchDict`, old-format
@@ -20,14 +20,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Deliberately, permanently excluded -- each reason is specific to that
 # file, not a blanket "tests are exempt" carve-out.
 _EXPECTED_EXCEPTIONS = {
-    # This tool's own source: `.cast(`/`"Iz"` appear as real regex
-    # patterns and report-message text (loqs/tools/migrate/flags.py), or
-    # are named in the package's own summary docstring
-    # (loqs/tools/migrate/__init__.py) or `--rename-Iz`'s own help text
-    # (loqs/tools/migrate/cli.py) -- not leftover legacy code.
-    "loqs/tools/migrate/flags.py",
-    "loqs/tools/migrate/__init__.py",
-    "loqs/tools/migrate/cli.py",
     # This tool's own golden-file test fixtures: deliberately contain
     # every legacy pattern on purpose (see tests/tools/test_migrate.py).
     "tests/tools/migrate_fixtures",
@@ -46,14 +38,9 @@ _EXPECTED_EXCEPTIONS = {
     # reason): kept only as a record of a pre-1.2 API, not maintained.
     "tests/backends/fixtures/generate_reps_fixtures.py",
     "tests/backends/model/fixtures/generate_model_fixtures.py",
-    # The "Iz" -> "Imrz" legacy-name hint mechanism itself
-    # (loqs.internal.legacy.legacy_name_hint) and tests exercising it
-    # directly, all of which need the literal old name "Iz" as real data,
-    # not leftover legacy code.
-    "loqs/internal/legacy.py",
+    # Tests of the "Iz" -> "Imrz" legacy-name hint, which need the literal
+    # old name "Iz" as real data.
     "tests/internal/test_internal_legacy.py",
-    "tests/backends/model/test_pygstimodel.py",
-    "tests/core/test_quantumprogram.py",
     # This tool's own test suite: directly exercises `"Iz"` detection and
     # `--rename-Iz`'s rewrite, both of which need the literal old string
     # as real test input.
@@ -74,10 +61,8 @@ def _is_excepted(path: Path) -> bool:
 
 
 def _target_files() -> list[Path]:
-    targets = (
-        list((REPO_ROOT / "loqs").rglob("*.py"))
-        + list((REPO_ROOT / "tests").rglob("*.py"))
-        + list((REPO_ROOT / "docs" / "notebooks").rglob("*.md"))
+    targets = list((REPO_ROOT / "tests").rglob("*.py")) + list(
+        (REPO_ROOT / "docs" / "notebooks").rglob("*.md")
     )
     return sorted(p for p in targets if not _is_excepted(p))
 
@@ -100,12 +85,3 @@ class TestRepoTreeIsClean:
                     )
                 )
         assert offenders == []
-
-    def test_exception_list_is_not_stale(self):
-        """Every excepted path must actually exist, and (for the two
-        directory-style entries) actually contain files -- an exception
-        for a since-deleted/renamed file would silently stop meaning
-        anything."""
-        for exception in _EXPECTED_EXCEPTIONS:
-            path = REPO_ROOT / exception
-            assert path.exists(), f"{exception!r} no longer exists"

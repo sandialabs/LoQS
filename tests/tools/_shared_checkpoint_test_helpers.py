@@ -164,6 +164,42 @@ class H5Session:
         return len(self.events) // 2
 
 
+def sampled_events(events: Sequence[str]) -> list[int]:
+    """Indices of a representative sample of a session's recorded events.
+
+    Event 0, plus for each segment (ending at a `checkpoint_store_committed`
+    write; trailing events form one more segment) its first
+    `Group.create_group`, every `Group.create_dataset`, its first
+    `Dataset.resize`, its last `Dataset.__setitem__` and every
+    `checkpoint_store_*` write. Picked by label, so added writes are sampled.
+    """
+    segments: list[list[int]] = [[]]
+    for index, label in enumerate(events):
+        segments[-1].append(index)
+        if "checkpoint_store_committed" in label:
+            segments.append([])
+    picked = {0} if events else set()
+    for segment in segments:
+        first: dict[str, int] = {}
+        last: dict[str, int] = {}
+        for index in segment:
+            label = events[index]
+            method = label.split("(")[0]
+            if (
+                "checkpoint_store_" in label
+                or method == "Group.create_dataset"
+            ):
+                picked.add(index)
+            first.setdefault(method, index)
+            last[method] = index
+        for method in ("Group.create_group", "Dataset.resize"):
+            if method in first:
+                picked.add(first[method])
+        if "Dataset.__setitem__" in last:
+            picked.add(last["Dataset.__setitem__"])
+    return sorted(picked)
+
+
 @dataclass
 class H5Injection:
     """Raise `exception()` right after event `event_index` of the
