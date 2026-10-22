@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [Unreleased Changes]
+## [1.3] - 2026-10-22
 
 ### New
 - **Parallel execution over shots and programs, replacing Dask entirely (#105, #125, #126, #127, #128, #132, #144, @sserita):** `QuantumProgram.run` and every `MultiProgramRunner`-derived runner (see below) can now parallelize via `loky`, `mpi4py.futures.MPIPoolExecutor`, or `submitit`, nestable for a hybrid node/core shape via a new shared `ParallelStrategy` API; Dask support is removed entirely. Includes a new tutorial, `docs/notebooks/parallel.md`.
