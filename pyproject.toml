@@ -94,6 +94,7 @@ stim = ["stim>=1.6"]
 test = [
     "loqs[dev]",
     "mock>=5",
+    "psutil",
     "pytest>=8",
     "pytest-cov>=5",
     "pytest-xdist>=3"
