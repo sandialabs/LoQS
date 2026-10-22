@@ -99,6 +99,10 @@ class TestChunkRoundRobin:
 
 class TestPinWorkerThreads:
 
+    @pytest.fixture(autouse=True)
+    def _unpinned_process(self, monkeypatch):
+        monkeypatch.setattr("loqs.internal._threads_pinned_pid", None)
+
     def test_pins_thread_pools_to_one(self):
         """Runs in this process: `threadpool_limits(limits=None)` restores
         the original limits on exit, so the pin does not leak."""
@@ -116,6 +120,13 @@ class TestPinWorkerThreads:
                 pool["num_threads"] for pool in threadpoolctl.threadpool_info()
             ]
         assert all(n == 1 for n in after)
+
+    def test_pins_once_per_process(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr("loqs.internal.threadpool_limits", calls.append)
+        pin_worker_threads()
+        pin_worker_threads()
+        assert calls == [1]
 
     def test_warns_when_threadpoolctl_not_installed(self, monkeypatch):
         monkeypatch.setattr("loqs.internal.threadpool_limits", None)
