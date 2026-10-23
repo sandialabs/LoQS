@@ -1,0 +1,56 @@
+{
+  "big_configs": [],
+  "cases": {
+    "trivial_counter.all.static.completeness.all": "pass",
+    "trivial_counter.default.static.model-coverage.dict-p1": "pass",
+    "trivial_counter.default.static.model-coverage.dict-p2": "pass",
+    "trivial_counter.default.static.serialization.hdf5": "pass",
+    "trivial_counter.default.static.serialization.json": "pass"
+  },
+  "classes": {
+    "ft": "not declared",
+    "independence": "not declared",
+    "static": {
+      "known": 0,
+      "passed": 5
+    },
+    "tracking": "not declared",
+    "truth": "not declared"
+  },
+  "codepack": "trivial_counter",
+  "command": "python -m pytest validation -n auto --timeout 1800 --write-records -q -p no:cacheprovider",
+  "commit": "fb719dc4040285b4703a6878c00f23da07da57dc",
+  "date": "2026-10-23T19:12:12+00:00",
+  "dirty": true,
+  "files": {
+    "loqs/codepacks/codepack_trivial_counter.py": "ddb931bec6ad75eaa8988dcad9580fe9874afbf589f49a122b027da59a5fee07",
+    "validation/declarations/trivial_counter.py": "ba277509d017d012e0cfa327d8e55ff8e097ac86fc59756c13b5acc42ee0e843"
+  },
+  "harness": {
+    "validation/__init__.py": "3583a22e094fc5516aba2fa7aaf5294e1951cf9257311166a995a12567d65f9c",
+    "validation/bugs.py": "961aae14f8193f9c2e07962a47c800b1214e68bb255b4aee971230b571bb3f82",
+    "validation/cases.py": "134fae8f794bbfd4bd3148e5d0292925723bf55b67a90b2cf891841dbfaecc77",
+    "validation/conftest.py": "fbbbd0bcb8f4340bb490e05fce19181f70b843a4eaadbb86abe044ffe7bb341c",
+    "validation/declaration.py": "a0080679872f6da65d5989dcd77b11129c6d9942657b35823e860795edd01f59",
+    "validation/engine.py": "d6af9a23e93fe3b11518082626e6bac8845205212d48d2eab558c15697db895e",
+    "validation/logical.py": "c1fea1ffc5ffd5f7de2c0515b0f9ba013f38e2def34185dfa22fb4b8e5a28586",
+    "validation/mutations.py": "532f30456d52ab8525942364833ea7fd307a88690d9ccf6b484dc15ba1d72642",
+    "validation/oracle.py": "f52fbe49c6bec18abef2c3b0300f00a4d286f609cdcfe5eeddc9f2cfe82db4f3",
+    "validation/records.py": "a464612bfd59297711ef7a555738d8273a91ca86196c2eb077a8167b82446326",
+    "validation/test_fault_tolerance.py": "d7cdb270e317ac3f6390ed08984ac3ccdac07985d5ecf7f18ddb3833e2196fff",
+    "validation/test_harness.py": "4f4fa85aca0794ee3c96753495486bf28880951e83dcf21e54a9543ea6302129",
+    "validation/test_patch_independence.py": "1c701983f56321d2588e914d216e2bef6d21a16c083dfb20fe9db1afc695049d",
+    "validation/test_static.py": "93dc49c2ecbfa1074977df16e60518c584df28f57c90e943151e7d2f516c30cb",
+    "validation/test_tracking.py": "15adfa9b272fff3efa8c8e00b330db480151238dfcbfa334fae060b70c820fef",
+    "validation/test_truth_tables.py": "a60be6ac962d15ea45ef286821ba77c8b733d9956f3d393ecea64c935278b646"
+  },
+  "known_failures": {},
+  "machine": {
+    "cpus": 4,
+    "platform": "Linux-7.0.12-201.fc44.aarch64-aarch64-with-glibc2.39",
+    "pygsti": "0.10.2.post1.dev142+g917233daa.develop.CLEAN",
+    "python": "3.13.15",
+    "stim": "1.16.0"
+  },
+  "runtime_s": 4145.1
+}

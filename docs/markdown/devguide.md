@@ -99,6 +99,17 @@ Doctests can be run by invoking `pytest` on the source code instead:
 pytest --doctest-modules loqs
 ```
 
+#### Codepack validation
+
+Shipped codepacks are checked by a separate harness in `validation/`, which
+`pytest` skips by default. Run it with
+`python -m pytest validation -n auto --timeout 1800 --write-records`; see
+`validation/README.md` for the quick run and for adding a declaration. A
+passing run writes one record per codepack under `validation/records/`. The
+default test suite fails when a file under `loqs/codepacks/` (or its
+declaration) changes after its record was written, so refresh and commit the
+record whenever you change a codepack.
+
 ### Coverage
 
 The `tox` pipeline also generates coverage reports by using the `pytest-cov`

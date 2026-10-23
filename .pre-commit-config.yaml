@@ -14,7 +14,7 @@ repos:
     hooks:
     - id: mypy
       name: mypy
-      entry: mypy loqs tests
+      entry: mypy loqs tests validation
       language: system
       pass_filenames: false
       types: [python]
@@ -22,7 +22,7 @@ repos:
     # platforms from invalidating each other's.
     - id: mypy-win32
       name: mypy (win32)
-      entry: mypy --platform win32 --cache-dir .mypy_cache/win32 loqs tests
+      entry: mypy --platform win32 --cache-dir .mypy_cache/win32 loqs tests validation
       language: system
       pass_filenames: false
       types: [python]

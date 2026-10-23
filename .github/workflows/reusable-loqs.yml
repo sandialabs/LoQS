@@ -76,12 +76,12 @@ jobs:
   
     - name: Linting
       run: |
-        python -m black --check loqs tests
-        python -m flake8 loqs tests --statistics
+        python -m black --check loqs tests validation
+        python -m flake8 loqs tests validation --statistics
 
     - name: Type checking
       run: |
-        python -m mypy loqs tests
+        python -m mypy loqs tests validation
     
     - name: Docstring tests
       if: ${{ inputs.loqs-optional == 'all' }}
