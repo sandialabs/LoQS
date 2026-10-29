@@ -823,6 +823,13 @@ def _submitit_debug_executor_factory():
     return submitit.DebugExecutor(folder="submitit-logs")
 
 
+def _thread_executor_factory():
+    # Module-level and self-contained, since a factory is stored as source.
+    from concurrent.futures import ThreadPoolExecutor
+
+    return ThreadPoolExecutor(max_workers=1)
+
+
 class _FlakyRunner(_CountingRunner):
     def build_program(self, index):
         _FLAKY_CALL_COUNT["n"] += 1
@@ -892,6 +899,28 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
     def test_run_without_checkpoint_dir(self):
         runner = _CountingRunner([1, 2, 3], multiplier=2)
         assert runner.run() == [2, 4, 6]
+
+    @pytest.mark.parametrize(
+        "checkpoint_field",
+        ["item_checkpoint_dir", "shot_checkpoint_dir"],
+        ids=["item", "shot"],
+    )
+    def test_thread_program_executor_refused_with_checkpointing(
+        self, tmp_path, checkpoint_field
+    ):
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _CountingRunner(
+            [1, 2, 3],
+            multiplier=2,
+            config=CheckpointConfig(**{checkpoint_field: checkpoint_dir}),
+            parallel_strategy=ParallelStrategy(
+                program_executor=_thread_executor_factory,
+                n_program_chunks=2,
+            ),
+        )
+        with pytest.raises(ValueError):
+            runner.run()
+        assert not checkpoint_dir.exists()
 
     def test_existing_content_without_runner_h5_raises(self, tmp_path):
         checkpoint_dir = tmp_path / "ckpt"

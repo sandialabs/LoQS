@@ -25,6 +25,7 @@ from typing import Any, ClassVar, Generic, TypeVar
 from tqdm import tqdm
 
 from loqs.core.historydatacollector import HistoryDataCollector
+from loqs.core.executors import _refuse_thread_executor
 from loqs.core.quantumprogram import QuantumProgram
 from loqs.internal import (
     pin_worker_threads,
@@ -461,6 +462,15 @@ class MultiProgramRunner(Serializable, Generic[T]):
         attributes from it; without checkpointing, the same assembly runs
         over an in-memory store holding each item's dispatch result.
         """
+        if (
+            (self.checkpoint or self.shot_checkpoint)
+            and self.parallel_strategy is not None
+            and self.parallel_strategy.is_chunked
+        ):
+            _refuse_thread_executor(
+                self.parallel_strategy._resolve_program_executor(),
+                "program_executor",
+            )
         stored = None
         store = self._item_store()
         if store is not None:

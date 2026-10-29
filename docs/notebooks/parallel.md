@@ -450,11 +450,14 @@ keep checkpoint directories, for both `QuantumProgram.run()` and
 Lustre or GPFS.
 
 Checkpointing needs process-based executors: loky,
-`concurrent.futures.ProcessPoolExecutor`, submitit or `mpi4py.futures`. With
-a thread executor, a worker thread's ledger open fails while the driver's
-poll holds a reader of that ledger, and threads that share one held ledger
-race when they grow it. Threads don't speed up shots anyway, since shots run
-under the GIL.
+`concurrent.futures.ProcessPoolExecutor`, submitit or `mpi4py.futures`, and
+refuses a `concurrent.futures.ThreadPoolExecutor` (or a subclass) with a
+`ValueError`. That applies to `shot_executor` when shots are checkpointed,
+and to a runner's `program_executor` when items or shots are, whether the
+executor is given live or built by a factory. With a thread executor, a
+worker thread's ledger open fails while the driver's poll holds a reader of
+that ledger, and threads that share one held ledger race when they grow it.
+Threads don't speed up shots anyway, since shots run under the GIL.
 
 ```{code-cell} ipython3
 import tempfile

@@ -16,6 +16,7 @@ import pytest
 
 from loqs.internal import worker_id
 from loqs.internal.swmrledger import (
+    _recover_stale_ledger,
     SwmrLedgerSnapshot,
     held_swmr_writer,
     init_swmr_ledger,
@@ -371,6 +372,26 @@ class TestSwmrLedgerUnit:
 
         with h5py.File(path, "r") as plain:
             assert bool(plain["swmr_ledger"]["done"][3]) is True
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_held_stale_ledger_is_not_rebuilt(self, tmp_path):
+        """Recovery refuses, with the original error, a ledger this process
+        still holds open, and leaves the file as it was. Otherwise the open
+        handle would keep writing to the replaced file and lose its shots."""
+        path = tmp_path / "ledger.h5"
+        _stale_ledger_copy(tmp_path, path)
+        before = path.read_bytes()
+        original = OSError("open for write")
+
+        f, _group = open_swmr_reader(path)
+        try:
+            with pytest.raises(OSError) as excinfo:
+                _recover_stale_ledger(path, original)
+        finally:
+            f.close()
+
+        assert excinfo.value is original
+        assert path.read_bytes() == before
         assert list(tmp_path.glob("*.tmp")) == []
 
     def test_live_writer_ledger_is_left_alone(self, tmp_path):
