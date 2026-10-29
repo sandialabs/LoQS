@@ -1973,7 +1973,12 @@ def profile_strategies(
     `speedup` stays `None`. Nothing is computed when no entry is fully
     serial, or (using whichever is found first in `strategies`' own
     order) when more than one is.
+
+    `repeats` must be at least 1, else a `ValueError` is raised before
+    anything runs.
     """
+    if repeats < 1:
+        raise ValueError(f"repeats must be at least 1, got {repeats}")
     ctx = (
         reused_slurm_allocation()
         if reuse_slurm_allocation
