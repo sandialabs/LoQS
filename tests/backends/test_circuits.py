@@ -24,7 +24,7 @@ def _build_adapter(name):
     if name == "list":
         cls = ListPhysicalCircuit
 
-        def make(layers, labels, open_end=False):
+        def make(layers, labels):
             return ListPhysicalCircuit(
                 [list(layer) for layer in layers], list(labels)
             )
@@ -32,7 +32,7 @@ def _build_adapter(name):
         def layers_of(circ):
             return _trim(set(layer) for layer in circ.circuit)
 
-    elif name == "stim":
+    elif name in ("stim", "stim-open"):
         pytest.importorskip("stim")
         from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
 
@@ -40,14 +40,14 @@ def _build_adapter(name):
         vocab = {"h": "H", "x": "X", "cnot": "CX", "i": "I"}
         arity = {"CX": 2}
 
-        def make(layers, labels, open_end=False):
-            # A TICK ends every layer, so append, add and insert keep the
-            # boundary layers apart; duration padding needs `open_end`.
+        def make(layers, labels):
+            # A TICK ends every layer; the open form drops the last line,
+            # which is the final TICK (or an empty last layer).
             lines = []
             for layer in layers:
                 lines += [f"{gate} {' '.join(qs)}" for gate, qs in layer]
                 lines.append("TICK")
-            if open_end:
+            if name == "stim-open":
                 lines.pop()
             return STIMPhysicalCircuit("\n".join(lines), list(labels))
 
@@ -70,7 +70,7 @@ def _build_adapter(name):
 
         cls = PyGSTiPhysicalCircuit
 
-        def make(layers, labels, open_end=False):
+        def make(layers, labels):
             return PyGSTiPhysicalCircuit(
                 ListPhysicalCircuit(
                     [list(layer) for layer in layers], list(labels)
@@ -83,19 +83,30 @@ def _build_adapter(name):
                 set(layer) for layer in ListPhysicalCircuit(circ).circuit
             )
 
+    def ends_with_tick(circ):
+        if name in ("stim", "stim-open"):
+            return str(circ.circuit).endswith("TICK")
+        return None
+
     return SimpleNamespace(
         name=name,
+        ends_with_tick=ends_with_tick,
         cls=cls,
         make=make,
         layers_of=layers_of,
         depth_offset=1 if name == "stim" else 0,
-        idle_labels=name != "stim",
         v=vocab,
     )
 
 
 @pytest.fixture(params=BACKENDS)
 def adapter(request):
+    return _build_adapter(request.param)
+
+
+@pytest.fixture(params=[*BACKENDS, "stim-open"])
+def layer_adapter(request):
+    """Every backend, with STIM both with and without a final TICK."""
     return _build_adapter(request.param)
 
 
@@ -136,19 +147,22 @@ def test_invalid_input_raises(adapter):
         adapter.cls(None)
 
 
-def test_append_and_add(adapter):
-    a = adapter
+def test_append_and_add(layer_adapter):
+    a = layer_adapter
     first = [[(a.v["h"], _q("Q0"))]]
     second = [[(a.v["x"], _q("Q0"))]]
     left = a.make(first, ["Q0"])
     right = a.make(second, ["Q0"])
+    tick = a.ends_with_tick(left)
 
     out = left.append(right)
     assert a.layers_of(out) == _expect(*first, *second)
     assert a.layers_of(left) == _expect(*first)
+    assert a.ends_with_tick(out) == tick
 
     left.append_inplace(right)
     assert a.layers_of(left) == _expect(*first, *second)
+    assert a.ends_with_tick(left) == tick
 
     summed = right + right
     assert a.layers_of(summed) == _expect(*second, *second)
@@ -160,55 +174,72 @@ def test_append_and_add(adapter):
     assert a.layers_of(right) == _expect(*second, *second)
 
 
-def test_insert(adapter):
-    a = adapter
+def test_insert(layer_adapter):
+    a = layer_adapter
     base_layers = [[(a.v["h"], _q("Q0"))], [(a.v["cnot"], _q("Q0", "Q1"))]]
     other_layers = [[(a.v["x"], _q("Q0")), (a.v["x"], _q("Q1"))]]
     other = a.make(other_layers, ["Q0", "Q1"])
 
     for idx, expected in [
         (0, [*other_layers, *base_layers]),
+        (1, [base_layers[0], *other_layers, base_layers[1]]),
         (2, [*base_layers, *other_layers]),
     ]:
         base = a.make(base_layers, ["Q0", "Q1"])
+        tick = a.ends_with_tick(base)
         out = base.insert(other, idx)
         assert a.layers_of(out) == _expect(*expected)
         assert a.layers_of(base) == _expect(*base_layers)
+        assert a.ends_with_tick(out) == tick
 
         base.insert_inplace(other, idx)
         assert a.layers_of(base) == _expect(*expected)
+        assert a.ends_with_tick(base) == tick
 
 
-def test_merge(tile_adapter):
-    a = tile_adapter
-    circ = a.make([[(a.v["x"], _q("Q0"))]], ["Q0"])
-    other = a.make([[(a.v["h"], _q("Q1"))]], ["Q1"])
-    circ.merge_inplace(other, 0)
-    assert list(circ.qubit_labels) == ["Q0", "Q1"]
-    assert a.layers_of(circ) == _expect(
-        [(a.v["x"], _q("Q0")), (a.v["h"], _q("Q1"))]
+def test_merge(layer_adapter):
+    a = layer_adapter
+    circ = a.make(
+        [[(a.v["x"], _q("Q0"))], [(a.v["h"], _q("Q1"))]], ["Q0", "Q1"]
     )
+    other = a.make(
+        [[(a.v["x"], _q("Q0"))], [(a.v["h"], _q("Q2"))]], ["Q2", "Q0"]
+    )
+    tick = a.ends_with_tick(circ)
+    circ.merge_inplace(other, 1)
+    assert list(circ.qubit_labels) == ["Q0", "Q1", "Q2"]
+    assert a.layers_of(circ) == _expect(
+        [(a.v["x"], _q("Q0"))],
+        [(a.v["h"], _q("Q1")), (a.v["x"], _q("Q0"))],
+        [(a.v["h"], _q("Q2"))],
+    )
+    assert a.ends_with_tick(circ) == tick
 
 
-def test_pad_by_duration(adapter):
-    a = adapter
+def test_pad_by_duration(layer_adapter):
+    a = layer_adapter
     layers = [
         [(a.v["h"], _q("Q0")), (a.v["x"], _q("Q1"))],
+        [],
         [(a.v["x"], _q("Q1"))],
     ]
     expected = _expect(
-        layers[0],
-        [(a.v["x"], _q("Q1")), (a.v["i"], _q("Q0"))],
+        [(a.v["h"], _q("Q0")), (a.v["x"], _q("Q1")), (a.v["i"], _q("Q2"))],
+        [],
+        [(a.v["x"], _q("Q1")), (a.v["i"], _q("Q0")), (a.v["i"], _q("Q2"))],
     )
     durations = {a.v["h"]: 1, a.v["x"]: 1}
-    circ = a.make(layers, ["Q0", "Q1"], open_end=True)
+    circ = a.make(layers, ["Q0", "Q1", "Q2"])
+    tick = a.ends_with_tick(circ)
 
     out = circ.pad_single_qubit_idles_by_duration({1: a.v["i"]}, durations)
     assert a.layers_of(out) == expected
     assert a.layers_of(circ) == _expect(*layers)
+    assert a.ends_with_tick(out) == tick
 
     circ.pad_single_qubit_idles_by_duration_inplace({1: a.v["i"]}, durations)
     assert a.layers_of(circ) == expected
+    assert a.ends_with_tick(circ) == tick
 
 
 def test_pad_single_qubit_idles(adapter):
@@ -228,14 +259,16 @@ def test_pad_single_qubit_idles(adapter):
     assert a.layers_of(circ) == expected
 
 
-def test_pad_empty_layer_idle(tile_adapter):
-    a = tile_adapter
+def test_pad_empty_layer_idle(adapter):
+    a = adapter
     circ = a.make([[], []], ["Q0"])
     circ.pad_single_qubit_idles_by_duration_inplace(
-        idle_names={1: a.v["i"]}, durations={}, empty_layer_idle="GEmptyIdle"
+        idle_names={1: a.v["i"]},
+        durations={},
+        empty_layer_idle=a.v["i"],
     )
     assert a.layers_of(circ) == _expect(
-        [("GEmptyIdle", _q("Q0"))], [("GEmptyIdle", _q("Q0"))]
+        [(a.v["i"], _q("Q0"))], [(a.v["i"], _q("Q0"))]
     )
 
 
@@ -266,20 +299,19 @@ def test_qubit_labels(adapter):
     assert list(circ.qubit_labels) == ["Q1"]
     assert a.layers_of(circ) == _expect([(a.v["x"], _q("Q1"))])
 
-    # Backends that can hold an idle label also set and delete one
-    if a.idle_labels:
-        three = ["Q0", "Q1", "Q2"]
-        circ = a.make(layers, ["Q0", "Q1"])
-        out = circ.set_qubit_labels(three)
-        assert list(out.qubit_labels) == three
-        assert a.layers_of(out) == _expect(*layers)
-        assert list(circ.qubit_labels) == ["Q0", "Q1"]
-        circ.set_qubit_labels_inplace(three)
-        assert list(circ.qubit_labels) == three
-        out = circ.delete_qubits(["Q2"])
-        assert list(out.qubit_labels) == ["Q0", "Q1"]
-        assert a.layers_of(out) == _expect(*layers)
-        assert list(circ.qubit_labels) == three
+    # Set and delete an idle label
+    three = ["Q0", "Q1", "Q2"]
+    circ = a.make(layers, ["Q0", "Q1"])
+    out = circ.set_qubit_labels(three)
+    assert list(out.qubit_labels) == three
+    assert a.layers_of(out) == _expect(*layers)
+    assert list(circ.qubit_labels) == ["Q0", "Q1"]
+    circ.set_qubit_labels_inplace(three)
+    assert list(circ.qubit_labels) == three
+    out = circ.delete_qubits(["Q2"])
+    assert list(out.qubit_labels) == ["Q0", "Q1"]
+    assert a.layers_of(out) == _expect(*layers)
+    assert list(circ.qubit_labels) == three
 
     # Map labels, leaving the unmapped label alone
     circ = a.make(layers, ["Q0", "Q1"])
@@ -300,17 +332,19 @@ def _idle_pair(a):
     return [(a.v["i"], _q("Q0")), (a.v["i"], _q("Q1"))]
 
 
-def test_transplant_idle_schedule(adapter):
-    a = adapter
+def test_transplant_idle_schedule(layer_adapter):
+    a = layer_adapter
     cnot = (a.v["cnot"], _q("Q0", "Q1"))
     reference = a.make([_idle_pair(a), [cnot], _idle_pair(a)], ["Q0", "Q1"])
     target = a.make([[], [], [cnot], [], []], ["Q0", "Q1"])
+    tick = a.ends_with_tick(target)
     target.transplant_idle_schedule_inplace(
         reference, ["Q0", "Q1"], [a.v["i"]]
     )
     assert a.layers_of(target) == _expect(
         _idle_pair(a), [], [cnot], _idle_pair(a)
     )
+    assert a.ends_with_tick(target) == tick
 
 
 @pytest.mark.parametrize("case", ["mismatch", "insufficient"])
@@ -370,17 +404,20 @@ def test_discrete_error_locations(adapter):
     ) == [(2, (0, 1))]
 
 
-def test_serialization_round_trip(adapter, make_temp_path):
+@pytest.mark.parametrize("suffix", [".json", ".h5"])
+def test_serialization_round_trip(adapter, make_temp_path, suffix):
     a = adapter
     layers = [
         [(a.v["h"], _q("Q0")), (a.v["x"], _q("Q1"))],
         [(a.v["cnot"], _q("Q0", "Q1"))],
     ]
-    circ = a.make(layers, ["Q0", "Q1"])
-    with make_temp_path(suffix=".json") as tmp_path:
+    # Q2 is unused and sits between the used labels
+    labels = ["Q0", "Q2", "Q1"]
+    circ = a.make(layers, labels)
+    with make_temp_path(suffix=suffix) as tmp_path:
         circ.write(tmp_path)
         loaded = a.cls.read(tmp_path)
 
     assert isinstance(loaded, a.cls)
     assert a.layers_of(loaded) == _expect(*layers)
-    assert list(loaded.qubit_labels) == ["Q0", "Q1"]
+    assert list(loaded.qubit_labels) == labels
