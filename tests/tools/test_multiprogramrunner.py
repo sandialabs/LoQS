@@ -36,7 +36,7 @@ from loqs.internal.checkpointstore import (
 )
 from loqs.internal.serializable import Serializable
 from loqs.tools.noisesweeptools import NoiseSweepRunner
-from loqs.tools.paralleltools import ParallelStrategy
+from loqs.tools.paralleltools import ExecutorSpec, ParallelStrategy
 from loqs.tools.multiprogramrunner import (
     CheckpointConfig,
     MultiProgramRunner,
@@ -2726,6 +2726,38 @@ class TestBaseClassMechanisms:
 
         resumed = _CountingRunner.read(checkpoint_dir / "runner.h5")
         assert resumed.run() == serial_result
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="submitit unconditionally registers a SIGCONT handler, POSIX-only",
+    )
+    def test_submitit_executor_spec_with_checkpointing(self, tmp_path):
+        """A submitit `ExecutorSpec` is stored as data, and a runner read
+        from its file rebuilds an executor with the same settings."""
+        pytest.importorskip("submitit")
+        spec = ExecutorSpec.submitit(
+            tmp_path / "submitit-logs", cluster="debug", timeout_min=5
+        )
+        items = [3, -2, 1, 4]
+        serial_result = _CountingRunner(items=items).run()
+
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _CountingRunner(
+            items=items,
+            parallel_strategy=ParallelStrategy(
+                program_executor=spec, n_program_chunks=2
+            ),
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
+        )
+        assert runner.run() == serial_result
+
+        resumed = _CountingRunner.read(checkpoint_dir / "runner.h5")
+        loaded_spec = resumed.parallel_strategy.program_executor
+        assert loaded_spec == spec
+        executor = loaded_spec()
+        assert executor.folder == tmp_path / "submitit-logs"
+        assert executor.cluster == "debug"
+        assert executor.parameters == {"timeout_min": 5}
 
     def test_hybrid_program_and_shot_executor_parallelism(self, tmp_path):
         """Nested program and shot pools return the serial results, and

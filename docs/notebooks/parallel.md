@@ -79,17 +79,20 @@ small `dataclass`, reused identically by every program-level call site:
 
 - `program_executor`: dispatches chunks, auto-selecting one `.submit()` call
   per chunk vs. a bulk `.map_array()` call depending on which protocol it
-  satisfies. It also accepts a zero-argument factory, called once and cached
-  like an `ExecutorSpec` (see the `submitit` section below for checkpointing
-  with one).
+  satisfies. It also accepts an `ExecutorSpec`
+  ([ExecutorSpec.submitit](api:ExecutorSpec.submitit) or
+  [ExecutorSpec.mpi4py](api:ExecutorSpec.mpi4py)) or a zero-argument factory,
+  called once and cached; a spec is stored as data and a factory as source
+  (see the `submitit` section below for checkpointing with either).
 - `n_program_chunks`: how many round-robin chunks to split the batch into.
 - `shot_executor`: nested shot-level parallelism. A live executor can't
   normally cross the process boundary each dispatched chunk crosses once
   `program_executor` is also set, but a recognized backend (currently
   `loky`) is auto-converted into a picklable factory built from its own
   parameters -- no factory function needs to be written by hand. An
-  unrecognized backend still requires an explicit zero-argument factory
-  callable instead.
+  unrecognized backend still requires
+  [ExecutorSpec.mpi4py](api:ExecutorSpec.mpi4py) (for MPI) or an explicit
+  zero-argument factory callable instead.
 
 [ParallelStrategy.describe](api:ParallelStrategy.describe) prints a quick,
 per-axis text summary of a configuration (backend, chunk/worker counts) before
@@ -303,23 +306,18 @@ On a real cluster, `submitit.Executor`'s own `slurm_*` parameters (e.g.
 `max_workers`, so each array task actually gets the cores its own nested
 executor tries to use.
 
-To checkpoint a submitit run, pass `program_executor` a zero-argument factory
-rather than a live executor, since LoQS can't rebuild a `submitit.AutoExecutor`
-from its own state. The factory is stored as source in the runner file, so
-define it at module level in a `.py` file, with its imports and settings in its
-body:
+To checkpoint a submitit run, pass `program_executor` an
+[ExecutorSpec.submitit](api:ExecutorSpec.submitit) rather than a live
+executor, since LoQS can't rebuild a `submitit.AutoExecutor` from its own
+state:
 
 ```python
-def make_executor():
-    import submitit
-
-    executor = submitit.AutoExecutor(folder="submitit-logs")
-    executor.update_parameters(timeout_min=30, slurm_partition="short")
-    return executor
-
+from loqs.tools.paralleltools import ExecutorSpec
 
 strategy = ParallelStrategy(
-    program_executor=make_executor,
+    program_executor=ExecutorSpec.submitit(
+        "submitit-logs", timeout_min=30, slurm_partition="short"
+    ),
     n_program_chunks=8,
 )
 runner = fttools.FaultInjectionRunner(
@@ -327,6 +325,27 @@ runner = fttools.FaultInjectionRunner(
     parallel_strategy=strategy,
     config=CheckpointConfig(item_checkpoint_dir="checkpoints"),
     ...,
+)
+```
+
+The spec stores the folder (as an absolute path), cluster and parameters as
+data, so it works from a notebook, a script's `__main__` or a module, and a
+resume from the runner file rebuilds the same executor.
+
+For a backend LoQS doesn't know, pass a zero-argument factory instead. It is
+stored as source in the runner file, so define it at module level in a `.py`
+file, with its imports and settings in its body:
+
+```python
+def make_executor():
+    from concurrent.futures import ProcessPoolExecutor
+
+    return ProcessPoolExecutor(max_workers=4)
+
+
+strategy = ParallelStrategy(
+    program_executor=make_executor,
+    n_program_chunks=8,
 )
 ```
 
@@ -376,6 +395,12 @@ with MPIPoolExecutor() as executor:
         parallel_strategy=strategy,
     ).run()
 ```
+
+A live `MPIPoolExecutor` can't be stored in a runner file, so a checkpointed
+MPI run passes [ExecutorSpec.mpi4py](api:ExecutorSpec.mpi4py) (the
+`MPIPoolExecutor` keyword arguments, such as `max_workers`) as
+`program_executor`. The pool is built once, on first use, and lasts until the
+process exits.
 
 `MPIPoolExecutor` is typically launched as one atomic multi-node allocation
 (`mpiexec -n N`, one reservation covering every rank up front) -- a real
