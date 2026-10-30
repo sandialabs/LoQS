@@ -6,7 +6,6 @@ import multiprocessing
 import os
 import queue as queue_module
 import shutil
-import sys
 import time
 from pathlib import Path
 
@@ -17,6 +16,8 @@ import pytest
 from loqs.internal import worker_id
 from loqs.internal.swmrledger import (
     _recover_stale_ledger,
+    _release_lock,
+    _try_lock_exclusive,
     SwmrLedgerSnapshot,
     held_swmr_writer,
     init_swmr_ledger,
@@ -348,19 +349,16 @@ class TestSwmrLedgerUnit:
         monkeypatch.setattr(os, "getpid", lambda: real_getpid() + 12345)
         assert worker_id() != first
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="Rebuilding a killed writer's ledger needs an fcntl lock, so "
-        "Windows refuses instead",
-    )
     def test_reopen_after_killed_writer_clears_stale_flag(self, tmp_path):
         """A ledger whose writer was killed while it held the file reopens
-        with its done flags and fill values intact, and no `.tmp` is left."""
+        with its done flags and fill values intact and holds the writer
+        lock, and no `.tmp` is left."""
         path = tmp_path / "ledger.h5"
         _stale_ledger_copy(tmp_path, path)
 
         f, group = open_swmr_writer(path, ["done", "wall_clock_times"])
         try:
+            assert _try_lock_exclusive(path) is None
             assert bool(group["done"][3]) is True
             mark_ledger_item_done(group, 20, 2.5)
             done = group["done"][()]
@@ -400,17 +398,15 @@ class TestSwmrLedgerUnit:
         path = tmp_path / "ledger.h5"
         _stale_ledger_copy(tmp_path, path)
 
-        # flock locks per open file description, so this descriptor stands
-        # in for a live writer's lock and blocks recovery in this process.
-        lock_fd = os.open(path, os.O_RDONLY)
+        # The lock belongs to its descriptor, so this one stands in for a
+        # live writer's lock and blocks recovery in this process.
+        lock_fd = _try_lock_exclusive(path)
+        assert lock_fd is not None
         try:
-            if sys.platform != "win32":
-                import fcntl
-
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             inode = os.stat(path).st_ino
-            with pytest.raises(OSError):
+            with pytest.raises(OSError) as excinfo:
                 open_swmr_writer(path, ["done", "wall_clock_times"])
+            assert excinfo.value.__cause__ is None
             assert os.stat(path).st_ino == inode
             assert list(tmp_path.glob("*.tmp")) == []
             f, group = open_swmr_reader(path)
@@ -419,7 +415,7 @@ class TestSwmrLedgerUnit:
             finally:
                 f.close()
         finally:
-            os.close(lock_fd)
+            _release_lock(lock_fd)
 
 
 def _stale_ledger_copy(tmp_path, target):
