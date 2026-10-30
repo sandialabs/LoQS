@@ -227,6 +227,8 @@ class TestMigrateLegacyFnsGate:
         )
         with pytest.raises(RuntimeError):
             Instruction._from_decoded_attrs(attrs)
+        with pytest.raises(RuntimeError):
+            Instruction._from_decoded_attrs(attrs)
 
         token = serializable_module.MIGRATE_LEGACY_FNS.set(True)
         try:

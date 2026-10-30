@@ -10,6 +10,12 @@
 
 ### Fixed
 - **Windows recovery of a killed writer's ledger (#150, @sserita):** On Windows, a checkpoint that reuses a killed writer's explicit `worker_id` now rebuilds its ledger and resumes, as on Linux and macOS, instead of failing with HDF5's stale "open for write" error.
+- **`loqs.tools` fixes (#155, @sserita):** Fixes four bugs found while slimming the test suite.
+  - `get_state_probs_phases`/`print_state_probs_phases` work at any qubit count, not just 7, and raise `ValueError` for a state whose signs they can't determine (e.g. a GHZ state) instead of printing wrong ones
+  - Reading a v1.0/v1.1 program with `migrate_legacy_fns=True` takes about 2 s instead of about 17 s, and `loqs-migrate` no longer stalls on a file that only mentions old names in comments or docstrings
+  - `loqs-migrate` also reports renames made through a module import (e.g. `loqs.core.PatchDict`), and flags removed names used that way
+  - `loqs-migrate --dry-run` exits 1 when it would rewrite a file, so it works as a CI gate
+  - `profile_strategies` raises `ValueError` for `repeats < 1` before running anything
 
 ## [1.3] - 2026-10-22
 
