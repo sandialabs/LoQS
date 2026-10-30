@@ -59,10 +59,11 @@ this pass blindly:
    "genuinely unused" from "moved but the rest of this rename batch
    already removed its only usage".
 3. Chaining several `RenameCommand` passes over the same module (one per
-   renamed name, done here since each has its own old/new location) can
-   leave a stray blank line and trailing comma behind in a multi-name
-   `from ... import (...)` block when an earlier pass's partial cleanup
-   isn't reformatted by a later pass. Still valid Python, just untidy.
+   renamed name the file really references, done here since each has its
+   own old/new location) can leave a stray blank line and trailing comma
+   behind in a multi-name `from ... import (...)` block when an earlier
+   pass's partial cleanup isn't reformatted by a later pass. Still valid
+   Python, just untidy.
 
 None of these are incorrect Python, but review the diff before committing
 rather than applying a whole-file rewrite unseen, same as any other
@@ -141,7 +142,8 @@ class _QualifiedNameFinder(cst.CSTVisitor):
     `QualifiedNameProvider` doesn't resolve anything useful for an import
     statement's own name node) and any later usage of it (via the same
     `QualifiedNameProvider` resolution [](api:RenameCommand) itself
-    uses)."""
+    uses). A usage through a module import, such as `loqs.core.PatchDict()`
+    after `import loqs.core`, is an `Attribute` node and is found too."""
 
     METADATA_DEPENDENCIES = (QualifiedNameProvider, PositionProvider)
 
@@ -165,13 +167,15 @@ class _QualifiedNameFinder(cst.CSTVisitor):
             if get_full_name_for_node(alias.name) == self._name:
                 self.lines.append(self._line(alias.name))
 
-    def visit_Name(self, node: cst.Name) -> None:
+    def visit_Name(self, node: cst.Name | cst.Attribute) -> None:
         try:
             qualified_names = self.get_metadata(QualifiedNameProvider, node)
         except KeyError:
             return
         if any(qn.name == self._qualified_name for qn in qualified_names):
             self.lines.append(self._line(node))
+
+    visit_Attribute = visit_Name
 
 
 def rewrite_renames(
@@ -196,10 +200,12 @@ def rewrite_renames(
     if renames is None:
         renames = RENAMES
 
-    # A cheap textual pre-filter before a real CST transform per rename:
-    # with ~25 table entries, running each one through libcst against
-    # every file in a large tree is too slow, and a name absent from the
-    # file's text can't be referenced in its code either.
+    # Two pre-filters before a real CST transform per rename, since each
+    # `RenameCommand` recomputes libcst's scope metadata for the whole
+    # file. First a substring check: a name absent from the file's text
+    # can't be referenced in its code. Then the finder below, which skips
+    # the transform for a name that appears only as text (a docstring, a
+    # comment, part of a longer identifier).
     applicable_renames = {k: v for k, v in renames.items() if k[1] in source}
     if not applicable_renames:
         return MigrationResult(
@@ -217,18 +223,15 @@ def rewrite_renames(
     for (old_module, old_name), new_loc in applicable_renames.items():
         if new_loc is None:
             continue
-        _, new_name = new_loc
+        new_module, new_name = new_loc
         finder = _QualifiedNameFinder(old_module, old_name)
         original_wrapper.visit(finder)
         rewrite_items.extend(
             RewriteItem(line=line, message=f"{old_name} -> {new_name}")
             for line in finder.lines
         )
-
-    for (old_module, old_name), new_loc in applicable_renames.items():
-        if new_loc is None:
+        if not finder.lines:
             continue
-        new_module, new_name = new_loc
         context = CodemodContext()
         command = RenameCommand(
             context,

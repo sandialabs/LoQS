@@ -666,6 +666,18 @@ class TestProfileStrategies:
                     sample_interval=5.0,
                 )
 
+    def test_repeats_below_one_is_refused_before_any_run(self):
+        def failing_work_fn(strategy):
+            raise RuntimeError("work_fn must not run")
+
+        with pytest.raises(ValueError):
+            profile_strategies(
+                failing_work_fn,
+                {"serial": ParallelStrategy()},
+                repeats=0,
+                warmup=True,
+            )
+
     def test_reuse_slurm_allocation_requires_a_real_allocation(
         self, monkeypatch
     ):

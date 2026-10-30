@@ -22,6 +22,11 @@ would have made -- the same `"<TAG> <location>: <message>"` shape an
 unresolved (`"FLAG"`-tagged) item is reported in -- and never touches a
 file, useful as a CI/pre-flight gate.
 
+Exit codes: 2 if any file couldn't be processed or written, or no files
+were found. Otherwise 1 if anything was flagged for manual review, or, with
+`--dry-run`, if any file would be rewritten. Otherwise 0: in write mode,
+that includes a run that rewrote files and flagged nothing.
+
 `<path>` may be a single file or a directory (walked recursively for
 `.py`/`.ipynb`/`.md` files). A `.py` file is migrated with
 [](api:migrate_source); a `.md` file is treated as a MyST Markdown
@@ -150,9 +155,11 @@ def _run(
     rename_patch_label: str | None = None,
 ) -> int:
     """The CLI's actual implementation, shared by both write and
-    `--dry-run` modes. Returns a process exit code: 0 if nothing needed
-    attention, 1 if anything was flagged for manual review (whether or
-    not anything else was also rewritten), 2 on a file-level error."""
+    `--dry-run` modes. Returns a process exit code: 2 on any error;
+    else 1 if anything was flagged for manual review (whether or not
+    anything else was also rewritten) or, in a dry run only, if any file
+    would be rewritten; else 0. A write run that rewrites files and
+    flags nothing still returns 0."""
     any_manual_review = False
     any_error = False
     changed_files = 0
@@ -245,7 +252,7 @@ def _run(
 
     if any_error:
         return 2
-    if any_manual_review:
+    if any_manual_review or (not write and changed_files > 0):
         return 1
     return 0
 
@@ -255,6 +262,13 @@ def build_parser() -> argparse.ArgumentParser:
         prog="loqs-migrate",
         description=(
             "Rewrite .py/.ipynb/MyST Markdown source still using pre-1.2 LoQS APIs."
+        ),
+        epilog=(
+            "Exit codes: 2 if any file could not be processed or written, "
+            "or no files were found. Otherwise 1 if anything was flagged "
+            "for manual review, or, with --dry-run, if any file would be "
+            "rewritten. Otherwise 0, which in write mode includes a run "
+            "that rewrote files and flagged nothing."
         ),
     )
     parser.add_argument(
