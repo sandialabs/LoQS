@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
+import re
 import textwrap
 from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 import warnings
@@ -37,6 +38,25 @@ QubitTypes: TypeAlias = str | int
 
 STIMCircuitLike: TypeAlias = BasePhysicalCircuit | str | _Circuit
 """Types we can cast to a STIM circuit."""
+
+# STIM instruction name, optional [tag], optional (args), then targets
+_STIM_LINE = re.compile(r"(\w+)(\[[^\]]*\])?(\([^)]*\))?(?:\s+(.*))?$")
+
+
+def _target_label(token: str, labels: Sequence) -> Any:
+    """Map a STIM target token to its qubit label, keeping the label's type.
+
+    A `!`-prefixed token gives the string `"!<label>"`. Any target that
+    isn't a qubit index (`rec[-1]`, `sweep[0]`, Pauli targets) raises
+    `NotImplementedError`.
+    """
+    negated = token.startswith("!")
+    index = token[1:] if negated else token
+    if not index.isdigit():
+        raise NotImplementedError(f"STIM target {token!r} is not supported")
+    label = labels[int(index)]
+    return f"!{label}" if negated else label
+
 
 r"""
 STIM circuit grammar
@@ -436,9 +456,19 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     """STIM noise channels.
 
     These should probably not be part of a circuit
-    prior to it going through a [](api:BaseNoiseModel),
-    but currently they will just pass through.
+    prior to it going through a [](api:BaseNoiseModel).
+    [](api:DictNoiseModel) applies them on a STIM state with a warning,
+    and refuses them for states that can't take STIM text.
     """
+
+    _stim_annotations: ClassVar[list[str]] = [
+        "TICK",
+        "DETECTOR",
+        "OBSERVABLE_INCLUDE",
+        "QUBIT_COORDS",
+        "SHIFT_COORDS",
+    ]
+    """STIM annotations, which act on no qubit and pass through models."""
 
     _stim_gates: ClassVar[list[str]] = (
         _stim_oneq_gates + _stim_twoq_gates + _stim_measure_reset_gates
@@ -929,6 +959,49 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def _serialize_circuit(self) -> str | list | dict:
         # For STIM circuit, string version is already serializable
         return str(self.circuit)
+
+    def _parsed_lines(self):
+        """Yield `(kind, line, name, args, groups)` for each unrolled line.
+
+        This is the format half shared by any model reading STIM text. `line`
+        is the original text, `name` the instruction without its tag (`""`
+        for a blank line) and `args` its `(...)` text or `""`. `kind` is
+        `"annotation"` (blank lines and `_stim_annotations`, `groups` empty),
+        `"noise"` (`groups` holds one tuple of every mapped target) or
+        `"gate"` (`groups` the mapped targets in pairs for two-qubit gates
+        and `MXX`/`MYY`/`MZZ`, else singly). A tagged line that isn't an
+        annotation, an unknown name or an unmappable target raises
+        `NotImplementedError`.
+        """
+        labels = self.qubit_labels
+        for line in self._unroll_repeats().split("\n"):
+            parsed = _STIM_LINE.match(line.strip().upper())
+            # Groups absent from the line come back as ""
+            name, tag, args, rest = parsed.groups("") if parsed else [""] * 4
+            if name == "" or name in self._stim_annotations:
+                yield "annotation", line, name, args, ()
+                continue
+            if tag or not (
+                name in self._stim_gates or name in self._stim_noise_channels
+            ):
+                raise NotImplementedError(
+                    f"STIM instruction '{line}' is not supported"
+                )
+            mapped = [_target_label(t, labels) for t in rest.split()]
+            if name in self._stim_noise_channels:
+                yield "noise", line, name, args, (tuple(mapped),)
+                continue
+            size = (
+                2
+                if name in self._stim_twoq_gates
+                or name in ("MXX", "MYY", "MZZ")
+                else 1
+            )
+            groups = tuple(
+                tuple(mapped[i : i + size])
+                for i in range(0, len(mapped), size)
+            )
+            yield "gate", line, name, args, groups
 
     def _unroll_repeats(self) -> str:
         """Return the circuit string with all ``REPEAT`` blocks fully expanded.

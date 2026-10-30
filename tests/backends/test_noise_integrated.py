@@ -5,6 +5,7 @@ representations match under the correct parameters.
 """
 
 from collections import Counter
+import warnings
 import numpy as np
 import pytest
 
@@ -423,3 +424,82 @@ class TestBackendAgreement:
             assert [p for p in shot_parities if p is not None] == [[0, 0]]
             data = tuple(mo[q][0] for q in self.DATA)
             assert data in [(1, 0, 0), (0, 1, 1)]
+
+    @pytest.mark.parametrize(
+        "state_type", [QSimState, STIMState, NumpyStatevectorQuantumState]
+    )
+    @pytest.mark.parametrize(
+        "case",
+        ["agreement", "bug2", "bug3", "bug4", "noise-channel"],
+    )
+    def test_stim_circuit_on_every_state(self, state_type, case):
+        from loqs.backends import STIMPhysicalCircuit, propagate_state
+        from loqs.backends.reps import StimCircuitInstrumentRep
+
+        h, x = self._H, self._X
+        u = UnitaryGateRep
+        ones = {"0": [1], "1": [1]}
+        # circuit, labels, gate dict, gate types, expected outcomes
+        cases = {
+            "agreement": (
+                "X 0\nTICK\nCX 0 1 1 2\nTICK\nH 2 2\nTICK\nM 0 1 2\n"
+                "DETECTOR rec[-1]\nTICK",
+                [2, 0, 1],
+                {
+                    "X": StimCircuitGateRep("X 0", ()),
+                    "H": StimCircuitGateRep("H 0", ()),
+                    "CX": StimCircuitGateRep("CX 0 1", ()),
+                },
+                [StimCircuitGateRep],
+                {0: [1], 1: [1], 2: [1]},
+            ),
+            "bug2": (
+                "X 0\nTICK\nM 0",
+                [0],
+                {("X", (0,)): u(x, (0,))},
+                [u],
+                {0: [1]},
+            ),
+            "bug3": (
+                "H 0 1\nTICK\nZ 0 1\nTICK\nH 0 1\nTICK\nM 0 1",
+                ["0", "1"],
+                {"H": u(h, ()), "Z": u(np.diag([1, -1]), ())},
+                [u],
+                ones,
+            ),
+            "bug4": (
+                "X 0\nTICK\nCX 0 1\nTICK\nDETECTOR\nTICK\nM 0 1",
+                ["0", "1"],
+                {"X": u(x, ()), "CX": u(self._CX, ())},
+                [u],
+                ones,
+            ),
+            "noise-channel": (
+                "X_ERROR(1) 2 0\nTICK\nM 0 1 2",
+                ["a", "b", "c"],
+                {},
+                [StimCircuitGateRep],
+                {"a": [1], "b": [0], "c": [1]},
+            ),
+        }
+        text, labels, gates, gatereps, expected = cases[case]
+        model = DictNoiseModel(
+            gates,
+            {"M": StimCircuitInstrumentRep("M 0", ())},
+            gatereps=gatereps,
+            instreps=[StimCircuitInstrumentRep],
+        )
+        circuit = STIMPhysicalCircuit(text, labels)
+        state = state_type(len(labels), labels)
+        if case == "noise-channel" and state_type is not STIMState:
+            with pytest.raises(NotImplementedError):
+                propagate_state(circuit, model, state)
+            return
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, outcomes = propagate_state(circuit, model, state)
+        assert outcomes == expected
+        if state_type is STIMState:
+            applied = state.latest_applied_circuit
+            assert applied.num_ticks == circuit.circuit.num_ticks
+            assert applied.num_detectors == circuit.circuit.num_detectors

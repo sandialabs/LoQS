@@ -249,9 +249,6 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: StimCircuitGateRep) -> None:
         qubits = rep.qubit_labels
-        # String qubit labels are this backend's own requirement, not a
-        # general OperationRep invariant, so still checked here.
-        assert all(isinstance(q, str) for q in qubits)
         circuit_str = rep.circuit_str
 
         if len(qubits) == 0:
@@ -266,9 +263,9 @@ class STIMQuantumState(BaseQuantumState):
         local_to_global: dict[str, str | int] = {}
         local_to_internal = {}
         for i, q in enumerate(qubits):
-            assert isinstance(q, str)
-            negated = q.startswith("!")
-            global_label = q.strip("!")
+            # Only a string can be negated; other labels are looked up as is
+            negated = isinstance(q, str) and q.startswith("!")
+            global_label = q[1:] if isinstance(q, str) and negated else q
             try:
                 index = self.qubit_labels.index(global_label)
             except ValueError:
@@ -333,9 +330,6 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: ProbabilisticStimGateRep) -> None:
         qubits = rep.qubit_labels
-        # String qubit labels are this backend's own requirement (see
-        # the StimCircuitGateRep overload above).
-        assert all(isinstance(q, str) for q in qubits)
         operations = rep.operations
         probs = [r[1] for r in operations]
 

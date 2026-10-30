@@ -250,3 +250,33 @@ def test_repeat_block_indices_and_reindexing():
     assert "CX 1 0" in circ_str
     assert "M 0" in circ_str
     assert reindexed[1].repeat_count == 3
+
+
+def test_parsed_lines():
+    circuit = STIMPhysicalCircuit(
+        "X 0 1\nCX 0 1 1 2\nMZZ 0 1 2 3\nX_ERROR(0.1) 2 0\nTICK\n"
+        "DETECTOR rec[-1]",
+        ["c", "a", "b", "d"],
+    )
+    parsed = list(circuit._parsed_lines())
+    assert [p[0] for p in parsed] == ["gate"] * 3 + ["noise"] + [
+        "annotation"
+    ] * 2
+    assert [p[4] for p in parsed] == [
+        (("c",), ("a",)),
+        (("c", "a"), ("a", "b")),
+        (("c", "a"), ("b", "d")),
+        (("b", "c"),),
+        (),
+        (),
+    ]
+    assert parsed[3][3] == "(0.1)"
+
+
+@pytest.mark.parametrize(
+    "text", ["E(1) X0\nTICK", "H[t] 0\nTICK", "II 0 1\nTICK"]
+)
+def test_parsed_lines_refuses(text):
+    circuit = STIMPhysicalCircuit(text, ["a", "b"])
+    with pytest.raises(NotImplementedError):
+        list(circuit._parsed_lines())

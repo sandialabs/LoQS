@@ -215,7 +215,8 @@ def propagate_state(
     the non-inplace version if `inplace=False`).
     It does also try to find compatible reptypes by
     searching for a match in output reps from `model`
-    and input reps from `state`.
+    and input reps from `state`. A model's output reps include the types
+    it can convert its own reps to.
 
     Parameters
     ----------
