@@ -553,7 +553,7 @@ class Instruction(Displayable):
         # unresolved. Only a string needs preparing -- a version-0
         # source may already be a live callable by this point
         # (decode_function's own heuristic).
-        unresolved = []
+        unresolved: list = []
         if version < SERIALIZATION_VERSION:
             if isinstance(serialized_apply_fn, str):
                 serialized_apply_fn, review = (

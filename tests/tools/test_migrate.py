@@ -37,6 +37,15 @@ class TestRewriteRenames:
         assert f"from {old_module} import PatchLayout" in result.source
         assert "PatchDict" not in result.source
 
+    def test_rewrites_attribute_access_reference(self):
+        result = rewrite_renames(
+            "import loqs.core\nx = loqs.core.PatchDict()\n"
+        )
+        assert result.changed
+        assert result.source == (
+            "import loqs.core\nx = loqs.core.PatchLayout()\n"
+        )
+
     def test_deleted_name_flagged_not_guessed(self):
         src = FIXTURES.joinpath("deleted_name_before.py").read_text(
             encoding="utf-8"
