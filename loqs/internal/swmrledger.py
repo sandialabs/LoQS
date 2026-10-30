@@ -26,21 +26,26 @@ SWMR's guarantees don't depend on it, and the locks are what made a
 writer's open fail while a reader was polling the ledger.
 
 HDF5 drops its own lock once a SWMR-write open completes, so a writer
-also holds an exclusive `flock` on its ledger until it closes the file
-(best effort: an open never fails because the lock couldn't be taken).
-A killed writer leaves HDF5's "open for write" flag set, which fails
-every open but an SWMR read. When a writer open fails, this process
-holds no handle on the file and no live writer holds the `flock`, the
-ledger is rebuilt without the flag (copied under a `.tmp` name and
+also holds an exclusive writer lock on its ledger until it closes the
+file: a `flock`, or on Windows a byte-range lock on a byte past the
+file's end (best effort: an open never fails because the lock couldn't
+be taken). A killed writer leaves HDF5's "open for write" flag set,
+which fails every open but an SWMR read. When a writer open fails, this
+process holds no handle on the file and no live writer holds the lock,
+the ledger is rebuilt without the flag (copied under a `.tmp` name and
 renamed into place) and reopened, so an explicit `worker_id` can be
-reused after a crash. Two gaps remain: where `flock` isn't coherent
-across nodes (Lustre `localflock`, NFS), two live writers on different
-nodes sharing one explicit worker id aren't detected; and on Windows
-there is no recovery.
+reused after a crash. Windows can't replace a file any handle holds
+open, so there recovery releases its lock before the rename and locks
+again after the reopen. A reader in another process holding the ledger
+open at that moment makes recovery refuse; a retry succeeds. One gap
+remains: where `flock` isn't coherent across nodes (Lustre
+`localflock`, NFS), two live writers on different nodes sharing one
+explicit worker id aren't detected.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import threading
@@ -56,6 +61,12 @@ import numpy as np
 
 if sys.platform != "win32":
     import fcntl
+else:
+    import msvcrt
+
+# Windows locks are mandatory, so the writer lock sits on a byte far past any
+# ledger's end (about 9 bytes per shot), where HDF5's own I/O never reaches.
+_WINDOWS_LOCK_OFFSET = 2**40
 
 DEFAULT_GROUP_NAME = "swmr_ledger"
 DEFAULT_CHUNK_SIZE = 1024
@@ -198,7 +209,7 @@ def open_swmr_writer(
     make the open fail. An existing ledger must already hold every
     requested field; `capacity` and `chunk_size` only apply to a new one.
 
-    The returned file holds an exclusive `flock` on `path` until its
+    The returned file holds an exclusive writer lock on `path` until its
     `close()`. If the open fails because a killed writer left its "open
     for write" flag set, the ledger is rebuilt without the flag and
     reopened, unless this process holds a handle on it or a live writer
@@ -258,25 +269,39 @@ def open_swmr_writer(
 
 
 def _try_lock_exclusive(path: Path) -> int | None:
-    """Take a non-blocking exclusive `flock` on `path`, returning the file
-    descriptor that holds it, or `None` if the lock can't be taken (held
-    elsewhere, unsupported, open failed, or on Windows, which has no
-    `fcntl`).
+    """Take the non-blocking exclusive writer lock on `path`, returning the
+    file descriptor that holds it, or `None` if the lock can't be taken
+    (held elsewhere, unsupported or open failed).
 
-    `flock` locks belong to the open file description and the OS drops
-    them when the process dies. Record locks (`lockf`) would instead drop
-    whenever any descriptor of the file closes, as a SWMR reader's does.
+    The lock is a `flock`, or on Windows a byte-range lock on a byte past
+    the file's end (`_WINDOWS_LOCK_OFFSET`). Both belong to the open file
+    description or handle, and the OS drops them when the process dies.
+    Record locks (`lockf`) would instead drop whenever any descriptor of
+    the file closes, as a SWMR reader's does. Release it with
+    `_release_lock`.
     """
-    if sys.platform != "win32":
-        fd: int | None = None
-        try:
-            fd = os.open(path, os.O_RDONLY)
+    fd: int | None = None
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        if sys.platform == "win32":
+            os.lseek(fd, _WINDOWS_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fd
-        except OSError:
-            if fd is not None:
-                os.close(fd)
+        return fd
+    except OSError:
+        if fd is not None:
+            os.close(fd)
     return None
+
+
+def _release_lock(fd: int) -> None:
+    """Release the writer lock held by `fd` and close it."""
+    if sys.platform == "win32":
+        with contextlib.suppress(OSError):
+            os.lseek(fd, _WINDOWS_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    os.close(fd)
 
 
 class _LockedWriterFile(h5py.File):
@@ -290,7 +315,7 @@ class _LockedWriterFile(h5py.File):
     def __init__(self, fid: Any, lock_fd: int | None) -> None:
         super().__init__(fid)
         self._lock_release = (
-            weakref.finalize(self, os.close, lock_fd)
+            weakref.finalize(self, _release_lock, lock_fd)
             if lock_fd is not None
             else None
         )
@@ -349,9 +374,16 @@ def _recover_stale_ledger(
 
     A killed writer leaves HDF5's "open for write" flag set, which fails
     every open but an SWMR read. If this process holds no handle on `path`
-    and no live writer holds its `flock`, the ledger is rebuilt under a
-    `.tmp` name and renamed onto `path`. Otherwise, or if any step fails,
-    `original` is raised (chained from the failure, if any).
+    and no live writer holds its writer lock, the ledger is rebuilt under
+    a `.tmp` name and renamed onto `path`. Otherwise, or if any step
+    fails, `original` is raised (chained from the failure, if any).
+
+    Windows can't replace a file any handle holds open. There, recovery
+    releases its lock before the rename and locks `path` again after the
+    reopen, so a reader in another process holding the ledger open at the
+    rename makes recovery refuse (a retry succeeds). Elsewhere the old
+    lock is released only after the rename, and the new one is taken on
+    the `.tmp` first, so `path` always has a lock holder.
     """
     if _process_holds_file(path):
         raise original
@@ -361,33 +393,42 @@ def _recover_stale_ledger(
 
     tmp_path = path.with_name(path.name + ".tmp")
     new_lock: int | None = None
+    old_released = False
     failure: Exception | None = None
     try:
         try:
             _rebuild_ledger(path, tmp_path)
-            new_lock = _try_lock_exclusive(tmp_path)
+            if sys.platform == "win32":
+                old_released = True
+                _release_lock(old_lock)
+            else:
+                new_lock = _try_lock_exclusive(tmp_path)
             os.replace(tmp_path, path)
         except Exception as err:
             failure = err
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             if new_lock is not None:
-                os.close(new_lock)
+                _release_lock(new_lock)
             raise
     finally:
-        os.close(old_lock)
+        if not old_released:
+            _release_lock(old_lock)
     if failure is not None:
         tmp_path.unlink(missing_ok=True)
         if new_lock is not None:
-            os.close(new_lock)
+            _release_lock(new_lock)
         raise original from failure
 
     try:
-        return _open_swmr_write_fid(path), new_lock
+        fid = _open_swmr_write_fid(path)
     except OSError as err:
         if new_lock is not None:
-            os.close(new_lock)
+            _release_lock(new_lock)
         raise err from original
+    if new_lock is None:
+        new_lock = _try_lock_exclusive(path)
+    return fid, new_lock
 
 
 def _reopen_swmr_writer(

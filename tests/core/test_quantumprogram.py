@@ -1,6 +1,7 @@
 """Tester for loqs.core.quantumprogram"""
 
 import pytest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # TODO: Rework to run with native backend only if failure to import
@@ -281,6 +282,29 @@ class TestExecutorParallelism:
 
         assert len(results.shot_histories) == 25
         assert executor.submit_count == 2
+
+    @pytest.mark.usefixtures("inline_patches")
+    @pytest.mark.parametrize(
+        "checkpoint",
+        [True, False],
+        ids=["checkpointed", "not_checkpointed"],
+    )
+    def test_thread_executor_refused_only_when_checkpointing(
+        self, tmp_path, checkpoint
+    ):
+        run_kwargs = {"num_shots": 4, "verbose": False}
+        if checkpoint:
+            run_kwargs["checkpoint"] = True
+            run_kwargs["checkpoint_dir"] = tmp_path / "ckpt"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            program = _build_seeded_counter_program()
+            if checkpoint:
+                with pytest.raises(ValueError):
+                    program.run(shot_executor=pool, **run_kwargs)
+                assert not (tmp_path / "ckpt").exists()
+            else:
+                results = program.run(shot_executor=pool, **run_kwargs)
+                assert len(results.shot_histories) == 4
 
 
 class TestShotWallClockTimes:

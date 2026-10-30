@@ -2,7 +2,14 @@
 
 ## [Unreleased Changes]
 
+### New
+- **`ExecutorSpec.submitit` and `ExecutorSpec.mpi4py` (`loqs.tools.paralleltools`, #150, @sserita):** Data-only constructors that build a `submitit.AutoExecutor` or an `mpi4py.futures.MPIPoolExecutor`, avoiding the need for a hand-written module-level factory.
+
+### Changed
+- **Checkpointing refuses thread executors (#150, @sserita):** With item or shot checkpointing on, a `ThreadPoolExecutor` (or a subclass) given as `program_executor` or `shot_executor` raises `ValueError` before any work starts.
+
 ### Fixed
+- **Windows recovery of a killed writer's ledger (#150, @sserita):** On Windows, a checkpoint that reuses a killed writer's explicit `worker_id` now rebuilds its ledger and resumes, as on Linux and macOS, instead of failing with HDF5's stale "open for write" error.
 - **`loqs.tools` fixes (#155, @sserita):** Fixes four bugs found while slimming the test suite.
   - `get_state_probs_phases`/`print_state_probs_phases` work at any qubit count, not just 7, and raise `ValueError` for a state whose signs they can't determine (e.g. a GHZ state) instead of printing wrong ones
   - Reading a v1.0/v1.1 program with `migrate_legacy_fns=True` takes about 2 s instead of about 17 s, and `loqs-migrate` no longer stalls on a file that only mentions old names in comments or docstrings
