@@ -1269,10 +1269,10 @@ class HDF5Encoder(BaseEncoder):
                 imag = array_group["imag"]
                 assert isinstance(imag, h5py.Dataset)
 
-            decoded = real[()] + 1j * imag[()]
-            decoded = decoded.reshape(array_group.attrs["shape"])
-            decoded = decoded.astype(array_group.attrs["dtype"])
-            return decoded
+            # Assign through `.imag` so NaN, inf and -0.0 survive bit-exactly
+            decoded = np.asarray(real[()], dtype=array_group.attrs["dtype"])
+            decoded.imag = imag[()]
+            return decoded.reshape(array_group.attrs["shape"])
         else:
             # Dense real
             with HDF5Encoder.assert_decode(fatal=True):

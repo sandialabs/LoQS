@@ -5,6 +5,7 @@ import numpy as np
 import h5py
 
 from loqs.core import Frame
+from loqs.core.instructions import Instruction
 from loqs.internal.serializable import (
     Serializable,
     SERIALIZATION_VERSION,
@@ -156,6 +157,10 @@ class TestSerializableParameterized:
                 assert obj == loaded_obj
 
 
+def _frame_apply(state):
+    return Frame({"state": state})
+
+
 class TestSerializableNestedData:
     """Enhanced tests for nested data serialization."""
 
@@ -215,6 +220,25 @@ class TestSerializableNestedData:
         assert loaded.name == "circular1"
         assert loaded.data["ref"].name == "circular2"
         assert loaded.data["ref"].data["ref"] is loaded
+
+    def test_placeholder_reached_by_later_decode_is_replaced(self):
+        y = MockSerializable(name="y", value=1)
+        s = Instruction(_frame_apply, {"y": y}, name="S")
+        y = s.data["y"]
+        y.data["back"] = s
+        x = MockSerializable(name="x", value=2, data={"y": y})
+
+        enc_cache: dict = {}
+        enc_s = Serializable.encode(
+            s, format="json", encode_cache=enc_cache, reset_encode_id=True
+        )
+        enc_x = Serializable.encode(x, format="json", encode_cache=enc_cache)
+
+        dec_cache: dict = {}
+        Serializable.decode(enc_s, format="json", decode_cache=dec_cache)
+        x2 = Serializable.decode(enc_x, format="json", decode_cache=dec_cache)
+
+        assert isinstance(x2.data["y"].data["back"], Instruction)
 
     def test_iterable_encoding_both_codepaths(self, make_temp_path):
         """Test both HDF5 iterable encoding codepaths with caching improvements."""
@@ -986,3 +1010,107 @@ class TestFileHandles:
         assert len(seen) == 1
         assert _handle_is_closed(seen[0])
         assert excinfo.value is not None
+
+
+class _FreshAttrs(MockSerializable):
+    """Returns a new `MockSerializable` from `_get_encoding_attr` each call."""
+
+    _SERIALIZE_ATTRS = ["name", "value", "data", "first", "second"]
+
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        if attr == "first":
+            return MockSerializable(name="fresh", value=1)
+        if attr == "second":
+            return MockSerializable(name="fresh", value=2)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    @classmethod
+    def _from_decoded_attrs(cls, attr_dict):
+        obj = cls(
+            name=attr_dict["name"],
+            value=attr_dict["value"],
+            data=attr_dict["data"],
+        )
+        obj.decoded_pair = (attr_dict["first"], attr_dict["second"])
+        return obj
+
+
+class TestEncodeHashing:
+    """The per-encode hash memo and the raw-bytes array hash."""
+
+    def test_fresh_encoding_attr_objects_keep_their_content(self):
+        encoded = Serializable.encode(
+            _FreshAttrs(),
+            format="json",
+            encode_cache={},
+            reset_encode_id=True,
+        )
+        decoded = Serializable.decode(encoded, format="json")
+        first, second = decoded.decoded_pair
+        assert (first.value, second.value) == (1, 2)
+
+    @pytest.mark.parametrize("how", ["completed", "raised"])
+    def test_object_changed_between_encodes_is_rewritten(self, how):
+        obj = MockSerializable(name="x", value=1)
+        cache: dict = {}
+        if how == "completed":
+            Serializable.encode(
+                obj, format="json", encode_cache=cache, reset_encode_id=True
+            )
+        else:
+            with pytest.raises(ValueError):
+                Serializable.encode(
+                    [obj, object()],
+                    format="json",
+                    encode_cache=cache,
+                    reset_encode_id=True,
+                )
+        obj.value = 2
+        encoded = Serializable.encode(obj, format="json", encode_cache=cache)
+        assert Serializable.decode(encoded, format="json").value == 2
+
+    def test_equal_valued_arrays_keep_their_dtypes_and_shapes(
+        self, make_temp_path
+    ):
+        arrays = {
+            "a": np.array([True, False]),
+            "b": np.array([1, 0], dtype=np.uint8),
+            "c": np.array([[1], [0]], dtype=np.uint8),
+        }
+        frame = Frame(
+            {k: MockSerializable(data={"arr": v}) for k, v in arrays.items()}
+        )
+        with make_temp_path(suffix=".h5") as path:
+            frame.write(path)
+            decoded = Frame.read(path)
+        for k, arr in arrays.items():
+            out = decoded[k].data["arr"]
+            assert (out.dtype, out.shape) == (arr.dtype, arr.shape)
+
+    def test_serial_hash_calls_scale_linearly(self, monkeypatch):
+        original = Serializable._serial_hash
+        calls = []
+
+        def counting(obj, _visited=None):
+            calls.append(1)
+            return original(obj, _visited)
+
+        monkeypatch.setattr(
+            Serializable, "_serial_hash", staticmethod(counting)
+        )
+
+        def count(n, m):
+            arr = np.arange(m, dtype=float)
+            obj = MockSerializable(name="end", value=0, data={"arr": arr})
+            for i in range(n):
+                obj = MockSerializable(
+                    name="link", value=i, data={"next": obj, "arr": arr}
+                )
+            calls.clear()
+            Serializable.encode(
+                obj, format="json", encode_cache={}, reset_encode_id=True
+            )
+            return len(calls)
+
+        assert count(20, 8) < 2.5 * count(10, 8)
+        assert count(10, 16) == count(10, 8)

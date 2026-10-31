@@ -527,10 +527,6 @@ class JSONEncoder(BaseEncoder):
                         raise KeyError(cache_id)
                 else:
                     cached_obj = decode_cache[cache_id]
-                if isinstance(cached_obj, DeferredRef):
-                    # This is a forward reference that will be resolved later
-                    # Return the deferred reference object
-                    return cached_obj
                 return cached_obj
             elif cache_type == "copy":
                 # Get the reference object and create a copy

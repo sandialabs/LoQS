@@ -238,6 +238,25 @@ Set for the duration of a `Serializable.read`/`.load` call, read once in
 `Instruction._from_decoded_attrs`.
 """
 
+_SERIAL_HASH_MEMO: contextvars.ContextVar[dict | None] = (
+    contextvars.ContextVar("serial_hash_memo", default=None)
+)
+"""One top-level encode's `Serializable` hashes, by id, each stored with
+its object so the id can't be reused. Safe because nothing changes in
+place during one encode. It never outlives an encode: objects change in
+place between checkpoints, and `merge_dict_attr` holds one entry at a time.
+"""
+
+_DEFERRED_REFS_HANDED_OUT: contextvars.ContextVar[int] = (
+    contextvars.ContextVar("deferred_refs_handed_out", default=0)
+)
+"""Count of `DeferredRef` placeholders `decode` has handed to a caller in
+this context. Every decode runs the placeholder walk once it's nonzero: a
+placeholder handed out by an earlier decode can sit in an object a later
+decode reaches by a plain reference, through a decode cache that spans
+decodes. It never resets.
+"""
+
 
 @dataclass
 class DeferredRef:
@@ -338,7 +357,10 @@ class ResolvingDecodeCache(dict):
     def _find_source_node_hdf5(self, node, target_cache_id):
         """Recursively search an HDF5 structure for a cache_type="source" node.
 
-        Searches real h5py.Group children and their $collapsed siblings.
+        Searches a group's collapsed blob before its real children. Cache
+        IDs are unique in a file, so the order can't change the match, and a
+        program keeps its array-free shared objects in its blob, behind
+        array-heavy groups such as a noise model's.
 
         Parameters
         ----------
@@ -361,14 +383,7 @@ class ResolvingDecodeCache(dict):
             if self._node_is_cache_source(node.attrs, target_cache_id):
                 return node
 
-            # Recurse into real children
-            for child_name in node.keys():
-                child = node[child_name]
-                result = self._find_source_node_hdf5(child, target_cache_id)
-                if result is not None:
-                    return result
-
-            # Also check the collapsed blob if present
+            # Check the collapsed blob if present
             from loqs.internal.encoder.hdf5encoder import _COLLAPSED_BLOB_NAME
 
             if _COLLAPSED_BLOB_NAME in node:
@@ -376,6 +391,13 @@ class ResolvingDecodeCache(dict):
                 result = self._find_source_in_collapsed_blob(
                     blob_dataset, target_cache_id
                 )
+                if result is not None:
+                    return result
+
+            # Recurse into real children
+            for child_name in node.keys():
+                child = node[child_name]
+                result = self._find_source_node_hdf5(child, target_cache_id)
                 if result is not None:
                     return result
 
@@ -639,7 +661,9 @@ class Serializable:
 
         This method recursively computes a hash of an object's serializable attributes,
         allowing objects with identical content to share the same serial ID even if
-        they are different instances.
+        they are different instances. During one top-level `encode`, each
+        `Serializable`'s hash is computed once (see `_SERIAL_HASH_MEMO`), and
+        a non-object numpy array is hashed from its raw bytes.
 
         Parameters
         ----------
@@ -661,20 +685,32 @@ class Serializable:
         if obj_id in _visited:
             # For circular references, use the object ID as a fallback
             # This ensures we don't get infinite recursion
+            memo = _SERIAL_HASH_MEMO.get()
+            if memo is not None:
+                # Hashes that met the cycle must not be memoized
+                memo.update(dict.fromkeys(_visited))
             return hash(f"circular_ref_{obj_id}")
+
+        memo = _SERIAL_HASH_MEMO.get()
+        if memo is not None and memo.get(obj_id) is not None:
+            return memo[obj_id][1]
 
         _visited.add(obj_id)
 
         try:
             if isinstance(obj, Serializable):
                 # For Serializable objects, hash the tuple of serial IDs of their _SERIALIZE_ATTRS
-                attr_ids = []
-                for attr in obj._SERIALIZE_ATTRS:
-                    attr_value = obj._get_encoding_attr(attr)
-                    attr_ids.append(
-                        Serializable._serial_hash(attr_value, _visited)
+                result = hash(
+                    tuple(
+                        Serializable._serial_hash(
+                            obj._get_encoding_attr(attr), _visited
+                        )
+                        for attr in obj._SERIALIZE_ATTRS
                     )
-                return hash(tuple(attr_ids))
+                )
+                if memo is not None and obj_id not in memo:
+                    memo[obj_id] = (obj, result)
+                return result
             elif isinstance(obj, list):
                 # For lists, hash the tuple of serial IDs of each element
                 return hash(
@@ -704,12 +740,20 @@ class Serializable:
                 )
                 return hash((keys_id, values_id))
             elif isinstance(obj, np.ndarray):
-                # For numpy arrays, hash the shape and flattened data
-                shape_id = Serializable._serial_hash(obj.shape, _visited)
-                data_id = Serializable._serial_hash(
-                    obj.flatten().tolist(), _visited
+                # Object arrays hash their elements (their bytes are pointers);
+                # any other array hashes its shape, dtype and raw bytes.
+                if obj.dtype.kind == "O":
+                    return hash(
+                        (
+                            Serializable._serial_hash(obj.shape, _visited),
+                            Serializable._serial_hash(
+                                obj.flatten().tolist(), _visited
+                            ),
+                        )
+                    )
+                return hash(
+                    ("ndarray", obj.shape, obj.dtype.str, obj.tobytes())
                 )
-                return hash((shape_id, data_id))
             elif isinstance(obj, (set, frozenset)):
                 # Order-free: equal sets can iterate in different orders
                 return hash(
@@ -1338,6 +1382,20 @@ class Serializable:
         >>> encoded_json["encode_type"]  # Should be 'Serializable'
         'Serializable'
         """
+        if _SERIAL_HASH_MEMO.get() is None:
+            memo_token = _SERIAL_HASH_MEMO.set({})
+            try:
+                return Serializable.encode(
+                    obj,
+                    format,
+                    encode_cache,
+                    ignore_no_serialize_flags,
+                    reset_encode_id,
+                    h5_group,
+                )
+            finally:
+                _SERIAL_HASH_MEMO.reset(memo_token)
+
         from loqs.internal.encoder import JSONEncoder, HDF5Encoder
 
         if format in ["json", "json.gz"]:
@@ -1545,9 +1603,15 @@ class Serializable:
 
         # Handle cached object references
         try:
-            return decode_cached_obj(encoded)
+            cached = decode_cached_obj(encoded)
         except IncorrectDecodableTypeError:
             pass
+        else:
+            if isinstance(cached, DeferredRef):
+                _DEFERRED_REFS_HANDED_OUT.set(
+                    _DEFERRED_REFS_HANDED_OUT.get() + 1
+                )
+            return cached
 
         # Handle class type
         try:
@@ -1558,8 +1622,9 @@ class Serializable:
         # Handle Serializable
         try:
             result = decode_uncached_obj(encoded)
-            # Post-process to replace any placeholders with actual objects
-            if decode_cache is not None:
+            # The walk can only change an object holding a placeholder, and
+            # none in this context does until `decode` hands one out.
+            if _DEFERRED_REFS_HANDED_OUT.get():
                 result = Serializable._replace_placeholders(
                     result, decode_cache
                 )
@@ -1873,13 +1938,13 @@ class Serializable:
     ) -> Encoded:
         from loqs.internal.encoder import JSONEncoder, HDF5Encoder
 
-        # Get serial ID for this object
-        _serial_hash = Serializable._serial_hash(obj)
-        object_id = id(obj)
-
         # Short-circuit on no cache behavior
         if encode_cache is None or not obj._CACHE_ON_SERIALIZE:
             return encode_uncached_obj(obj)
+
+        # Get serial ID for this object
+        _serial_hash = Serializable._serial_hash(obj)
+        object_id = id(obj)
 
         # First check if this specific object instance is already being processed
         # This handles circular references within the same object graph
