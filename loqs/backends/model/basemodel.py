@@ -15,8 +15,47 @@ from collections.abc import Sequence
 from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    OperationRep,
+    RepConstructionError,
+)
 from loqs.internal import Displayable
+
+
+def first_successful_rep(
+    cache, cache_key, candidates, make_source, build_fn, kind="rep"
+):
+    """Return the rep for the first candidate type that is cached or builds.
+
+    When `cache` isn't None it is checked first, returning the entry stored
+    under `(cache_key, c)` for the first candidate `c` that has one. On a
+    miss `make_source()` runs once, then `build_fn(source, c)` is tried for
+    each candidate in order, and the first success is stored (unless
+    `cache` is None). A RepConstructionError from `build_fn` moves on to the
+    next candidate; if every candidate fails a combined one is raised.
+    """
+    if cache is not None:
+        for candidate in candidates:
+            hit = cache.get((cache_key, candidate))
+            if hit is not None:
+                return hit
+    source = make_source()
+    errors = []
+    for candidate in candidates:
+        try:
+            rep = build_fn(source, candidate)
+        except RepConstructionError as e:
+            errors.append(e)
+        else:
+            if cache is not None:
+                cache[cache_key, candidate] = rep
+            return rep
+    raise RepConstructionError(
+        f"Failed to create {kind} for any of {candidates}, with errors:"
+        + "\n".join([str(e) for e in errors])
+    )
 
 
 class BaseNoiseModel(Displayable):
@@ -85,9 +124,6 @@ class BaseNoiseModel(Displayable):
             List of operation representations for the circuit
 
         TODO: describe the conditions under which this function is allowed to error.
-        DictNoiseModel.get_reps ignores the gatereps and instreps arguments
-        for circuit types where the representation to use is unambiguous
-        from the circuit's own labels/values.
         """
         pass
 

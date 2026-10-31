@@ -18,6 +18,10 @@ import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
 from loqs.backends import is_backend_available
+from loqs.backends.circuit.stimcircuit import (
+    _STIM_LINE,
+    _separate_stimcircuit_instruction,
+)
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
@@ -68,6 +72,23 @@ class STIMQuantumState(BaseQuantumState):
     """Base class for an object that holds a STIM Tableau."""
 
     name: ClassVar[str] = "STIM Tableau"
+
+    # Instructions whose record bits are filed under a qubit label, and
+    # the ones that write bits this state can't file (it refuses them).
+    _recorded_measurements: ClassVar[frozenset[str]] = frozenset(
+        {"M", "MX", "MY", "MZ", "MR", "MRX", "MRY", "MRZ"}
+    )
+    _unrecorded_measurements: ClassVar[frozenset[str]] = frozenset(
+        {
+            "MXX",
+            "MYY",
+            "MZZ",
+            "MPP",
+            "MPAD",
+            "HERALDED_ERASE",
+            "HERALDED_PAULI_CHANNEL_1",
+        }
+    )
 
     _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
     """`seed` is deliberately not here to avoid triggering re-caching."""
@@ -249,9 +270,6 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: StimCircuitGateRep) -> None:
         qubits = rep.qubit_labels
-        # String qubit labels are this backend's own requirement, not a
-        # general OperationRep invariant, so still checked here.
-        assert all(isinstance(q, str) for q in qubits)
         circuit_str = rep.circuit_str
 
         if len(qubits) == 0:
@@ -266,9 +284,9 @@ class STIMQuantumState(BaseQuantumState):
         local_to_global: dict[str, str | int] = {}
         local_to_internal = {}
         for i, q in enumerate(qubits):
-            assert isinstance(q, str)
-            negated = q.startswith("!")
-            global_label = q.strip("!")
+            # Only a string can be negated; other labels are looked up as is
+            negated = isinstance(q, str) and q.startswith("!")
+            global_label = q[1:] if isinstance(q, str) and negated else q
             try:
                 index = self.qubit_labels.index(global_label)
             except ValueError:
@@ -280,51 +298,55 @@ class STIMQuantumState(BaseQuantumState):
         internal_lines = []
         global_lines = []
         for line in circuit_str.split("\n"):
-            if len(line) == 0:
-                # Skip empty line
+            # Parse the line rather than splitting it on whitespace, since
+            # its arguments may hold spaces, e.g. PAULI_CHANNEL_1(0.1, 0.2, 0.3)
+            instruction = _separate_stimcircuit_instruction(line)[0]
+            if len(instruction) == 0:
+                # Skip empty line or comment
                 continue
 
-            entries = line.split()
+            match = _STIM_LINE.match(instruction)
+            assert match is not None, f"Not a STIM instruction: {line!r}"
+            name, tag, args, rest = match.groups("")
+            command = name + tag
+            targets = rest.split()
 
-            internal_entries = [entries[0]]  # instruction is unchanged
-            internal_entries += [local_to_internal[e] for e in entries[1:]]
+            # Refuse before mapping targets or running anything
+            if command in self._unrecorded_measurements:
+                raise NotImplementedError(
+                    f"STIMQuantumState can't record the outcomes of {command}"
+                )
 
             # Pull measurement labels, if they exist
-            command = entries[0].split("(")[0]
-            # Subset of measure/reset gates that we want to record
-            include_outcomes = [
-                "M",
-                "MX",
-                "MY",
-                "MZ",
-                "MR",
-                "MRX",
-                "MRY",
-                "MRZ",
-            ]
-            if command in include_outcomes:
-                noneg_internal_entries = [
-                    self.qubit_labels[int(me.strip("!"))]
-                    for me in internal_entries[1:]
-                ]
-                self.latest_measurement_labels.extend(noneg_internal_entries)
+            if command in self._recorded_measurements:
+                self.latest_measurement_labels.extend(
+                    self.qubit_labels[int(local_to_internal[t].strip("!"))]
+                    for t in targets
+                )
 
-            internal_lines.append(" ".join(internal_entries))
+            # Instruction and arguments are unchanged
+            internal_lines.append(
+                " ".join(
+                    [command + args, *(local_to_internal[t] for t in targets)]
+                )
+            )
+            global_lines.append(
+                " ".join(
+                    [
+                        command + args,
+                        *(str(local_to_global[t]) for t in targets),
+                    ]
+                )
+            )
 
-            global_entries = [entries[0]]  # instruction is unchanged
-            global_entries += [str(local_to_global[e]) for e in entries[1:]]
-            global_lines.append(" ".join(global_entries))
-
-        internal_circuit_str = "\n".join(internal_lines)
-        internal_circuit = _Circuit(internal_circuit_str)
+        internal_circuit = _Circuit("\n".join(internal_lines))
         self.state.do_circuit(internal_circuit)
 
         # Save executed circuit, needed for decoding via pymatching
         # This one we do in global labels since we don't need the smaller internal space,
         # and this is less confusing to read off
         try:
-            global_circuit_str = "\n".join(global_lines)
-            self.latest_applied_circuit += _Circuit(global_circuit_str)
+            self.latest_applied_circuit += _Circuit("\n".join(global_lines))
         except ValueError:
             # STIM failed to convert, our global labels are probably non-int strings
             # Fall back to internal representation
@@ -333,9 +355,6 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: ProbabilisticStimGateRep) -> None:
         qubits = rep.qubit_labels
-        # String qubit labels are this backend's own requirement (see
-        # the StimCircuitGateRep overload above).
-        assert all(isinstance(q, str) for q in qubits)
         operations = rep.operations
         probs = [r[1] for r in operations]
 
@@ -407,6 +426,7 @@ class STIMQuantumState(BaseQuantumState):
         circuit_str = rep.circuit_str
 
         self.latest_measurement_labels = []
+        start = len(self.state.current_measurement_record())
 
         # We'll reuse the gate apply code...
         self.apply_reps_inplace(
@@ -414,15 +434,18 @@ class STIMQuantumState(BaseQuantumState):
             reset_latest_circ=False,
         )
 
-        # but then post-process to grab the outcomes from the measurement record
-        current_mr = self.state.current_measurement_record()
-        mr_entries = [
-            int(mre)
-            for mre in current_mr[-len(self.latest_measurement_labels) :]
-        ]
+        # but then read only the bits this circuit wrote, which must match
+        # the recorded labels one to one (a tagged M, say, breaks the match)
+        mr_entries = self.state.current_measurement_record()[start:]
+        if len(mr_entries) != len(self.latest_measurement_labels):
+            raise NotImplementedError(
+                f"{circuit_str!r} wrote {len(mr_entries)} record bits for "
+                f"{len(self.latest_measurement_labels)} recorded labels; "
+                "STIMQuantumState can't match them"
+            )
 
         for qbit, cbit in zip(self.latest_measurement_labels, mr_entries):
-            outcomes[qbit].append(cbit)
+            outcomes[qbit].append(int(cbit))
 
         return outcomes
 

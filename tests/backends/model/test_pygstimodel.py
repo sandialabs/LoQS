@@ -13,6 +13,7 @@ from pygsti.modelmembers.instruments import Instrument
 from pygsti.modelmembers.operations import FullArbitraryOp
 from pygsti.models import ExplicitOpModel
 
+from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import (
@@ -318,6 +319,12 @@ class TestTimeDependence:
     ):
         label = Label(name, "Q0", time=duration)
         assert getattr(pgm_time_dependent, method)(label) == duration
+
+    def test_dict_model_from_time_dependent_model_raises(
+        self, pgm_time_dependent
+    ):
+        with pytest.raises(NotImplementedError):
+            DictNoiseModel.from_model(pgm_time_dependent)
 
     def test_gate_duration_exact_label_match(self, pgm_time_dependent):
         assert pgm_time_dependent.get_gate_duration(Label("Gxpi", "Q0")) == 5
@@ -641,3 +648,18 @@ class TestGateContentWithAliases:
                     expected[q] << (2 - i) for i, q in enumerate(self.QUBITS)
                 )
                 assert np.allclose(outs[0], np.eye(8)[expected_index])
+
+
+def test_dict_model_from_pygsti_model():
+    pgm = PyGSTiNoiseModel(_build_explicit_model(), qubit_aliases={"Q0": "A0"})
+    dict_model = DictNoiseModel.from_model(
+        pgm, [QSimSuperopGateRep], [OutcomeOperationDictInstrumentRep]
+    )
+    circuit = ListPhysicalCircuit([[("Gad", ("A0",))], [("Imrz", ("A0",))]])
+    args = ([QSimSuperopGateRep], [OutcomeOperationDictInstrumentRep])
+    gate_a, inst_a = pgm.get_reps(circuit, *args)
+    gate_b, inst_b = dict_model.get_reps(circuit, *args)
+    assert np.allclose(gate_a.superop, gate_b.superop)
+    assert inst_a.outcome_ops.keys() == inst_b.outcome_ops.keys()
+    for key, op in inst_a.outcome_ops.items():
+        assert np.allclose(op.ptm, inst_b.outcome_ops[key].ptm)

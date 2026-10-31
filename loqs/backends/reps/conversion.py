@@ -800,6 +800,20 @@ resolve a raw payload's starting class when it doesn't directly match any
 of the requested targets (see `convert`'s docstring)."""
 
 
+@functools.lru_cache(maxsize=None)
+def reachable_reps(
+    sources: tuple[type[OperationRep], ...],
+) -> tuple[type[OperationRep], ...]:
+    """`sources`, then every other concrete rep class `convert` can reach
+    from one of them, in `_ALL_CONCRETE_REPS` order."""
+    return sources + tuple(
+        cls
+        for cls in _ALL_CONCRETE_REPS
+        if cls not in sources
+        and any(_shortest_path(src, cls) is not None for src in sources)
+    )
+
+
 def _accepted_kwargs(func: Callable, kwargs: dict) -> dict:
     """Filter `kwargs` down to what `func` accepts by name, so `convert`
     can forward the same `**kwargs` to every candidate class/converter

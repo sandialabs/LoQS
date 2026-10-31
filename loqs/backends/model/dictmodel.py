@@ -28,6 +28,7 @@ from typing import (
 
 from loqs.backends.circuit import BasePhysicalCircuit, ListPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
+from loqs.backends.model.basemodel import first_successful_rep
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
@@ -44,7 +45,9 @@ from loqs.backends.reps import (
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
     convert as convert_rep,
+    is_rep_compatible,
 )
+from loqs.backends.reps.conversion import reachable_reps
 from loqs.backends.reps.legacy import (
     upgrade_legacy_gaterep_tag,
     upgrade_legacy_instrumentrep_tag,
@@ -79,6 +82,19 @@ that isn't a bare array. A bare array is handled separately (see
 [](api:UnitaryGateRep)/[](api:PTMGateRep)/[](api:QSimSuperopGateRep)
 cannot be structurally distinguished from each other by shape alone.
 """
+
+
+def _lookup(
+    label: tuple, gate_dict: Mapping, inst_dict: Mapping
+) -> tuple[Any, bool]:
+    """Find `label`'s dict entry: exact gate key, gate name, exact
+    instrument key, then instrument name. Returns `(entry, generic)`."""
+    for d in (gate_dict, inst_dict):
+        for key in (label, label[0]):
+            entry = d.get(key)
+            if entry is not None:
+                return entry, key is not label
+    raise KeyError(f"Failed to look up {label}")
 
 
 class DictNoiseModel(BaseNoiseModel):
@@ -128,10 +144,13 @@ class DictNoiseModel(BaseNoiseModel):
             empty `dict`.
 
         gatereps:
-            [](api:GateRep) classes this model will return
+            [](api:GateRep) classes the dict entries may hold.
+            [](api:DictNoiseModel.get_reps) converts them to other
+            classes when a caller asks for those.
 
         instreps:
-            [](api:InstrumentRep) classes this model will return
+            [](api:InstrumentRep) classes the dict entries may hold, which
+            `get_reps` converts likewise.
 
         gaterep_array_cast_rep:
             The [](api:GateRep) class used when casting bare matrices.
@@ -162,6 +181,7 @@ class DictNoiseModel(BaseNoiseModel):
 
         self._gatereps = list(gatereps)
         self._instreps = list(instreps)
+        self._converted: dict = {}
 
         def convert_to_gaterep(gr, qubits) -> GateRep:
             if isinstance(gr, GateRep):
@@ -239,10 +259,8 @@ class DictNoiseModel(BaseNoiseModel):
     def from_model(
         cls: type[T],
         model: BaseNoiseModel,
-        gatereps: Sequence[type[GateRep]] = (QSimSuperopGateRep,),
-        instreps: Sequence[type[InstrumentRep]] = (
-            ZBasisProjectionInstrumentRep,
-        ),
+        gatereps: Sequence[type[GateRep]] | None = None,
+        instreps: Sequence[type[InstrumentRep]] | None = None,
         **kwargs,
     ) -> T:
         """Build a [](api:DictNoiseModel) by converting an existing model.
@@ -253,22 +271,26 @@ class DictNoiseModel(BaseNoiseModel):
         [](api:DictNoiseModel)'s dicts, or building fresh ones from a
         `PyGSTiNoiseModel` (matched by `type(model).__name__` rather than
         `isinstance`, so this works without hard-requiring `pygsti` to be
-        importable).
+        importable). Keys are `(name, tuple(qubits))`, using the
+        `PyGSTiNoiseModel`'s aliased qubit labels.
 
         Parameters
         ----------
         model:
-            The model to convert from.
+            The model to convert from. A `PyGSTiNoiseModel` that uses time
+            dependence raises `NotImplementedError`.
 
         gatereps:
-            [](api:GateRep) classes this model will return. Also used
-            when querying `model`'s own representations, if `model` is a
-            `PyGSTiNoiseModel`.
+            [](api:GateRep) classes the new model's entries may hold, and
+            the classes requested from a `PyGSTiNoiseModel`. These must
+            describe the entries being copied. `None` means the source's
+            own declared classes for a [](api:DictNoiseModel), and
+            [](api:QSimSuperopGateRep) for a `PyGSTiNoiseModel`.
 
         instreps:
-            [](api:InstrumentRep) classes this model will return. Also
-            used when querying `model`'s own representations, if `model`
-            is a `PyGSTiNoiseModel`.
+            [](api:InstrumentRep) classes likewise. `None` means the
+            source's own declared classes for a [](api:DictNoiseModel), and
+            [](api:ZBasisProjectionInstrumentRep) for a `PyGSTiNoiseModel`.
 
         **kwargs:
             Forwarded to [](api:DictNoiseModel.__init__).
@@ -277,30 +299,36 @@ class DictNoiseModel(BaseNoiseModel):
         -------
             A [](api:DictNoiseModel) equivalent to `model`.
         """
-        gate_dict: dict[MemberLabel, Any] = {}
-        inst_dict: dict[MemberLabel, Any] = {}
-
         if isinstance(model, DictNoiseModel):
-            gate_dict = model.gate_dict.copy()
-            inst_dict = model.inst_dict.copy()
-        elif type(model).__name__ == "PyGSTiNoiseModel":
-            pygsti_model: Any = model
-            for gate_key in pygsti_model.gate_keys:
-                label = (gate_key.name, gate_key.qubits)
-                circ = ListPhysicalCircuit([[label]])
-                gate_dict[label] = pygsti_model.get_reps(
-                    circ, gatereps=gatereps, instreps=instreps
-                )[0][0]
-
-            for inst_key in pygsti_model.instrument_keys:
-                label = (inst_key.name, inst_key.qubits)
-                circ = ListPhysicalCircuit([[label]])
-                inst_dict[label] = pygsti_model.get_reps(
-                    circ, gatereps=gatereps, instreps=instreps
-                )[0][0]
-        else:
+            return cls(
+                model.gate_dict.copy(),
+                model.inst_dict.copy(),
+                gatereps=model._gatereps if gatereps is None else gatereps,
+                instreps=model._instreps if instreps is None else instreps,
+                **kwargs,
+            )
+        if type(model).__name__ != "PyGSTiNoiseModel":
             raise TypeError("Can only convert from other NoiseModels")
+        if getattr(model, "use_time_dependence", False):
+            raise NotImplementedError(
+                "Can't convert a time-dependent model to a DictNoiseModel"
+            )
 
+        gatereps = (QSimSuperopGateRep,) if gatereps is None else gatereps
+        instreps = (
+            (ZBasisProjectionInstrumentRep,) if instreps is None else instreps
+        )
+        gate_dict: dict = {}
+        inst_dict: dict = {}
+        for keys, out in (
+            (model.gate_keys, gate_dict),
+            (model.instrument_keys, inst_dict),
+        ):
+            for name, qubits in keys:
+                label = (name, tuple(qubits))
+                out[label] = model.get_reps(
+                    ListPhysicalCircuit([[label]]), gatereps, instreps
+                )[0]
         return cls(
             gate_dict,
             inst_dict,
@@ -319,11 +347,18 @@ class DictNoiseModel(BaseNoiseModel):
 
     @property
     def output_gate_reps(self) -> list[type[GateRep]]:
-        return self._gatereps
+        reps = list(reachable_reps(tuple(self._gatereps)))
+        if StimCircuitGateRep not in reps:
+            # Annotation and noise-channel lines are built as this type
+            reps.append(StimCircuitGateRep)
+        return cast(list[type[GateRep]], reps)
 
     @property
     def output_instrument_reps(self) -> list[type[InstrumentRep]]:
-        return self._instreps
+        return cast(
+            list[type[InstrumentRep]],
+            list(reachable_reps(tuple(self._instreps))),
+        )
 
     @singledispatchmethod
     def get_reps(
@@ -339,9 +374,9 @@ class DictNoiseModel(BaseNoiseModel):
         separate implementation is registered for
         [](api:STIMPhysicalCircuit) (see the module-level `_get_reps_stim`
         function below) that parses the circuit's STIM text directly.
-        Both implementations ignore the `gatereps`/`instreps` arguments,
-        since the representation to use is unambiguous from `gate_dict`/
-        `inst_dict`'s own values.
+        A rep not of a requested type is converted to the first type that
+        works, in order; one that converts to none raises
+        [](api:RepConstructionError).
 
         Parameters
         ----------
@@ -349,12 +384,10 @@ class DictNoiseModel(BaseNoiseModel):
             Physical circuit to get the representations for
 
         gatereps:
-            Unused; present for interface compatibility with
-            [](api:BaseNoiseModel.get_reps).
+            Allowed output [](api:GateRep) classes.
 
         instreps:
-            Unused; present for interface compatibility with
-            [](api:BaseNoiseModel.get_reps).
+            Allowed output [](api:InstrumentRep) classes.
 
         Returns
         -------
@@ -370,39 +403,35 @@ class DictNoiseModel(BaseNoiseModel):
         reps: list[OperationRep] = []
         for layer in circuit.circuit:
             for label in layer:
-                # Try to look up in gates
-                rep: OperationRep | None = self.gate_dict.get(label, None)
-
-                if rep is None:
-                    # Also try to look up just by name
-                    generic: OperationRep | None = self.gate_dict.get(
-                        label[0], None
+                entry, generic = _lookup(label, self.gate_dict, self.inst_dict)
+                reps.append(
+                    self._as_requested(
+                        entry, generic, label[1], gatereps, instreps
                     )
-                    if generic is not None:
-                        assert isinstance(generic, GateRep)
-                        rep = cast(
-                            OperationRep | None,
-                            generic.with_qubit_labels(label[1]),
-                        )
-
-                if rep is None:
-                    # Failed, now look up in instruments
-                    rep = cast(
-                        OperationRep | None, self.inst_dict.get(label, None)
-                    )
-
-                if rep is None:
-                    # Also try to look up just by name
-                    generic = self.inst_dict.get(label[0], None)
-                    if generic is not None:
-                        assert isinstance(generic, InstrumentRep)
-                        rep = generic.with_qubit_labels(label[1])
-
-                assert rep is not None, f"Failed to look up {label}"
-                assert isinstance(rep, OperationRep)
-
-                reps.append(rep)
+                )
         return reps
+
+    def _as_requested(
+        self,
+        entry: OperationRep,
+        generic: bool,
+        qubits: tuple,
+        gatereps: Sequence[type[GateRep]],
+        instreps: Sequence[type[InstrumentRep]],
+    ) -> OperationRep:
+        """Return `entry` (retargeted to `qubits` if generic) as the first
+        requested type that works, caching conversions per entry object."""
+        types = gatereps if isinstance(entry, GateRep) else instreps
+        if isinstance(entry, tuple(types)):
+            return entry.with_qubit_labels(qubits) if generic else entry
+        return first_successful_rep(
+            self._converted,
+            (entry, qubits),
+            types,
+            lambda: entry.with_qubit_labels(qubits) if generic else entry,
+            convert_rep,
+            kind="gate rep" if types is gatereps else "instrument rep",
+        )
 
     @classmethod
     def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
@@ -508,19 +537,9 @@ def _merge_common_rep(
     this, the first qubit's index would silently never be added -- this
     raises a clear error instead of producing a rep that claims to act on a
     qubit its own circuit string never actually references.
-
-    For other rep classes (e.g. [](api:ZBasisProjectionInstrumentRep)),
-    there is no per-qubit text to combine -- the same payload applies
-    uniformly regardless of how many qubits are merged in (state backends
-    apply it in a `for qbit in qubits: ...` loop), so merging is just
-    concatenating the qubit tuples.
     """
     prev = common.get(command)
-
-    if not isinstance(generic, StimCircuitPayloadMixin):
-        prev_qubits: tuple = prev.qubit_labels if prev is not None else tuple()
-        common[command] = generic.with_qubit_labels(prev_qubits + qt)
-        return
+    assert isinstance(generic, StimCircuitPayloadMixin)
 
     if prev is None:
         # First occurrence: the raw template must already reference its own
@@ -553,6 +572,57 @@ def _merge_common_rep(
     merged.circuit_str = "\n".join(new_lines)
     merged.qubit_labels = prev.qubit_labels + qt
     common[command] = merged
+
+
+def _stim_group_reps(
+    model: DictNoiseModel,
+    command: str,
+    groups: list[tuple],
+    dicts: tuple[Mapping, Mapping],
+    gatereps: Sequence[type[GateRep]],
+    instreps: Sequence[type[InstrumentRep]],
+) -> list[OperationRep]:
+    """One rep per target group of a STIM gate line, in target order.
+
+    Generic STIM-text reps already of a requested type merge into one rep
+    over disjoint groups; any other rep, and any group sharing a qubit with
+    the pending merged rep, flushes it first.
+    """
+    reps: list[OperationRep] = []
+    common: dict[str, OperationRep] = {}
+    for qt in groups:
+        entry, generic = _lookup((command, qt), *dicts)
+        # A group holds one or two labels, so this checks each of them
+        if generic and not (
+            isinstance(qt[0], str) and isinstance(qt[-1], str)
+        ):
+            stale = (command, tuple(str(q) for q in qt))
+            if stale in dicts[0] or stale in dicts[1]:
+                raise KeyError(
+                    f"Key {stale} matches no label of type "
+                    f"{[type(q).__name__ for q in qt]}; use the label itself"
+                )
+        mergeable = (
+            generic
+            and isinstance(entry, StimCircuitPayloadMixin)
+            and isinstance(
+                entry,
+                tuple(gatereps if isinstance(entry, GateRep) else instreps),
+            )
+        )
+        if command in common and (
+            not mergeable
+            or not set(qt).isdisjoint(common[command].qubit_labels)
+        ):
+            reps.append(common.pop(command))
+        if mergeable:
+            _merge_common_rep(command, qt, entry, common)
+        else:
+            reps.append(
+                model._as_requested(entry, generic, qt, gatereps, instreps)
+            )
+    reps.extend(common.values())
+    return reps
 
 
 def add_command_aliases(d: dict[MemberLabel, Any]) -> None:
@@ -608,7 +678,9 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
     ) -> list[OperationRep]:
         """Get operation representations for a STIM circuit.
 
-        This parses `circuit`'s own STIM text directly (rather than using
+        This reads `circuit`'s own STIM text through
+        `STIMPhysicalCircuit._parsed_lines`, which does the parsing: line
+        kinds, target mapping and target groups (rather than using
         `gate_dict`/`inst_dict`'s pre-structured keys the way the default
         [](api:DictNoiseModel.get_reps) implementation does), since
         [](api:STIMPhysicalCircuit) does not organize its content into
@@ -623,10 +695,16 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
 
         This method handles STIM-specific circuit processing including:
         - Unrolling circuit repeats
-        - Mapping qubit labels
-        - Applying noise models from gate and instrument dictionaries
-        - Combining common operations for efficient STIM processing
-        - Warning about conflicting noise applications
+        - Mapping targets to qubit labels, keeping the labels' types
+        - One rep per target group of a gate line (pairs for two-qubit
+          gates and `MXX`/`MYY`/`MZZ`), in target order, from the gate and
+          instrument dictionaries
+        - Merging generic STIM-text reps over disjoint groups
+        - Passing annotations and noise-channel lines on as STIM text, only
+          when `StimCircuitGateRep` is requested; a noise channel is
+          refused otherwise and warned about when applied
+        - Refusing (`NotImplementedError`) any instruction or target it
+          can't map, such as tagged gates or `rec[-1]` targets
 
         Parameters
         ----------
@@ -634,12 +712,12 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
             The STIM circuit to process.
 
         gatereps:
-            Unused; present for interface compatibility with
-            [](api:BaseNoiseModel.get_reps).
+            Allowed output [](api:GateRep) classes; a rep not of one is
+            converted to the first that works, else
+            [](api:RepConstructionError) is raised.
 
         instreps:
-            Unused; present for interface compatibility with
-            [](api:BaseNoiseModel.get_reps).
+            Allowed output [](api:InstrumentRep) classes, used likewise.
 
         Returns
         -------
@@ -648,123 +726,57 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
             operations with noise models applied.
         """
 
-        def promoted_key_and_qubits(k):
+        def promoted_key(k):
             # By convention, STIM commands are looked up case-insensitively
             # (matching STIM's own parsing), so both `gate_dict`/`inst_dict`
             # keys and circuit command names are uppercased before lookup.
-            if isinstance(k, str):
-                return k.upper(), tuple()
-            else:
-                return (k[0].upper(), k[1]), k[1]
+            return k.upper() if isinstance(k, str) else (k[0].upper(), k[1])
 
-        gate_dict = {
-            promoted_key_and_qubits(k)[0]: v for k, v in self.gate_dict.items()
-        }
-        inst_dict = {
-            promoted_key_and_qubits(k)[0]: v for k, v in self.inst_dict.items()
-        }
+        gate_dict = {promoted_key(k): v for k, v in self.gate_dict.items()}
+        inst_dict = {promoted_key(k): v for k, v in self.inst_dict.items()}
         add_command_aliases(gate_dict)
         add_command_aliases(inst_dict)
 
         # Iterate through circuit and pull out representations
         reps: list[OperationRep] = []
-        for line in circuit._unroll_repeats().split("\n"):
-            entries = line.split()
-
-            if len(entries) == 0:
-                # Empty line, but pass it on as a comment so full circuit has same formatting
-                reps.append(StimCircuitGateRep(line, tuple()))
-                continue
-
-            # Some commands can have parameters
-            # Strip those so we can check base command name
-            command = entries[0].split("(")[0]
-
-            if command not in circuit._stim_gates:
-                # We don't want to just ignore this, pass it on as a dummy rep
-                # so that it will be included in the full circuit, but
-                # we don't need to handle it here.
-                # The empty qubit label will stand for this dummy/comment type rep
-                reps.append(StimCircuitGateRep(line, tuple()))
-
-                # We'll warn if this is a noise channel, just FYI since we are
-                # adding more noise
-                if command in circuit._stim_noise_channels:
-                    warnings.warn(
-                        f"Noise channel '{line}' detected, but DictNoiseModel is also adding noise"
+        want_text = is_rep_compatible(StimCircuitGateRep, gatereps)
+        for kind, line, name, args, groups in circuit._parsed_lines():
+            if kind == "annotation":
+                # Annotations act on no qubit; the empty label stands for
+                # them and keeps the circuit's format
+                if want_text:
+                    reps.append(StimCircuitGateRep(line, tuple()))
+            elif kind == "noise":
+                if not want_text:
+                    raise NotImplementedError(
+                        f"Noise channel '{line}' needs a state that takes "
+                        "StimCircuitGateRep"
                     )
+                warnings.warn(
+                    f"Noise channel '{line}' detected, but DictNoiseModel is also adding noise"
+                )
+                indices = map(str, range(len(groups[0])))
+                reps.append(
+                    StimCircuitGateRep(
+                        " ".join([f"{name}{args}", *indices]), groups[0]
+                    )
+                )
             else:
-                # This is a gate!
-                # First check if measure had noise applied and warn
-                if (
-                    command in circuit._stim_measure_reset_gates
-                    and "(" in entries[0]
-                ):
+                if name in circuit._stim_measure_reset_gates and args:
                     warnings.warn(
-                        f"Measure noise '{entries[0]}' detected, but DictNoiseModel is also adding noise"
+                        f"Measure noise '{name}{args}' detected, but the "
+                        "instruction's noise argument is ignored and the "
+                        "model's entry is used instead"
                     )
-
-                mapped_qubits = []
-                for qidx in entries[1:]:
-                    negated = qidx.startswith("!")
-                    qlabel = circuit.qubit_labels[int(qidx.strip("!"))]
-                    mapped_qubits.append(f"{'!' if negated else ''}{qlabel}")
-
-                # Put these in a tuple form commensurate with dict keys
-                qubit_tuples: list[tuple[str, ...]]
-                if command in circuit._stim_twoq_gates:
-                    qubit_tuples = [
-                        (mapped_qubits[i], mapped_qubits[i + 1])
-                        for i in range(0, len(mapped_qubits), 2)
-                    ]
-                else:
-                    # Otherwise everything is single qubit action
-                    qubit_tuples = [(q,) for q in mapped_qubits]
-
-                # When we are looking things up generically by name only,
-                # we can combine all qubit tuples into a common command
-                # This is mostly to make STIM print these circuits much nicer
-                common: dict[str, OperationRep] = {}
-                for qt in qubit_tuples:
-                    is_common = False
-                    label = (command.upper(), qt)
-
-                    # Try to look up in gates
-                    rep: OperationRep | None = gate_dict.get(label, None)
-
-                    if rep is None:
-                        # If that failed, check for generic name only
-                        generic: OperationRep | None = gate_dict.get(
-                            command.upper(), None
-                        )
-                        if generic is not None:
-                            assert isinstance(generic, GateRep)
-                            is_common = True
-                            _merge_common_rep(command, qt, generic, common)
-                            rep = cast(OperationRep | None, common[command])
-
-                    if rep is None:
-                        # Failed, now look up in instruments
-                        rep = cast(
-                            OperationRep | None, inst_dict.get(label, None)
-                        )
-
-                    if rep is None:
-                        # If that failed, check for generic name only
-                        generic = inst_dict.get(command.upper(), None)
-                        if generic is not None:
-                            assert isinstance(generic, InstrumentRep)
-                            is_common = True
-                            _merge_common_rep(command, qt, generic, common)
-                            rep = cast(OperationRep | None, common[command])
-
-                    assert rep is not None, f"Failed to look up {label}"
-                    assert isinstance(rep, OperationRep)
-
-                    if not is_common:
-                        reps.append(rep)
-
-                # Add common commands to the rep
-                reps.extend(common.values())
+                reps.extend(
+                    _stim_group_reps(
+                        self,
+                        name,
+                        groups,
+                        (gate_dict, inst_dict),
+                        gatereps,
+                        instreps,
+                    )
+                )
 
         return reps
