@@ -1038,7 +1038,7 @@ def build_physical_circuit_instruction(
         error_injections: list[tuple[int, str, int]] | None,
         pauli_frame_update: str | list[str] | dict[str, str] | None,
         patch_label: str,
-        patches: PatchLayout,
+        patches: PatchLayout | None,
     ) -> Frame:
         """Apply physical circuit instruction.
 
@@ -1109,6 +1109,11 @@ def build_physical_circuit_instruction(
 
         # Update pauli frame, if needed
         if pauli_frame_update is not None:
+            if patches is None:
+                raise ValueError(
+                    "A Pauli frame update needs a PatchLayout, but none was "
+                    "found in the history or the instruction's data"
+                )
             patch = patches[patch_label]
 
             if isinstance(pauli_frame_update, dict):
@@ -1148,10 +1153,10 @@ def build_physical_circuit_instruction(
             data["errored_circuit"] = errored_circuit
         # TODO: Make this more general, maybe models have a "save_to_frame_attrs" or somethign
         if is_backend_available("stim_state") and isinstance(
-            state, STIMQuantumState
+            new_state, STIMQuantumState
         ):
             data["applied_stim_circuit_str"] = str(
-                state.latest_applied_circuit  # type: ignore[attr-defined]
+                new_state.latest_applied_circuit  # type: ignore[attr-defined]
             )
 
         return Frame(data)
@@ -1162,9 +1167,17 @@ def build_physical_circuit_instruction(
         "inplace": inplace,
         "error_injections": None,  # Must be specified in label only
         "pauli_frame_update": pauli_frame_update,
+        "patches": None,  # Taken from the history when there is one
     }
     if model is not None:
         data["model"] = model
+
+    # A circuit needs no PatchLayout unless the Pauli frame is updated, so
+    # the instruction's own None is the fallback after the history
+    param_priorities = {
+        "patches": [p for p in DEFAULT_PRIORITIES if p != "instruction"]
+        + ["instruction"]
+    }
 
     # We need to be able to map the circuit if qubits change
     def map_qubits_fn(
@@ -1197,6 +1210,7 @@ def build_physical_circuit_instruction(
     return Instruction(
         apply_fn=apply_fn,
         data=data,
+        param_priorities=param_priorities,
         map_qubits_fn=map_qubits_fn,
         name=name,
         type="Physical circuit",

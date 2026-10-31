@@ -382,7 +382,8 @@ class TestPhysicalCircuitInstructionSTIM:
     label mapping.
     """
 
-    def test_applied_stim_circuit_str_is_populated(self):
+    @pytest.mark.parametrize("inplace", [True, False])
+    def test_applied_stim_circuit_str_is_populated(self, inplace):
         pytest.importorskip("stim")
         from loqs.backends import STIMQuantumState, DictNoiseModel
         from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
@@ -399,7 +400,7 @@ class TestPhysicalCircuitInstructionSTIM:
             model=model,
             circuit=circuit,
             state=state,
-            inplace=True,
+            inplace=inplace,
             error_injections=None,
             pauli_frame_update=None,
             patch_label="L0",
@@ -409,6 +410,37 @@ class TestPhysicalCircuitInstructionSTIM:
         applied_str = frame["applied_stim_circuit_str"]
         assert applied_str == str(frame["state"].latest_applied_circuit)
         assert "H 0" in applied_str
+
+    def test_circuit_instruction_runs_without_patch_layout(self):
+        pytest.importorskip("stim")
+        from loqs.backends import STIMQuantumState, DictNoiseModel
+        from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+        from loqs.backends.reps import (
+            StimCircuitGateRep,
+            StimCircuitInstrumentRep,
+        )
+
+        circuit = STIMPhysicalCircuit("X 0\nM 0", ["Q0"])
+        model = DictNoiseModel(
+            {"X": StimCircuitGateRep("X 0", ())},
+            {"M": StimCircuitInstrumentRep("M 0", ())},
+            gatereps=[StimCircuitGateRep],
+            instreps=[StimCircuitInstrumentRep],
+        )
+        inst = builders.build_physical_circuit_instruction(
+            circuit=circuit, name="Run"
+        )
+        program = QuantumProgram(
+            [{"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}]
+            + [{"instruction": "Run"}],
+            global_instructions={"Run": inst},
+            default_noise_model=model,
+            state_type=STIMQuantumState,
+            name="bare circuit",
+        )
+        results = program.run(num_shots=1)
+        mo = results.collect_shot_data("measurement_outcomes", -1)
+        assert mo[0]["Q0"] == [1]
 
     def test_error_injection_targets_correct_qubit_with_non_positional_labels(
         self,

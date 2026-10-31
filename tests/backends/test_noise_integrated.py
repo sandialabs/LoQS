@@ -481,6 +481,13 @@ class TestBackendAgreement:
                 [StimCircuitGateRep],
                 {"a": [1], "b": [0], "c": [1], "d": [1]},
             ),
+            "measure-noise": (
+                "M(1) 0 1",
+                ["0", "1"],
+                {},
+                [StimCircuitGateRep],
+                ones,
+            ),
         }
         text, labels, gates, gatereps, expected = cases[case]
         model = DictNoiseModel(
@@ -491,7 +498,10 @@ class TestBackendAgreement:
         )
         circuit = STIMPhysicalCircuit(text, labels)
         state = state_type(len(labels), labels)
-        if case == "noise-channel" and state_type is not STIMState:
+        if (
+            case in ("noise-channel", "measure-noise")
+            and state_type is not STIMState
+        ):
             with pytest.raises(NotImplementedError):
                 propagate_state(circuit, model, state)
             return

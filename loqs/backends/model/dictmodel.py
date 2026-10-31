@@ -60,10 +60,16 @@ from loqs.backends.reps.legacy import (
 # -- see also `loqs.backends`'s module-level comment about import ordering,
 # which this relies on to avoid a circular-import false negative).
 if TYPE_CHECKING:
-    from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+    from loqs.backends.circuit.stimcircuit import (
+        STIMPhysicalCircuit,
+        _STIM_LINE,
+    )
 else:
     try:
-        from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+        from loqs.backends.circuit.stimcircuit import (
+            STIMPhysicalCircuit,
+            _STIM_LINE,
+        )
     except ImportError:
         STIMPhysicalCircuit = None  # type: ignore
 
@@ -625,6 +631,53 @@ def _stim_group_reps(
     return reps
 
 
+def _stim_rep_with_argument(
+    rep: OperationRep, name: str, args: str
+) -> OperationRep:
+    """Copy a STIM-text rep, giving its one `name` line the argument `args`.
+
+    This carries a measurement's flip probability, as in `M(0.1)`, onto the
+    model's own rep for it. A rep that isn't STIM text, or that has no
+    argument-free `name` line or several, raises `NotImplementedError`.
+    """
+    import stim
+
+    lines = (
+        rep.circuit_str.split("\n")
+        if isinstance(rep, StimCircuitPayloadMixin)
+        else []
+    )
+    hits = []
+    for i, line in enumerate(lines):
+        match = _STIM_LINE.match(line.strip())
+        try:
+            if (
+                match
+                and not match.group(3)
+                and stim.gate_data(match.group(1)).name
+                == stim.gate_data(name).name
+            ):
+                hits.append(i)
+        except ValueError:  # Not a gate, e.g. a comment
+            pass
+    if len(hits) != 1:
+        raise NotImplementedError(
+            f"Can't apply the argument '{args}' of {name}: the model's entry "
+            f"({type(rep).__name__}) must be STIM text with exactly one "
+            f"argument-free {name} line, which a ZBasis* entry or a dense "
+            "state's entry is not"
+        )
+
+    match = _STIM_LINE.match(lines[hits[0]].strip())
+    assert match is not None and isinstance(rep, StimCircuitPayloadMixin)
+    lines[hits[0]] = (
+        f"{match.group(1)}{match.group(2) or ''}{args} {match.group(4) or ''}"
+    ).strip()
+    new_rep = copy.copy(rep)
+    new_rep.circuit_str = "\n".join(lines)
+    return new_rep
+
+
 def add_command_aliases(d: dict[MemberLabel, Any]) -> None:
     """Add STIM command-alias keys (e.g. `"CNOT"` -> `"CX"`) alongside originals.
 
@@ -752,8 +805,10 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
                         f"Noise channel '{line}' needs a state that takes "
                         "StimCircuitGateRep"
                     )
+                # A fixed message, so Python's default filter shows it once
                 warnings.warn(
-                    f"Noise channel '{line}' detected, but DictNoiseModel is also adding noise"
+                    "The circuit's own STIM noise lines are applied in "
+                    "addition to the noise model's entries"
                 )
                 indices = map(str, range(len(groups[0])))
                 reps.append(
@@ -762,21 +817,19 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
                     )
                 )
             else:
-                if name in circuit._stim_measure_reset_gates and args:
-                    warnings.warn(
-                        f"Measure noise '{name}{args}' detected, but the "
-                        "instruction's noise argument is ignored and the "
-                        "model's entry is used instead"
-                    )
-                reps.extend(
-                    _stim_group_reps(
-                        self,
-                        name,
-                        groups,
-                        (gate_dict, inst_dict),
-                        gatereps,
-                        instreps,
-                    )
+                group_reps = _stim_group_reps(
+                    self,
+                    name,
+                    groups,
+                    (gate_dict, inst_dict),
+                    gatereps,
+                    instreps,
                 )
+                if name in circuit._stim_measure_reset_gates and args:
+                    group_reps = [
+                        _stim_rep_with_argument(rep, name, args)
+                        for rep in group_reps
+                    ]
+                reps.extend(group_reps)
 
         return reps
