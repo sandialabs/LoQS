@@ -21,14 +21,21 @@ except ImportError:
     QSimQuantumState = Any  # type: ignore
 
 
-# TODO: clarify: should we have probs.keys() == phases.keys() ?
 def get_state_probs_phases(qsim_state: QSimQuantumState):
     """Compute computational basis probabilities and phases.
 
     This leaves the input state unchanged, but returns the probabilities
     of measuring each computational basis state and phase relative to
-    the all 0 state. If a basis state is missing, it is assumed to have
-    no probability of being observed.
+    the smallest bitstring with nonzero probability (the all 0 string
+    when it has amplitude). If a basis state is missing, it is assumed to
+    have no probability of being observed; `phases` has exactly the
+    bitstrings with nonzero probability.
+
+    Phases are found by a walk over single bit flips between nonzero
+    bitstrings, with a Hadamard test on each flipped qubit. A `ValueError`
+    is raised, rather than a wrong sign returned, when the support isn't
+    linked by single flips (e.g. a GHZ state) or a phase is complex. It
+    may also be raised, though this isn't guaranteed, for a mixed state.
 
     Parameters
     ----------
@@ -45,7 +52,7 @@ def get_state_probs_phases(qsim_state: QSimQuantumState):
 
     phases:
         A dictionary of bitstring keys and phase (relative to the
-        all 0 state) values
+        smallest nonzero bitstring) values
     """
     qubits = qsim_state.state.names
     assert qubits is not None
@@ -59,41 +66,39 @@ def get_state_probs_phases(qsim_state: QSimQuantumState):
 
     probs = get_bitstring_dict()
 
-    # Do graph traversal to compute relative phases
-    phases = {}
-    bitstrings_to_visit = set([("0" * 7, "None", -1)])
-    seen_bitstrings = set()
-    while len(bitstrings_to_visit):
-        bs, off_by_one_bs, off_by_one_idx = bitstrings_to_visit.pop()
-        if bs not in probs:
-            # We don't care about this bitstring, continue
-            pass
-        elif off_by_one_bs == "None":
-            # Must be all zeros, hard code this to + phase
-            phases[bs] = 1
-        else:
-            # We can get our phase relative to the last bitstring
-            # Hadamard the qubit where the bitflip is
-            # If the 1 branch has the probability, then there is a -1 relative phase
-            # Otherwise, they have the same relative phase
-            qsim_state.state.hadamard(qubits[off_by_one_idx])
-            phase_probs = get_bitstring_dict()
-            qsim_state.state.hadamard(qubits[off_by_one_idx])
-
-            # bs will always be the bitstring with the 1 branch,
-            # so we can use that for a shorthand key
-            factor = 1
-            if phase_probs[bs] > 1e-8:
-                factor = -1
-            phases[bs] = factor * phases[off_by_one_bs]
-
-        seen_bitstrings.add(bs)
-
-        # Add all neighboring bitstrings that we haven't seen yet
+    # Walk the nonzero strings along single bit flips, in both directions,
+    # starting from the smallest one (phase 1).
+    nonzero = {bs for bs, p in probs.items() if p > 0}
+    phases = {min(nonzero): 1}
+    to_visit = list(phases)
+    while to_visit:
+        bs = to_visit.pop()
         for i in range(len(bs)):
-            new_bs = bs[:i] + "1" + bs[i + 1 :]
-            if new_bs not in seen_bitstrings:
-                bitstrings_to_visit.add((new_bs, bs, i))
+            nb = bs[:i] + str(1 - int(bs[i])) + bs[i + 1 :]
+            if nb in nonzero and nb not in phases:
+                # Hadamard the flipped qubit and read the pair's 1-branch
+                # string. For real amplitudes, q = (pa + pb)/2 - s*sqrt(pa*pb)
+                # with s the relative sign, so c is +/-1; anything else
+                # means a complex phase or a mixed state.
+                qsim_state.state.hadamard(qubits[i])
+                q = get_bitstring_dict().get(max(bs, nb), 0)
+                qsim_state.state.hadamard(qubits[i])
+                pa, pb = probs[bs], probs[nb]
+                c = ((pa + pb) / 2 - q) / (pa * pb) ** 0.5
+                if abs(abs(c) - 1) > 1e-6:
+                    raise ValueError(
+                        f"Cannot sign bitstring {nb}: its Hadamard test "
+                        f"against {bs} fits neither a + nor a - phase"
+                    )
+                phases[nb] = phases[bs] * (1 if c > 0 else -1)
+                to_visit.append(nb)
+
+    if len(phases) < len(nonzero):
+        raise ValueError(
+            f"Cannot sign bitstring {min(nonzero - phases.keys())}: it is "
+            "not linked by single bit flips through nonzero-probability "
+            "strings to the smallest one"
+        )
 
     return qubits, probs, phases
 

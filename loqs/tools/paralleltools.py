@@ -93,8 +93,11 @@ def _executor_worker_count(executor: Any) -> int | None:
 
 @dataclass
 class ExecutorSpec(Serializable):
-    """Picklable recipe for building a fresh executor of a given backend,
-    extracted from a live executor's own construction parameters.
+    """Picklable recipe for building a fresh executor of a given backend.
+
+    A spec is plain data, built either from a live loky executor
+    (introspection, loky only) or by the `submitit` and `mpi4py`
+    constructors. Other backends still need an explicit factory.
 
     An instance is itself a zero-argument factory (`__call__` builds and
     returns a new executor), so it satisfies the factory-callable
@@ -102,8 +105,7 @@ class ExecutorSpec(Serializable):
     `program_executor` chunking is in play -- this is what lets a caller
     hand `ParallelStrategy` an ordinary live executor directly (see
     `_introspect_executor_spec`) instead of writing a factory function by
-    hand. Only `loky` is currently recognized; unrecognized backends still
-    require an explicit factory.
+    hand.
     """
 
     _SERIALIZE_ATTRS = ["exec_backend", "kwargs"]
@@ -111,11 +113,64 @@ class ExecutorSpec(Serializable):
     exec_backend: str
     kwargs: dict[str, Any]
 
+    @classmethod
+    def submitit(
+        cls,
+        folder: str | os.PathLike[str],
+        cluster: str | None = None,
+        **parameters: Any,
+    ) -> ExecutorSpec:
+        """Spec for a `submitit.AutoExecutor`.
+
+        Parameters
+        ----------
+        folder : str | os.PathLike[str]
+            Log and job folder. Stored as an absolute path, so a resume
+            from another directory writes to the same folder.
+        cluster : str | None
+            Submitit cluster name. `None` lets submitit pick the cluster
+            when the executor is built, on the machine that builds it.
+        **parameters
+            Passed to `AutoExecutor.update_parameters`, so constructor-only
+            options (such as `slurm_python`) need a factory. Values must
+            be data a runner file can store (strings, numbers, booleans,
+            `None`, lists, dicts).
+        """
+        return cls(
+            "submitit",
+            {
+                "folder": str(Path(folder).expanduser().absolute()),
+                "cluster": cluster,
+                "parameters": parameters,
+            },
+        )
+
+    @classmethod
+    def mpi4py(cls, **kwargs: Any) -> ExecutorSpec:
+        """Spec for an `mpi4py.futures.MPIPoolExecutor`.
+
+        `kwargs` go to `MPIPoolExecutor` and must be data, so worker setup
+        such as `initializer` needs a factory.
+        """
+        return cls("mpi4py", kwargs)
+
     def __call__(self) -> SubmitExecutor:
         if self.exec_backend == "loky":
             import loky
 
             return loky.get_reusable_executor(**self.kwargs)
+        if self.exec_backend == "submitit":
+            import submitit
+
+            executor = submitit.AutoExecutor(
+                self.kwargs["folder"], cluster=self.kwargs["cluster"]
+            )
+            executor.update_parameters(**self.kwargs["parameters"])
+            return cast(SubmitExecutor, executor)
+        if self.exec_backend == "mpi4py":
+            from mpi4py.futures import MPIPoolExecutor
+
+            return MPIPoolExecutor(**self.kwargs)
         raise ValueError(
             f"ExecutorSpec has no builder for backend {self.exec_backend!r}."
         )
@@ -462,11 +517,13 @@ class ParallelStrategy(Serializable):
 
         An `ExecutorSpec` or a zero-argument factory is called once, on
         first dispatch, and cached. A spec lets differently sized
-        strategies share loky's process-wide singleton safely. A factory
-        lets you checkpoint an executor LoQS can't introspect, such as
-        submitit's. It is stored as source, so define it at module level
-        in a `.py` file (in `__main__` or a notebook, keep its settings in
-        its body); lambdas and `functools.partial` can't be stored.
+        strategies share loky's process-wide singleton safely, and
+        `ExecutorSpec.submitit` or `ExecutorSpec.mpi4py` is how to
+        checkpoint a submitit or MPI run. A factory is the fallback for
+        backends LoQS doesn't know. It is stored as source, so define it
+        at module level in a `.py` file (in `__main__` or a notebook, keep
+        its settings in its body); lambdas and `functools.partial` can't
+        be stored.
     n_program_chunks : int | None
         Number of round-robin chunks to split work into. Required when
         `program_executor` is, or builds, a `MapArrayExecutor`, since one
@@ -497,8 +554,9 @@ class ParallelStrategy(Serializable):
         `loky`) is transparently replaced with an `ExecutorSpec` built
         from its own construction parameters, which builds an equivalent
         fresh executor inside each chunk worker; an unrecognized backend
-        instead requires an explicit zero-argument factory callable,
-        which is used as given.
+        instead requires an `ExecutorSpec` (such as
+        `ExecutorSpec.mpi4py`) or an explicit zero-argument factory
+        callable, which is used as given.
     collect_resource_stats : bool
         Whether `dispatch()` should have each dispatched chunk
         self-report its own worker process's peak memory / mean CPU
@@ -571,7 +629,9 @@ class ParallelStrategy(Serializable):
                     "dispatched chunk crosses, and this backend isn't "
                     "recognized for automatic factory construction (see "
                     "_introspect_executor_spec). Pass a zero-argument "
-                    "factory callable instead."
+                    "ExecutorSpec (ExecutorSpec.submitit or "
+                    "ExecutorSpec.mpi4py) or a zero-argument factory "
+                    "callable instead."
                 )
             self.shot_executor = spec
 
@@ -580,37 +640,20 @@ class ParallelStrategy(Serializable):
     ) -> Any:
         """Handle encoding of program_executor and shot_executor, which may be
         live executors, ExecutorSpecs, callables, or None."""
-        if attr == "program_executor":
-            prog_exec = self.program_executor
-            if prog_exec is None or isinstance(prog_exec, ExecutorSpec):
-                return prog_exec
-            if callable(prog_exec):
-                return prog_exec
+        if attr in ("program_executor", "shot_executor"):
+            value = getattr(self, attr)
+            if value is None or callable(value):
+                return value
             # Live executor: attempt to introspect, else raise
-            spec = _introspect_executor_spec(prog_exec)
+            spec = _introspect_executor_spec(value)
             if spec is not None:
                 return spec
             raise ValueError(
-                f"Cannot serialize live {type(prog_exec).__name__} executor for "
-                f"program_executor: it either needs to be recognized by "
-                f"_introspect_executor_spec or passed as a plain zero-argument "
-                f"factory callable instead."
-            )
-        elif attr == "shot_executor":
-            shot_exec = self.shot_executor
-            if shot_exec is None or isinstance(shot_exec, ExecutorSpec):
-                return shot_exec
-            if callable(shot_exec):
-                return shot_exec
-            # Live executor: attempt to introspect, else raise
-            spec = _introspect_executor_spec(shot_exec)
-            if spec is not None:
-                return spec
-            raise ValueError(
-                f"Cannot serialize live {type(shot_exec).__name__} executor for "
-                f"shot_executor: it either needs to be recognized by "
-                f"_introspect_executor_spec or passed as a plain zero-argument "
-                f"factory callable instead."
+                f"Cannot serialize live {type(value).__name__} executor for "
+                f"{attr}: it either needs to be recognized by "
+                f"_introspect_executor_spec or passed as an ExecutorSpec "
+                f"(ExecutorSpec.submitit or ExecutorSpec.mpi4py) or a "
+                f"plain zero-argument factory callable instead."
             )
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
@@ -1973,7 +2016,12 @@ def profile_strategies(
     `speedup` stays `None`. Nothing is computed when no entry is fully
     serial, or (using whichever is found first in `strategies`' own
     order) when more than one is.
+
+    `repeats` must be at least 1, else a `ValueError` is raised before
+    anything runs.
     """
+    if repeats < 1:
+        raise ValueError(f"repeats must be at least 1, got {repeats}")
     ctx = (
         reused_slurm_allocation()
         if reuse_slurm_allocation

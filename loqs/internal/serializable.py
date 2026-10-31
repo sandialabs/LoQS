@@ -1587,18 +1587,25 @@ class Serializable:
         raise IncorrectDecodableTypeError("Unknown type to decode")
 
     @staticmethod
-    def _prepare_function_source(src: str, version: int) -> tuple[str, list]:
+    @functools.lru_cache(maxsize=256)
+    def _prepare_function_source(src: str, version: int) -> tuple[str, tuple]:
         """Run every source-level backwards-compatibility rewrite on a
         frozen function's source, in order: import location/rename
         updates, old-format `InstructionLabel(...)` construction
         rewriting, then any other one-off fixes.
 
-        Returns the rewritten source alongside a list of
+        Returns the rewritten source alongside a tuple of
         `ManualReviewItem`s for anything the `InstructionLabel` rewrite
         found but couldn't confidently resolve -- callers decide what, if
         anything, to do with those (e.g. `Instruction._from_decoded_attrs`'s
         `MIGRATE_LEGACY_FNS` gate; `_eval_function_str`'s other callers
         ignore them).
+
+        Results are cached per `(src, version)` for the life of the
+        process. That is safe because the rewrite is a pure function of
+        those two arguments, and it is there because a legacy program
+        repeats the same few sources hundreds of times. The tuple keeps
+        a caller from mutating a cached result.
         """
         updated_src = Serializable._update_imports(src, version)
         updated_src, manual_review = Serializable._update_legacy_constructions(
@@ -1607,7 +1614,7 @@ class Serializable:
         updated_src = Serializable._function_compatibility(
             updated_src, version
         )
-        return updated_src, manual_review
+        return updated_src, tuple(manual_review)
 
     @staticmethod
     def _exec_function_str(

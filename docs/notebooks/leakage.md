@@ -50,7 +50,9 @@ def build_compute_parity_instruction(parity_key: str, aux_qubit: str) -> Instruc
     Stores the aux_qubit in the instruction's data dictionary, and provides
     a map_qubits_fn to remap it during patch instantiation.
     """
-    def apply_fn(measurement_outcomes: MeasurementOutcomes, aux_qubit: str) -> Frame:
+    def apply_fn(
+        measurement_outcomes: MeasurementOutcomes, aux_qubit: str, parity_key: str
+    ) -> Frame:
         outcome = measurement_outcomes[aux_qubit][-1]
         return Frame({parity_key: outcome})
 
@@ -64,10 +66,11 @@ def build_compute_parity_instruction(parity_key: str, aux_qubit: str) -> Instruc
     return Instruction(
         apply_fn=apply_fn,
         map_qubits_fn=map_qubits_fn,
-        data={"aux_qubit": aux_qubit},
+        data={"aux_qubit": aux_qubit, "parity_key": parity_key},
         param_priorities={
             "measurement_outcomes": ["history[-1]"],
             "aux_qubit": ["instruction"],
+            "parity_key": ["instruction"],
         },
         name=f"compute_{parity_key}_{aux_qubit.lower()}"
     )

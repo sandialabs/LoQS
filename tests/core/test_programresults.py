@@ -3,7 +3,6 @@
 import multiprocessing as mp
 import re
 import shutil
-import sys
 import tempfile
 import unittest.mock
 
@@ -764,11 +763,6 @@ class TestMixedFormatShotCheckpoints:
         with pytest.raises(OSError):
             h5py.File(store.ledger_path("killed"), "r+")
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="Rebuilding a killed writer's ledger needs an fcntl lock, so "
-        "Windows refuses instead",
-    )
     def test_checkpoint_reuses_killed_writers_worker_id(self, tmp_path):
         """A checkpoint under the `worker_id` of a killed writer succeeds,
         and the reloaded run holds the killed and the new shots."""

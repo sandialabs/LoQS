@@ -614,7 +614,7 @@ def create_qec_code(  # noqa: C901 -- constructs surface-code QEC implementation
         ]
 
     try:
-        import pymatching
+        import pymatching  # noqa: F401
     except ImportError as e:
         raise ImportError(
             "PyMatching is not installed, cannot use pymatching decoder. "
@@ -760,6 +760,8 @@ def create_qec_code(  # noqa: C901 -- constructs surface-code QEC implementation
         patches: PatchLayout,
         H_X: np.ndarray,
         H_Z: np.ndarray,
+        X_stabilizers: list[str],
+        Z_stabilizers: list[str],
         syndrome_labels_X: list[SyndromeLabel],
         syndrome_labels_Z: list[SyndromeLabel],
         data_qubits: list[str],
@@ -772,6 +774,8 @@ def create_qec_code(  # noqa: C901 -- constructs surface-code QEC implementation
             "raw", "clean_diff", "guarded_diff"
         ] = "raw",
     ) -> Frame:
+        import pymatching  # noqa: F811
+
         patch = patches[patch_label]
         pauli_frame = patch.pauli_frame
 
@@ -1078,6 +1082,8 @@ def create_qec_code(  # noqa: C901 -- constructs surface-code QEC implementation
         data={
             "H_X": H_X,
             "H_Z": H_Z,
+            "X_stabilizers": X_stabilizers,
+            "Z_stabilizers": Z_stabilizers,
             "syndrome_labels_X": syndrome_labels_X,
             "syndrome_labels_Z": syndrome_labels_Z,
             "data_qubits": data_qubits,
@@ -1107,6 +1113,8 @@ def create_qec_code(  # noqa: C901 -- constructs surface-code QEC implementation
         data={
             "H_X": H_X,
             "H_Z": H_Z,
+            "X_stabilizers": X_stabilizers,
+            "Z_stabilizers": Z_stabilizers,
             "syndrome_labels_X": syndrome_labels_X,
             "syndrome_labels_Z": syndrome_labels_Z,
             "data_qubits": data_qubits,

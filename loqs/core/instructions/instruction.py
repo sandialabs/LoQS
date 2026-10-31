@@ -151,6 +151,11 @@ class Instruction(Displayable):
        alternatively, pass an already-serialized version explicitly
        (via [](api:Serializable.serialize_function)) at construction
        time, while the live function is still available.
+    5. Only the function's source is saved, not the values of names it
+       takes from an enclosing function (a closure). Such a function
+       raises `NameError` when read back from a file and run, and the
+       constructor warns about it. Pass those values in through `data`
+       as function parameters, or use module-level names.
 
     Examples
     --------
@@ -215,6 +220,10 @@ class Instruction(Displayable):
         function is inspectable *now* only via IPython's linecache patch
         for a backing file that doesn't really exist on disk, and stops
         working after a kernel restart.
+
+        Also warns when `func` closes over an enclosing function's names
+        (`co_freevars`): their values aren't serialized, so the decoded
+        function raises `NameError`.
         """
         import inspect
         import os
@@ -234,6 +243,19 @@ class Instruction(Displayable):
                 f"Serializable.serialize_function({param_name}) now to "
                 "avoid a failure at encode time. Ignore if you do not "
                 "plan to serialize/encode this Instruction.",
+                stacklevel=3,
+            )
+
+        freevars = getattr(getattr(func, "__code__", None), "co_freevars", ())
+        if freevars:
+            names = ", ".join(repr(n) for n in freevars)
+            warnings.warn(
+                f"'{param_name}' uses names from an enclosing function "
+                f"({names}). Their values are not saved with the "
+                "Instruction, so the function raises NameError when read "
+                "back from a file and run. Pass them in through `data` "
+                "as function parameters, or use module-level names. "
+                "Ignore if you do not plan to write this Instruction.",
                 stacklevel=3,
             )
 
@@ -553,7 +575,7 @@ class Instruction(Displayable):
         # unresolved. Only a string needs preparing -- a version-0
         # source may already be a live callable by this point
         # (decode_function's own heuristic).
-        unresolved = []
+        unresolved: list = []
         if version < SERIALIZATION_VERSION:
             if isinstance(serialized_apply_fn, str):
                 serialized_apply_fn, review = (

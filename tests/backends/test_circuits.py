@@ -421,3 +421,15 @@ def test_serialization_round_trip(adapter, make_temp_path, suffix):
     assert isinstance(loaded, a.cls)
     assert a.layers_of(loaded) == _expect(*layers)
     assert list(loaded.qubit_labels) == labels
+    assert loaded == circ
+    assert hash(loaded) == hash(circ)
+
+
+def test_equality_compares_content(adapter):
+    a = adapter
+    layers = [[(a.v["h"], _q("Q0")), (a.v["x"], _q("Q1"))]]
+    other = [[(a.v["h"], _q("Q0")), (a.v["h"], _q("Q1"))]]
+    circ = a.make(layers, ["Q0", "Q1"])
+
+    assert circ != a.make(other, ["Q0", "Q1"])
+    assert circ != a.make(layers, ["Q1", "Q0"])
