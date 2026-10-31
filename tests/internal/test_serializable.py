@@ -5,6 +5,7 @@ import numpy as np
 import h5py
 
 from loqs.core import Frame
+from loqs.core.instructions import Instruction
 from loqs.internal.serializable import (
     Serializable,
     SERIALIZATION_VERSION,
@@ -156,6 +157,10 @@ class TestSerializableParameterized:
                 assert obj == loaded_obj
 
 
+def _frame_apply(state):
+    return Frame({"state": state})
+
+
 class TestSerializableNestedData:
     """Enhanced tests for nested data serialization."""
 
@@ -215,6 +220,25 @@ class TestSerializableNestedData:
         assert loaded.name == "circular1"
         assert loaded.data["ref"].name == "circular2"
         assert loaded.data["ref"].data["ref"] is loaded
+
+    def test_placeholder_reached_by_later_decode_is_replaced(self):
+        y = MockSerializable(name="y", value=1)
+        s = Instruction(_frame_apply, {"y": y}, name="S")
+        y = s.data["y"]
+        y.data["back"] = s
+        x = MockSerializable(name="x", value=2, data={"y": y})
+
+        enc_cache: dict = {}
+        enc_s = Serializable.encode(
+            s, format="json", encode_cache=enc_cache, reset_encode_id=True
+        )
+        enc_x = Serializable.encode(x, format="json", encode_cache=enc_cache)
+
+        dec_cache: dict = {}
+        Serializable.decode(enc_s, format="json", decode_cache=dec_cache)
+        x2 = Serializable.decode(enc_x, format="json", decode_cache=dec_cache)
+
+        assert isinstance(x2.data["y"].data["back"], Instruction)
 
     def test_iterable_encoding_both_codepaths(self, make_temp_path):
         """Test both HDF5 iterable encoding codepaths with caching improvements."""

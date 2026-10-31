@@ -247,6 +247,16 @@ place during one encode. It never outlives an encode: objects change in
 place between checkpoints, and `merge_dict_attr` holds one entry at a time.
 """
 
+_DEFERRED_REFS_HANDED_OUT: contextvars.ContextVar[int] = (
+    contextvars.ContextVar("deferred_refs_handed_out", default=0)
+)
+"""Count of `DeferredRef` placeholders `decode` has handed to a caller in
+this context. Every decode runs the placeholder walk once it's nonzero: a
+placeholder handed out by an earlier decode can sit in an object a later
+decode reaches by a plain reference, through a decode cache that spans
+decodes. It never resets.
+"""
+
 
 @dataclass
 class DeferredRef:
@@ -347,7 +357,10 @@ class ResolvingDecodeCache(dict):
     def _find_source_node_hdf5(self, node, target_cache_id):
         """Recursively search an HDF5 structure for a cache_type="source" node.
 
-        Searches real h5py.Group children and their $collapsed siblings.
+        Searches a group's collapsed blob before its real children. Cache
+        IDs are unique in a file, so the order can't change the match, and a
+        program keeps its array-free shared objects in its blob, behind
+        array-heavy groups such as a noise model's.
 
         Parameters
         ----------
@@ -370,14 +383,7 @@ class ResolvingDecodeCache(dict):
             if self._node_is_cache_source(node.attrs, target_cache_id):
                 return node
 
-            # Recurse into real children
-            for child_name in node.keys():
-                child = node[child_name]
-                result = self._find_source_node_hdf5(child, target_cache_id)
-                if result is not None:
-                    return result
-
-            # Also check the collapsed blob if present
+            # Check the collapsed blob if present
             from loqs.internal.encoder.hdf5encoder import _COLLAPSED_BLOB_NAME
 
             if _COLLAPSED_BLOB_NAME in node:
@@ -385,6 +391,13 @@ class ResolvingDecodeCache(dict):
                 result = self._find_source_in_collapsed_blob(
                     blob_dataset, target_cache_id
                 )
+                if result is not None:
+                    return result
+
+            # Recurse into real children
+            for child_name in node.keys():
+                child = node[child_name]
+                result = self._find_source_node_hdf5(child, target_cache_id)
                 if result is not None:
                     return result
 
@@ -1590,9 +1603,15 @@ class Serializable:
 
         # Handle cached object references
         try:
-            return decode_cached_obj(encoded)
+            cached = decode_cached_obj(encoded)
         except IncorrectDecodableTypeError:
             pass
+        else:
+            if isinstance(cached, DeferredRef):
+                _DEFERRED_REFS_HANDED_OUT.set(
+                    _DEFERRED_REFS_HANDED_OUT.get() + 1
+                )
+            return cached
 
         # Handle class type
         try:
@@ -1603,8 +1622,9 @@ class Serializable:
         # Handle Serializable
         try:
             result = decode_uncached_obj(encoded)
-            # Post-process to replace any placeholders with actual objects
-            if decode_cache is not None:
+            # The walk can only change an object holding a placeholder, and
+            # none in this context does until `decode` hands one out.
+            if _DEFERRED_REFS_HANDED_OUT.get():
                 result = Serializable._replace_placeholders(
                     result, decode_cache
                 )
