@@ -8,8 +8,9 @@ import os
 import sys
 import tempfile
 
+from loqs.backends import PyGSTiNoiseModel
 from loqs.core import QECCode
-from loqs.tools.qectools import walk_qec_code_gate_names
+from loqs.codepacks.base import walk_qec_code_gate_names
 
 from validation import engine
 from validation.engine import Op
@@ -94,6 +95,9 @@ def model_coverage(case, decl):
     # Model keys are `(name, qubits)` tuples.
     available = {k[0] for k in model.gate_keys}
     available |= {k[0] for k in model.instrument_keys}
+    if isinstance(model, PyGSTiNoiseModel):
+        # A Z measurement with reset needs no pyGSTi instrument
+        available.add("Imrz")
     missing = walk_qec_code_gate_names(code) - available
     failing = {}
     if missing:

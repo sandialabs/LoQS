@@ -25,10 +25,28 @@ python -m pytest validation -m "not big" -n auto --timeout 1800
 
 Select with `-k`; case ids are `<codepack>.<config>.<class>.<family>.<detail>`.
 
+## Where a codepack lives
+
+A codepack migrated to the class API has five parts:
+
+| Part | Path | Holds |
+|---|---|---|
+| Base class | `loqs/codepacks/base.py` | `BaseCodepack`, the gate-name walker and the shared `create_ideal_model()` |
+| Codepack | `loqs/codepacks/<name>/` | the subclass: options in `__init__`, the code in `create_qec_code()` |
+| Old entry points | `loqs/codepacks/codepack_<name>.py` | deprecated module-level wrappers that call the class |
+| Declaration | `validation/declarations/<name>.py` | what the code claims: data qubits, stabilizers, logical operators, each logical gate's Clifford action, preps, measures, QEC keys, internal keys, sweeps and known failures |
+| Record | `validation/records/<name>.json` | a hash of the declaration's `files` and every case result of the last full run |
+
+`QECCode` holds instructions and qubits only, so the declaration is the one
+place a codepack's stabilizers, logical operators and gate actions are
+written down. It stays outside the package so the harness checks the class
+against facts the class doesn't supply.
+
 ## Adding a declaration
 
 1. Write `validation/declarations/<name>.py` with a `DECLARATION`
-   (`CodepackDeclaration`, see `declaration.py`): files, configs and
+   (`CodepackDeclaration`, see `declaration.py`): files (a `BaseCodepack`
+   subclass's `files` include `loqs/codepacks/base.py`), configs and
    backends, preps, measures, gates, QEC keys, and every other instruction key
    under `internal` with the reason it has no check of its own. Derive
    stabilizers, logicals and gate actions from the codepack's documentation or

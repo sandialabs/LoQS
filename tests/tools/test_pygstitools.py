@@ -14,7 +14,7 @@ from loqs.backends import DictNoiseModel, STIMQuantumState, StimCircuitGateRep
 from loqs.core import PatchGeometry
 from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as steane_codepack
-from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.pygstitools import EdesignRunner
 
@@ -53,8 +53,10 @@ class _TrivialCounterSetup:
             ("Gxpi2", "Q0"): [("Increment", "L0")],
             "Mdefault": [],
         }
-        trivial_code = trivial_codepack.create_qec_code()
-        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+        trivial_code = TrivialCounterCodepack().create_qec_code()
+        ideal_model = TrivialCounterCodepack().create_ideal_model(
+            ["Q0"], model_backend=DictNoiseModel
+        )
         self.program_kwargs = dict(
             default_noise_model=ideal_model,
             patch_types={"Trivial": trivial_code},

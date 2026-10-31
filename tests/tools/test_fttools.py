@@ -10,7 +10,8 @@ from loqs.backends import PyGSTiPhysicalCircuit
 from loqs.core import Frame, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
-from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.backends.model.dictmodel import DictNoiseModel
+from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 from loqs.core.historydatacollector import HistoryDataCollector
 from loqs.tools import fttools
 from loqs.tools.multiprogramrunner import CheckpointConfig
@@ -40,9 +41,11 @@ def _build_circuit_program():
 def _build_counter_program():
     """A minimal, genuinely run-able QuantumProgram (no physical circuit
     at all) for exercising the run/collect-and-compare machinery."""
-    trivial_code = trivial_codepack.create_qec_code()
+    trivial_code = TrivialCounterCodepack().create_qec_code()
     qubits = ["Q0"]
-    ideal_model = trivial_codepack.create_ideal_model(qubits)
+    ideal_model = TrivialCounterCodepack().create_ideal_model(
+        qubits, model_backend=DictNoiseModel
+    )
     stack = [
         {
             "instruction": "Init Patch Trivial",

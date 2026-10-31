@@ -1,7 +1,7 @@
 """Declaration of the trivial counter codepack (no logical qubit)."""
 
 from loqs.backends.model.dictmodel import DictNoiseModel
-from loqs.codepacks import codepack_trivial_counter as module
+from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 
 from validation.declaration import (
     Backend,
@@ -15,16 +15,22 @@ BACKEND = Backend("dict", model_backend=DictNoiseModel)
 
 
 def build_code(config, backend):
-    return module.create_qec_code(**config.options)
+    return TrivialCounterCodepack(**config.options).create_qec_code()
 
 
 def build_model(config, qubits, backend):
-    return module.create_ideal_model(qubits)
+    return TrivialCounterCodepack(**config.options).create_ideal_model(
+        qubits, model_backend=backend.model_backend
+    )
 
 
 DECLARATION = CodepackDeclaration(
     name="trivial_counter",
-    files=("loqs/codepacks/codepack_trivial_counter.py",),
+    files=(
+        "loqs/codepacks/base.py",
+        "loqs/codepacks/trivial_counter/__init__.py",
+        "loqs/codepacks/codepack_trivial_counter.py",
+    ),
     patch_type="Counter",
     configs=(Config("default", classes=("static",), backends=(BACKEND,)),),
     build_code=build_code,

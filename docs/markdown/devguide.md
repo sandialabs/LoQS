@@ -108,7 +108,9 @@ Shipped codepacks are checked by a separate harness in `validation/`, which
 passing run writes one record per codepack under `validation/records/`. The
 default test suite fails when a file under `loqs/codepacks/` (or its
 declaration) changes after its record was written, so refresh and commit the
-record whenever you change a codepack.
+record whenever you change a codepack. A change to
+`loqs/codepacks/base.py` stales every subclass's record, since the base
+builds their models.
 
 ### Coverage
 

@@ -18,55 +18,6 @@ from collections.abc import Sequence
 import itertools
 from typing import Literal
 
-from loqs.core import QECCode
-from loqs.core.instructions import Instruction, InstructionLabel
-
-
-def walk_qec_code_gate_names(code: QECCode) -> set[str]:
-    """Recursively walk QEC code instructions and collect gate names.
-
-    Walks through every Instruction in the code, resolving composite
-    instructions down to physical-circuit leaves and collecting the union of
-    all gate/instrument op names actually reachable. Returns an undifferentiated
-    flat set mixing gate names (e.g. "Gxpi") with instrument names (e.g. "Imrz").
-    """
-    visited: set[int] = set()
-    gate_names: set[str] = set()
-
-    def _walk(inst: Instruction) -> None:
-        inst_id = id(inst)
-        if inst_id in visited:
-            return
-        visited.add(inst_id)
-
-        data = inst.data
-        if "instructions" in data:
-            # Composite-like instruction (Composite or Repeat-until-success)
-            for entry in data["instructions"]:
-                label = InstructionLabel.from_raw(entry)
-                if "patch_label" in label:
-                    raise ValueError(
-                        "Patch-level instruction resolution is out of scope for "
-                        "a single QECCode's static instruction tree"
-                    )
-                if "instruction" in label:
-                    instr_entry = label["instruction"]
-                    if isinstance(instr_entry, Instruction):
-                        _walk(instr_entry)
-                    elif isinstance(instr_entry, str):
-                        resolved = code.instructions[instr_entry]
-                        _walk(resolved)
-        elif "circuit" in data:
-            # Circuit leaf instruction
-            circuit = data["circuit"]
-            gate_names.update(circuit.used_gate_names)
-
-    # Walk all top-level instructions
-    for inst in code.instructions.values():
-        _walk(inst)
-
-    return gate_names
-
 
 def get_syndrome_from_stabilizers_and_pstr(
     stabilizers: Sequence[str], pstr: str

@@ -25,7 +25,8 @@ from _shared_checkpoint_test_helpers import (
 )
 from tqdm import tqdm as orig_tqdm
 
-from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.backends.model.dictmodel import DictNoiseModel
+from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 from loqs.core import QuantumProgram
 from loqs.core.programresults import ProgramResults
 from loqs.internal import worker_id
@@ -98,12 +99,14 @@ def _raise_after_n(item, index, *, shot_executor, **kwargs):
 def _build_counter_program(
     num_increments, increment_by, name="Trivial counter test program"
 ):
-    """Build a QuantumProgram via codepack_trivial_counter: an Init Counter
+    """Build a QuantumProgram via TrivialCounterCodepack: an Init Counter
     (starting at 0) followed by num_increments Increment instructions, each
     adding increment_by -- final counter value is num_increments * increment_by.
     """
-    trivial_code = trivial_codepack.create_qec_code()
-    ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+    trivial_code = TrivialCounterCodepack().create_qec_code()
+    ideal_model = TrivialCounterCodepack().create_ideal_model(
+        ["Q0"], model_backend=DictNoiseModel
+    )
     stack = [
         {
             "instruction": "Init Patch Trivial",
@@ -317,8 +320,10 @@ class _SleepingRunner(MultiProgramRunner):
     def build_program(self, index):
         item = self.items[index]
         sign = 1 if item >= 0 else -1
-        trivial_code = trivial_codepack.create_qec_code()
-        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+        trivial_code = TrivialCounterCodepack().create_qec_code()
+        ideal_model = TrivialCounterCodepack().create_ideal_model(
+            ["Q0"], model_backend=DictNoiseModel
+        )
         stack = [
             {
                 "instruction": "Init Patch Trivial",
@@ -602,8 +607,10 @@ class _CustomFilenameProbeRunner(MultiProgramRunner):
     def build_program(self, index):
         item = self.items[index]
         sign = 1 if item >= 0 else -1
-        trivial_code = trivial_codepack.create_qec_code()
-        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+        trivial_code = TrivialCounterCodepack().create_qec_code()
+        ideal_model = TrivialCounterCodepack().create_ideal_model(
+            ["Q0"], model_backend=DictNoiseModel
+        )
         stack = [
             {
                 "instruction": "Init Patch Trivial",

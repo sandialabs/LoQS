@@ -18,7 +18,8 @@ from loqs.internal.checkpointstore import (
 )
 from loqs.internal.serializable import Serializable
 from loqs.core.history import History
-from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.backends.model.dictmodel import DictNoiseModel
+from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 from tests.tools._shared_checkpoint_test_helpers import (
     InlineExecutor,
     inline_execution_patches,
@@ -44,7 +45,7 @@ _SEED_COUNTER_INSTRUCTION = Instruction(
 def _build_seeded_counter_program(state_type=None, name="seeded counter"):
     """A program whose shot `i` ends with `counter == i + 1`. With a
     `state_type`, the program also initializes that state."""
-    trivial_code = trivial_codepack.create_qec_code()
+    trivial_code = TrivialCounterCodepack().create_qec_code()
     qubits = ["Q0"]
     stack = [
         {
@@ -72,7 +73,9 @@ def _build_seeded_counter_program(state_type=None, name="seeded counter"):
         kwargs["state_type"] = state_type
     return QuantumProgram(
         stack,
-        default_noise_model=trivial_codepack.create_ideal_model(qubits),
+        default_noise_model=TrivialCounterCodepack().create_ideal_model(
+            qubits, model_backend=DictNoiseModel
+        ),
         patch_types={"Trivial": trivial_code},
         global_instructions={
             "Init Counter From Seed": _SEED_COUNTER_INSTRUCTION
@@ -89,7 +92,7 @@ def _build_state_program(
     """A program that initializes a state and a patch. With `increments`
     (a sequence, possibly empty) it also initializes a counter and
     increments it by each value."""
-    trivial_code = trivial_codepack.create_qec_code()
+    trivial_code = TrivialCounterCodepack().create_qec_code()
     qubits = ["Q0"]
     stack = [
         {
@@ -121,7 +124,9 @@ def _build_state_program(
             )
     return QuantumProgram(
         stack,
-        default_noise_model=trivial_codepack.create_ideal_model(qubits),
+        default_noise_model=TrivialCounterCodepack().create_ideal_model(
+            qubits, model_backend=DictNoiseModel
+        ),
         state_type=state_type,
         patch_types={"Trivial": trivial_code},
         name=name,
@@ -759,7 +764,7 @@ class TestResolveShotBatching:
 
     def _build_simple_program(self):
         """Build a minimal program for testing."""
-        trivial_code = trivial_codepack.create_qec_code()
+        trivial_code = TrivialCounterCodepack().create_qec_code()
         qubits = ["Q0"]
         stack = [
             {
@@ -770,7 +775,9 @@ class TestResolveShotBatching:
         ]
         return QuantumProgram(
             stack,
-            default_noise_model=trivial_codepack.create_ideal_model(qubits),
+            default_noise_model=TrivialCounterCodepack().create_ideal_model(
+                qubits, model_backend=DictNoiseModel
+            ),
             patch_types={"Trivial": trivial_code},
             default_base_seed=0,
             name="Simple test",

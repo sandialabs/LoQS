@@ -6,82 +6,25 @@
 # in compliance with the License.  You may obtain a copy of the License at                                          #
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
-"""A trivial `LoQS` QEC codepack for testing purposes.
-This implementation provides a simple counter-like behavior where a "state"
-value can be incremented. This is purely for demonstration and testing purposes.
+"""Deprecated function wrappers for the trivial counter codepack.
+
+Use [](api:TrivialCounterCodepack) instead.
 """
 
-import time
 from loqs.backends.model.dictmodel import DictNoiseModel
-from loqs.core import Instruction, QECCode
-from loqs.core.frame import Frame
+from loqs.codepacks.trivial_counter import TrivialCounterCodepack
+from loqs.internal.legacy import deprecated
 
 
+@deprecated("TrivialCounterCodepack().create_qec_code()")
 def create_qec_code():
-    """Create a trivial QECCode for testing.
-
-    This codepack implements a simple counter with an increment instruction.
-
-    Returns
-    -------
-    QECCode
-        A [](api:QECCode) implementing the trivial counter code.
-    """
-    # We don't need actual qubits for this trivial example
-    # but we'll define a minimal template structure
-    qubits = ["Q0"]  # Single "qubit" for simplicity
-    data_qubits = ["Q0"]
-    instructions: dict[str, Instruction] = {}
-
-    # Define the increment instruction
-    def increment_apply_fn(counter: int, increment_by: int) -> Frame:
-        """Apply function for the increment instruction."""
-        new_state = counter + increment_by
-        return Frame({"counter": new_state})
-
-    # Define an instruction to initialize the state
-    def init_counter_apply_fn(initial_value: int) -> Frame:
-        """Apply function to initialize the state."""
-        return Frame({"counter": initial_value})
-
-    # Define a sleep instruction
-    def sleep_apply_fn(duration: float, counter: int | None = None) -> Frame:
-        """Apply function for the sleep instruction."""
-        time.sleep(duration)
-        return Frame({"counter": counter})
-
-    instructions["Increment"] = Instruction(
-        increment_apply_fn,
-        data={"increment_by": 1},
-        param_priorities={"counter": ["history[-1]"]},
-        name="Increment counter by 1",
-    )
-
-    instructions["Init Counter"] = Instruction(
-        init_counter_apply_fn,
-        data={"initial_value": 0},
-        name="Initialize counter",
-    )
-
-    instructions["Sleep"] = Instruction(
-        sleep_apply_fn,
-        data={"duration": 0.0, "counter": None},
-        param_priorities={"counter": ["history[-1]", "instruction"]},
-        name="Sleep for duration",
-    )
-
-    code = QECCode(instructions, qubits, data_qubits, "Trivial Counter Code")
-    return code
+    """Create the trivial counter [](api:QECCode)."""
+    return TrivialCounterCodepack().create_qec_code()
 
 
+@deprecated("TrivialCounterCodepack().create_ideal_model()")
 def create_ideal_model(qubits=None):
-    """Create an ideal (noiseless) model for the trivial code.
-
-    Returns
-    -------
-    BaseNoiseModel
-        An empty [](api:DictNoiseModel) representing no operations needed for this trivial code.
-    """
-    # For this trivial classical counter, we don't need any quantum operations
-    # Return an empty DictNoiseModel
-    return DictNoiseModel({}, {})
+    """Create an empty [](api:DictNoiseModel) for the trivial counter."""
+    return TrivialCounterCodepack().create_ideal_model(
+        qubits or [], model_backend=DictNoiseModel
+    )

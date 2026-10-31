@@ -310,7 +310,8 @@ def _trivial_codepack_program() -> QuantumProgram:
     """A one-qubit trivial-codepack program whose frames hold `patches`,
     with a `QECCode` from the program's `patch_types`."""
     from loqs.backends import QSimQuantumState
-    from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+    from loqs.backends.model.dictmodel import DictNoiseModel
+    from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 
     qubits = ["Q0"]
     stack: list[dict[str, Any]] = [
@@ -337,9 +338,11 @@ def _trivial_codepack_program() -> QuantumProgram:
     ]
     return QuantumProgram(
         stack,
-        default_noise_model=trivial_codepack.create_ideal_model(qubits),
+        default_noise_model=TrivialCounterCodepack().create_ideal_model(
+            qubits, model_backend=DictNoiseModel
+        ),
         state_type=QSimQuantumState,
-        patch_types={"Trivial": trivial_codepack.create_qec_code()},
+        patch_types={"Trivial": TrivialCounterCodepack().create_qec_code()},
         default_base_seed=0,
         name="Trivial codepack program",
     )
