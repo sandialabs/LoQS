@@ -475,11 +475,11 @@ class TestBackendAgreement:
                 ones,
             ),
             "noise-channel": (
-                "X_ERROR(1) 2 0\nTICK\nM 0 1 2",
-                ["a", "b", "c"],
+                "X_ERROR(1) 2 0\nPAULI_CHANNEL_1(0, 1, 0) 3\nTICK\nM 0 1 2 3",
+                ["a", "b", "c", "d"],
                 {},
                 [StimCircuitGateRep],
-                {"a": [1], "b": [0], "c": [1]},
+                {"a": [1], "b": [0], "c": [1], "d": [1]},
             ),
         }
         text, labels, gates, gatereps, expected = cases[case]

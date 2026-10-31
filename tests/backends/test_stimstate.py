@@ -150,18 +150,34 @@ class TestSTIMQuantumState:
         assert outs["Q0"] == [0]
 
     @pytest.mark.parametrize(
-        "rep_class, text",
+        "rep_class, text, error",
         [
-            pytest.param(StimCircuitInstrumentRep, "MZZ 0 1", id="joint"),
             pytest.param(
-                StimCircuitGateRep, "HERALDED_ERASE(1) 0", id="heralded"
+                StimCircuitInstrumentRep,
+                "MZZ 0 1",
+                NotImplementedError,
+                id="joint",
             ),
-            pytest.param(StimCircuitInstrumentRep, "M[t] 0", id="tagged"),
+            pytest.param(
+                StimCircuitGateRep,
+                "HERALDED_ERASE(1) 0",
+                NotImplementedError,
+                id="heralded",
+            ),
+            pytest.param(
+                StimCircuitInstrumentRep,
+                "M[t] 0",
+                NotImplementedError,
+                id="tagged",
+            ),
+            pytest.param(
+                StimCircuitGateRep, "H[t 0", AssertionError, id="malformed"
+            ),
         ],
     )
-    def test_unrecordable_measurement_raises(self, rep_class, text):
+    def test_unsupported_rep_text_raises(self, rep_class, text, error):
         state = STIMState([0, 0], ["Q0", "Q1"])
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(error):
             state.apply_reps_inplace([rep_class(text, ["Q0", "Q1"])])
 
     def test_pickle_round_trip(self):

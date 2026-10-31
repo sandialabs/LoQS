@@ -18,6 +18,10 @@ import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
 from loqs.backends import is_backend_available
+from loqs.backends.circuit.stimcircuit import (
+    _STIM_LINE,
+    _separate_stimcircuit_instruction,
+)
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
@@ -294,12 +298,18 @@ class STIMQuantumState(BaseQuantumState):
         internal_lines = []
         global_lines = []
         for line in circuit_str.split("\n"):
-            if len(line) == 0:
-                # Skip empty line
+            # Parse the line rather than splitting it on whitespace, since
+            # its arguments may hold spaces, e.g. PAULI_CHANNEL_1(0.1, 0.2, 0.3)
+            instruction = _separate_stimcircuit_instruction(line)[0]
+            if len(instruction) == 0:
+                # Skip empty line or comment
                 continue
 
-            entries = line.split()
-            command = entries[0].split("(")[0]
+            match = _STIM_LINE.match(instruction)
+            assert match is not None, f"Not a STIM instruction: {line!r}"
+            name, tag, args, rest = match.groups("")
+            command = name + tag
+            targets = rest.split()
 
             # Refuse before mapping targets or running anything
             if command in self._unrecorded_measurements:
@@ -307,34 +317,36 @@ class STIMQuantumState(BaseQuantumState):
                     f"STIMQuantumState can't record the outcomes of {command}"
                 )
 
-            # instruction is unchanged
-            internal_entries = [entries[0]] + [
-                local_to_internal[e] for e in entries[1:]
-            ]
-
             # Pull measurement labels, if they exist
             if command in self._recorded_measurements:
                 self.latest_measurement_labels.extend(
-                    self.qubit_labels[int(me.strip("!"))]
-                    for me in internal_entries[1:]
+                    self.qubit_labels[int(local_to_internal[t].strip("!"))]
+                    for t in targets
                 )
 
-            internal_lines.append(" ".join(internal_entries))
+            # Instruction and arguments are unchanged
+            internal_lines.append(
+                " ".join(
+                    [command + args, *(local_to_internal[t] for t in targets)]
+                )
+            )
+            global_lines.append(
+                " ".join(
+                    [
+                        command + args,
+                        *(str(local_to_global[t]) for t in targets),
+                    ]
+                )
+            )
 
-            global_entries = [entries[0]]  # instruction is unchanged
-            global_entries += [str(local_to_global[e]) for e in entries[1:]]
-            global_lines.append(" ".join(global_entries))
-
-        internal_circuit_str = "\n".join(internal_lines)
-        internal_circuit = _Circuit(internal_circuit_str)
+        internal_circuit = _Circuit("\n".join(internal_lines))
         self.state.do_circuit(internal_circuit)
 
         # Save executed circuit, needed for decoding via pymatching
         # This one we do in global labels since we don't need the smaller internal space,
         # and this is less confusing to read off
         try:
-            global_circuit_str = "\n".join(global_lines)
-            self.latest_applied_circuit += _Circuit(global_circuit_str)
+            self.latest_applied_circuit += _Circuit("\n".join(global_lines))
         except ValueError:
             # STIM failed to convert, our global labels are probably non-int strings
             # Fall back to internal representation

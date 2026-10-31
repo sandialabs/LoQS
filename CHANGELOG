@@ -7,7 +7,7 @@
   - **STIM layer edits expand `REPEAT` blocks:** `STIMPhysicalCircuit` layer edits work on the expanded layers.
   - **`STIMPhysicalCircuit.insert` negative `idx`:** A negative `idx` is treated as list slicing treats it, so `-1` inserts before the last layer (it used to append on a circuit ending in `TICK`).
   - **STIM lookups in `DictNoiseModel`:** A key like `("X", ("0",))` no longer matches label `0`, and raises `KeyError` when a generic entry would otherwise stand in for it. A failed lookup raises `KeyError`, not `AssertionError`.
-  - **Noise-channel lines:** They are applied on `STIMQuantumState` (they used to be dropped with a warning) and refused on a dense state.
+  - **Noise-channel lines:** They are applied on `STIMQuantumState` (they used to be dropped with a warning) and refused on a dense state. `E`, `CORRELATED_ERROR` and `ELSE_CORRELATED_ERROR` (Pauli targets) raise `NotImplementedError` in `DictNoiseModel`, and heralded channels raise on `STIMQuantumState`.
   - **Generic non-STIM reps on a fused line:** They give one rep per target.
   - **Wider `output_gate_reps`/`output_instrument_reps`:** They also list the types the model can convert to.
   - **Unsupported STIM instructions:** Tagged instructions and the operations no `STIMPhysicalCircuit` list names raise `NotImplementedError` in `DictNoiseModel`.
@@ -21,7 +21,7 @@
   - **Layer edits:** The four layer edits agree with or without a final `TICK`.
   - **STIM lookup in `DictNoiseModel`:** It keeps label types, gives a generic key one rep per target group in order, and runs STIM circuits with `TICK`s and annotations on the dense states.
   - **Rep conversion:** `DictNoiseModel` converts reps to the types a state asks for.
-  - **Noise channels:** STIM noise-channel lines are applied on `STIMQuantumState`.
+  - **Noise channels:** STIM noise-channel lines are applied on `STIMQuantumState`, including multi-argument ones (`PAULI_CHANNEL_1`, `PAULI_CHANNEL_2`), and a `StimCircuitGateRep` whose text spaces its arguments now runs there.
   - **Joint measurements:** They are refused on `STIMQuantumState`, and each `StimCircuitInstrumentRep` reads only the record bits its own circuit wrote.
   - **`DictNoiseModel.from_model`:** It builds the model from a real `PyGSTiNoiseModel`, and copies keep their rep types.
 
