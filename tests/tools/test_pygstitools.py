@@ -224,6 +224,27 @@ class TestSimulateDatasetForEdesignCheckpointing:
             assert ds[s.circs[0]].counts[("0",)] == 1
             assert ds[s.circs[1]].counts[("1",)] == 1
 
+    def test_fresh_runner_resumes_with_surf17_instruction(
+        self, trivial_counter_setup, tmp_path
+    ):
+        pytest.importorskip("pymatching")
+        from loqs.codepacks import codepack_surf17_tomita2014 as surf17
+
+        s = trivial_counter_setup
+        se = surf17.create_qec_code(layout="surf17").instructions[
+            "Syndrome Extraction"
+        ]
+        # A gate no edesign circuit uses, so the instruction is stored
+        # and compared on resume but never run.
+        p2l = {**s.physical_to_logical, ("Gypi2", "Q0"): [(se, "L0")]}
+        ckpt = tmp_path / "checkpoint"
+
+        s.simulate(ckpt, physical_to_logical=p2l)
+        ds = s.simulate(ckpt, physical_to_logical=p2l)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
     def test_read_and_run_resumes_transversal_cx(self, tmp_path, monkeypatch):
         """An interrupted run with a transversal CX resumes through
         `read(path).run()` without `force_resume`: the decoded CX equals

@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## [Unreleased Changes]
+
+### Fixed
+- **Decoded codepack instructions run and compare equal to fresh ones (#151, @sserita):** Instructions from the built-in codepacks, read back from disk, now run and compare equal to freshly built ones, so a fresh-runner resume no longer needs `force_resume`.
+  - **Codepack functions that raised `NameError`:** The 5Q `"Unflagged Decoder"` and the surf17 `"FT Logical Z Measure"` and `"FT Logical X Measure"` parity functions raised `NameError` once read back from a file, since they read values from the function that built them. Files written before the fix still do, and need rebuilding.
+  - **Physical circuits compare by content:** Two physical circuits are now equal when they have the same class, the same qubit labels in order, and the same backend circuit, instead of only when they are the same object. Their hash is per class, so equal circuits now collide as dict keys.
+  - **Closure warning:** Building an instruction whose `apply_fn` or `map_qubits_fn` closes over its builder's local variables now warns, since such a function can't be restored faithfully from a file.
+
 ## [1.3] - 2026-10-22
 
 ### New
