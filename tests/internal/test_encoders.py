@@ -161,6 +161,33 @@ class TestComprehensiveArrayEncoding:
                         assert isinstance(decoded, np.ndarray)
                         assert np.allclose(decoded, arr)
 
+    @pytest.mark.parametrize(
+        "arr",
+        [
+            np.array(
+                [complex(1, np.nan), complex(2, np.inf), complex(-0.5, -0.0)]
+            ),
+            np.array(complex(-0.5, -0.0)),
+        ],
+        ids=["1d", "0d"],
+    )
+    def test_complex_array_hdf5_roundtrip_is_bit_exact(
+        self, arr, make_temp_path
+    ):
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                root_group = h5_file.create_group("root")
+                HDF5Encoder.encode_array(arr, h5_group=root_group)
+
+            with h5py.File(temp_file, "r") as h5_file:
+                root_group = h5_file["root"]
+                assert isinstance(root_group, h5py.Group)
+                decoded = HDF5Encoder.decode_array(root_group)
+
+        assert decoded.dtype == arr.dtype
+        assert decoded.shape == arr.shape
+        assert decoded.tobytes() == arr.tobytes()
+
 
 _MIXED_LIST = [1, "string", 3.14, MockSerializable(name="test", value=42)]
 
