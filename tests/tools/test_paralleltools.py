@@ -1,6 +1,7 @@
 """Tester for loqs.tools.paralleltools"""
 
 import sys
+import types
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
@@ -284,16 +285,63 @@ class TestParallelStrategy:
         finally:
             pool.shutdown()
 
+    def test_mpi4py_spec_builds_pool_with_its_kwargs(self, monkeypatch):
+        """The MPI builder imports `MPIPoolExecutor` from
+        `mpi4py.futures` and forwards every keyword argument."""
+
+        class _FakeMPIPoolExecutor:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        futures_module = types.ModuleType("mpi4py.futures")
+        monkeypatch.setattr(
+            futures_module,
+            "MPIPoolExecutor",
+            _FakeMPIPoolExecutor,
+            raising=False,
+        )
+        monkeypatch.setitem(sys.modules, "mpi4py", types.ModuleType("mpi4py"))
+        monkeypatch.setitem(sys.modules, "mpi4py.futures", futures_module)
+
+        spec = ExecutorSpec.mpi4py(max_workers=3, env={"OMP_NUM_THREADS": "1"})
+        built = spec()
+        assert isinstance(built, _FakeMPIPoolExecutor)
+        assert built.kwargs == {
+            "max_workers": 3,
+            "env": {"OMP_NUM_THREADS": "1"},
+        }
+
 
 class TestExecutorSpecAndParallelStrategySerialization:
     """`ExecutorSpec`/`ParallelStrategy` are `Serializable`, needed so a
     `MultiProgramRunner` holding either can survive a `.write()`/`.read()`
     round-trip (e.g. as part of its own crash-recovery snapshot)."""
 
-    @pytest.mark.parametrize("case", ["serial", "executors"])
-    def test_parallel_strategy_round_trip(self, tmp_path, case):
+    @pytest.mark.parametrize("fmt", ["json", "hdf5"])
+    @pytest.mark.parametrize(
+        "case", ["serial", "executors", "specs", "live_shot"]
+    )
+    def test_parallel_strategy_round_trip(self, tmp_path, case, fmt):
         if case == "serial":
             strategy = ParallelStrategy(n_program_chunks=2, n_shot_batches=7)
+        elif case == "live_shot":
+            loky = pytest.importorskip("loky")
+            strategy = ParallelStrategy(
+                shot_executor=loky.get_reusable_executor(max_workers=1)
+            )
+        elif case == "specs":
+            strategy = ParallelStrategy(
+                program_executor=ExecutorSpec.submitit(
+                    tmp_path / "logs",
+                    timeout_min=30,
+                    slurm_setup=["module load x"],
+                    slurm_additional_parameters={"exclusive": True},
+                ),
+                n_program_chunks=2,
+                shot_executor=ExecutorSpec.mpi4py(
+                    max_workers=3, env={"OMP_NUM_THREADS": "1"}
+                ),
+            )
         else:
             loky = pytest.importorskip("loky")
             strategy = ParallelStrategy(
@@ -301,10 +349,16 @@ class TestExecutorSpecAndParallelStrategySerialization:
                 n_program_chunks=2,
                 shot_executor=ExecutorSpec("loky", {"max_workers": 1}),
             )
-        path = tmp_path / "strategy.json"
+        path = tmp_path / ("strategy.json" if fmt == "json" else "strategy.h5")
         strategy.write(path)
         loaded = ParallelStrategy.read(path)
-        if case == "serial":
+        if case == "specs":
+            assert loaded == strategy
+        elif case == "live_shot":
+            assert loaded.shot_executor == ExecutorSpec(
+                "loky", {"max_workers": 1}
+            )
+        elif case == "serial":
             assert loaded.program_executor is None
             assert loaded.shot_executor is None
             assert loaded.n_program_chunks == 2
@@ -665,6 +719,18 @@ class TestProfileStrategies:
                     {"fast": strategy},
                     sample_interval=5.0,
                 )
+
+    def test_repeats_below_one_is_refused_before_any_run(self):
+        def failing_work_fn(strategy):
+            raise RuntimeError("work_fn must not run")
+
+        with pytest.raises(ValueError):
+            profile_strategies(
+                failing_work_fn,
+                {"serial": ParallelStrategy()},
+                repeats=0,
+                warmup=True,
+            )
 
     def test_reuse_slurm_allocation_requires_a_real_allocation(
         self, monkeypatch

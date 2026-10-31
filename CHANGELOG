@@ -2,11 +2,24 @@
 
 ## [Unreleased Changes]
 
+### New
+- **`ExecutorSpec.submitit` and `ExecutorSpec.mpi4py` (`loqs.tools.paralleltools`, #150, @sserita):** Data-only constructors that build a `submitit.AutoExecutor` or an `mpi4py.futures.MPIPoolExecutor`, avoiding the need for a hand-written module-level factory.
+
+### Changed
+- **Checkpointing refuses thread executors (#150, @sserita):** With item or shot checkpointing on, a `ThreadPoolExecutor` (or a subclass) given as `program_executor` or `shot_executor` raises `ValueError` before any work starts.
+
 ### Fixed
+- **Windows recovery of a killed writer's ledger (#150, @sserita):** On Windows, a checkpoint that reuses a killed writer's explicit `worker_id` now rebuilds its ledger and resumes, as on Linux and macOS, instead of failing with HDF5's stale "open for write" error.
 - **Decoded codepack instructions run and compare equal to fresh ones (#151, @sserita):** Instructions from the built-in codepacks, read back from disk, now run and compare equal to freshly built ones, so a fresh-runner resume no longer needs `force_resume`.
   - **Codepack functions that raised `NameError`:** The 5Q `"Unflagged Decoder"` and the surf17 `"FT Logical Z Measure"` and `"FT Logical X Measure"` parity functions raised `NameError` once read back from a file, since they read values from the function that built them. Files written before the fix still do, and need rebuilding.
   - **Physical circuits compare by content:** Two physical circuits are now equal when they have the same class, the same qubit labels in order, and the same backend circuit, instead of only when they are the same object. Their hash is per class, so equal circuits now collide as dict keys.
   - **Closure warning:** Building an instruction whose `apply_fn` or `map_qubits_fn` closes over its builder's local variables now warns, since such a function can't be restored faithfully from a file.
+- **`loqs.tools` fixes (#155, @sserita):** Fixes four bugs found while slimming the test suite.
+  - `get_state_probs_phases`/`print_state_probs_phases` work at any qubit count, not just 7, and raise `ValueError` for a state whose signs they can't determine (e.g. a GHZ state) instead of printing wrong ones
+  - Reading a v1.0/v1.1 program with `migrate_legacy_fns=True` takes about 2 s instead of about 17 s, and `loqs-migrate` no longer stalls on a file that only mentions old names in comments or docstrings
+  - `loqs-migrate` also reports renames made through a module import (e.g. `loqs.core.PatchDict`), and flags removed names used that way
+  - `loqs-migrate --dry-run` exits 1 when it would rewrite a file, so it works as a CI gate
+  - `profile_strategies` raises `ValueError` for `repeats < 1` before running anything
 
 ## [1.3] - 2026-10-22
 

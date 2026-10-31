@@ -26,7 +26,7 @@ from tqdm import tqdm
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, Frame
-from loqs.core.executors import SubmitExecutor
+from loqs.core.executors import SubmitExecutor, _refuse_thread_executor
 from loqs.core.history import (
     History,
     HistoryLike,
@@ -714,7 +714,9 @@ class QuantumProgram(Displayable):
             shots in serial. Each worker pins its own thread pools to
             one thread before running, avoiding BLAS/OpenMP
             oversubscription regardless of how many workers
-            `shot_executor` itself spawns.
+            `shot_executor` itself spawns. A `ThreadPoolExecutor` raises
+            `ValueError` with `checkpoint=True`, since threads share one
+            per-process progress ledger.
 
         verbose:
             Whether to write a progress bar (`True`, default) or not (`False`)
@@ -830,6 +832,8 @@ class QuantumProgram(Displayable):
         # State machine validation: explicit checkpoint/resume flags
         if resume and not checkpoint:
             raise ValueError("resume=True requires checkpoint=True")
+        if checkpoint:
+            _refuse_thread_executor(shot_executor, "shot_executor")
 
         checkpoint_enabled = checkpoint
 
