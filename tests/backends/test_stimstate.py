@@ -137,8 +137,10 @@ class TestSTIMQuantumState:
         # each outcome back to its correct global qubit label.
         state01 = STIMState([0, 1], ["Q0", "Q1"])
         mm_rep = StimCircuitInstrumentRep("M 0 1", ["Q0", "Q1"])
-        outs = state01.apply_reps_inplace([mm_rep])
-        assert outs == {"Q0": [0], "Q1": [1]}
+        outs = state01.apply_reps_inplace(
+            [mm_rep, StimCircuitInstrumentRep("M 0", ["Q1"])]
+        )
+        assert outs == {"Q0": [0], "Q1": [1, 1]}
 
         # Negated target: physical qubit is |1>, negated target flips the
         # recorded outcome to 0.
@@ -146,6 +148,37 @@ class TestSTIMQuantumState:
         neg_m_rep = StimCircuitInstrumentRep("M 0", ["!Q0"])
         outs = state1c.apply_reps_inplace([neg_m_rep])
         assert outs["Q0"] == [0]
+
+    @pytest.mark.parametrize(
+        "rep_class, text, error",
+        [
+            pytest.param(
+                StimCircuitInstrumentRep,
+                "MZZ 0 1",
+                NotImplementedError,
+                id="joint",
+            ),
+            pytest.param(
+                StimCircuitGateRep,
+                "HERALDED_ERASE(1) 0",
+                NotImplementedError,
+                id="heralded",
+            ),
+            pytest.param(
+                StimCircuitInstrumentRep,
+                "M[t] 0",
+                NotImplementedError,
+                id="tagged",
+            ),
+            pytest.param(
+                StimCircuitGateRep, "H[t 0", AssertionError, id="malformed"
+            ),
+        ],
+    )
+    def test_unsupported_rep_text_raises(self, rep_class, text, error):
+        state = STIMState([0, 0], ["Q0", "Q1"])
+        with pytest.raises(error):
+            state.apply_reps_inplace([rep_class(text, ["Q0", "Q1"])])
 
     def test_pickle_round_trip(self):
         """A plain pickle must carry the tableau across a process boundary."""

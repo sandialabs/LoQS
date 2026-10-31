@@ -46,11 +46,36 @@ def test_init():
     assert circ6.qubit_labels == ["A", "B"]
     assert circ6.circuit.num_qubits == 2
 
+    # copy() keeps the circuit as it is, for any integer labels
+    circ7 = STIMPhysicalCircuit("H 0\nTICK\nCX 0 1", [1, 0])
+    assert circ7.copy().circuit == circ7.circuit
+    assert circ7.copy().qubit_labels == [1, 0]
 
-def test_wrong_label_count_raises():
-    circ = STIMPhysicalCircuit("H 0\nTICK\nCX 0 5")
-    with pytest.raises(ValueError):
-        STIMPhysicalCircuit(circ, ["A"])
+
+@pytest.mark.parametrize("case", ["fewer", "past-end"])
+def test_wrong_label_count_raises(case):
+    if case == "fewer":
+        circ = STIMPhysicalCircuit("H 0\nTICK\nCX 0 5")
+        with pytest.raises(ValueError):
+            STIMPhysicalCircuit(circ, ["A"])
+        with pytest.raises(ValueError):
+            circ.set_qubit_labels_inplace(["A"])
+    else:
+        with pytest.raises(ValueError):
+            STIMPhysicalCircuit(stim.Circuit("CX 0 5\nTICK"), ["A", "B", "C"])
+
+
+def test_unused_labels():
+    circ = STIMPhysicalCircuit(stim.Circuit("H 0\nTICK"), [0, 1])
+    assert circ.qubit_labels == [0, 1]
+    assert circ.circuit == stim.Circuit("H 0\nTICK")
+
+    # More labels than used indices is positional: index 1 acts on "B"
+    circ = STIMPhysicalCircuit(stim.Circuit("H 1\nTICK"), ["A", "B"])
+    assert circ.circuit == stim.Circuit("H 1\nTICK")
+    copied = circ.copy()
+    assert copied.qubit_labels == ["A", "B"]
+    assert copied.circuit == circ.circuit
 
 
 def test_sparse_circuit_compactness():
@@ -126,37 +151,48 @@ def test_no_tick_warning_emitted():
         STIMPhysicalCircuit("H 0\nCX 0 1", ["Q0", "Q1"])
 
 
-@pytest.mark.parametrize("case", ["mpp", "merge-collision", "too-few-labels"])
+@pytest.mark.parametrize("case", ["mpp", "merge-collision"])
 def test_unsupported_input_raises(case):
     if case == "mpp":
         with pytest.raises(ValueError):
             STIMPhysicalCircuit("MPP 0 1\nTICK")
-    elif case == "merge-collision":
+    else:
         circ1 = STIMPhysicalCircuit("H 0\nTICK\nX 0", ["Q0"])
         circ2 = STIMPhysicalCircuit("Y 0\nTICK\nZ 0", ["Q0"])
         with pytest.raises(ValueError):
             circ1.merge_inplace(circ2, 0)
-    else:
-        circ = STIMPhysicalCircuit("H 0\nTICK\nCX 0 1", ["Q0", "Q1"])
-        with pytest.raises(ValueError):
-            circ.set_qubit_labels_inplace(["A"])
 
 
-def test_merge():
-    # The incoming circuit must not end with a TICK
-    circ1 = STIMPhysicalCircuit("H Q0\nTICK\nX Q1", ["Q0", "Q1"])
-    circ2 = STIMPhysicalCircuit("Y Q1\nTICK\nZ Q2", ["Q1", "Q2"])
+def test_layer_edits_unroll_repeats_and_tagged_ticks():
+    circ = STIMPhysicalCircuit(
+        "H 0\nTICK[a]\nREPEAT 2 {\n    X 0\n    TICK\n}\nY 1",
+        ["Q0", "Q1"],
+    )
+    assert circ.get_possible_discrete_error_locations() == [
+        (0, 0),
+        (1, 0),
+        (2, 0),
+        (3, 1),
+    ]
 
-    circ1.merge_inplace(circ2, 0)
+    base = STIMPhysicalCircuit("Z 1\nTICK\nZ 1\nTICK", ["Q0", "Q1"])
+    assert base.insert(circ, 1).circuit == stim.Circuit(
+        "Z 1\nTICK\nH 0\nTICK[a]\nX 0\nTICK\nX 0\nTICK\nY 1\nTICK\nZ 1\nTICK"
+    )
 
-    assert set(circ1.qubit_labels) == {"Q0", "Q1", "Q2"}
-    assert circ1.circuit.num_qubits == 3
+    # Open-ended target; the reference's X layers are its idles
+    target = STIMPhysicalCircuit("H 0\nTICK\nTICK\nTICK\nY 1", ["Q0", "Q1"])
+    target.transplant_idle_schedule_inplace(circ, ["Q0"], ["X"])
+    assert target.circuit == stim.Circuit(
+        "H 0\nTICK\nX 0\nTICK\nX 0\nTICK\nY 1"
+    )
 
-    circ_str = str(circ1.circuit)
-    assert "H 0" in circ_str
-    assert "X 1" in circ_str
-    assert "Y 1" in circ_str
-    assert "Z 2" in circ_str
+    circ.pad_single_qubit_idles_by_duration_inplace(
+        {1: "I"}, {}, default_duration=1
+    )
+    assert circ.circuit == stim.Circuit(
+        "H 0\nI 1\nTICK[a]\nX 0\nI 1\nTICK\nX 0\nI 1\nTICK\nY 1\nI 0"
+    )
 
 
 def test_get_possible_discrete_error_locations_inverted_target():
@@ -214,3 +250,33 @@ def test_repeat_block_indices_and_reindexing():
     assert "CX 1 0" in circ_str
     assert "M 0" in circ_str
     assert reindexed[1].repeat_count == 3
+
+
+def test_parsed_lines():
+    circuit = STIMPhysicalCircuit(
+        "X 0 1\nCX 0 1 1 2\nMZZ 0 1 2 3\nX_ERROR(0.1) 2 0\nTICK\n"
+        "DETECTOR rec[-1]",
+        ["c", "a", "b", "d"],
+    )
+    parsed = list(circuit._parsed_lines())
+    assert [p[0] for p in parsed] == ["gate"] * 3 + ["noise"] + [
+        "annotation"
+    ] * 2
+    assert [p[4] for p in parsed] == [
+        (("c",), ("a",)),
+        (("c", "a"), ("a", "b")),
+        (("c", "a"), ("b", "d")),
+        (("b", "c"),),
+        (),
+        (),
+    ]
+    assert parsed[3][3] == "(0.1)"
+
+
+@pytest.mark.parametrize(
+    "text", ["E(1) X0\nTICK", "H[t] 0\nTICK", "II 0 1\nTICK"]
+)
+def test_parsed_lines_refuses(text):
+    circuit = STIMPhysicalCircuit(text, ["a", "b"])
+    with pytest.raises(NotImplementedError):
+        list(circuit._parsed_lines())

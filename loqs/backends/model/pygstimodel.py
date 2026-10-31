@@ -19,6 +19,7 @@ from typing import ClassVar, Sequence, TypeAlias, TypeVar, TYPE_CHECKING, Any
 from loqs.backends._pygsti_gatenames import gatename_pygsti_safe_renames
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, TimeDependentBaseNoiseModel
+from loqs.backends.model.basemodel import first_successful_rep
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
@@ -597,31 +598,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 _check_op_for_dense_embedding_blowup(op, inst_key)
                 self._dense_embedding_checked_raw_inst_keys.add(inst_key)
 
-    def _first_successful_rep(
-        self, cache, cache_key, candidates, build_fn, kind: str = "rep"
-    ):
-        """Try build_fn(c) for each candidate, caching and returning the first.
-
-        Iterates through candidates, calling build_fn(c) for each; catches
-        RepConstructionError and accumulates failures. Returns the first
-        successful result (cached unless time-dependent). Raises a combined
-        RepConstructionError citing all failures if every candidate fails.
-        """
-        errors = []
-        for candidate in candidates:
-            try:
-                rep = build_fn(candidate)
-            except RepConstructionError as e:
-                errors.append(e)
-                continue
-            if not self.use_time_dependence:
-                cache[cache_key, candidate] = rep
-            return rep
-        raise RepConstructionError(
-            f"Failed to create {kind} for any of {candidates}, with errors:"
-            + "\n".join([str(e) for e in errors])
-        )
-
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
@@ -669,46 +645,45 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     def _get_gate_rep(self, name, qubits, gatereps):
         op_key = (name,) + tuple(qubits)
-        # Check cache
-        for gaterep in gatereps:
-            if (op_key, gaterep) in self._gate_rep_cache:
-                return self._gate_rep_cache[op_key, gaterep]
 
-        # Look up using unaliased qubits
-        op = self.gate_dict[op_key]
+        def make_source():
+            # Look up using unaliased qubits
+            op = self.gate_dict[op_key]
 
-        if op_key not in self._dense_embedding_checked_gate_keys:
-            _check_op_for_dense_embedding_blowup(op, op_key)
-            self._dense_embedding_checked_gate_keys.add(op_key)
+            if op_key not in self._dense_embedding_checked_gate_keys:
+                _check_op_for_dense_embedding_blowup(op, op_key)
+                self._dense_embedding_checked_gate_keys.add(op_key)
 
-        # if using time-dependence, update operator rep and clear cache
-        if self.use_time_dependence:
-            op.set_time(self.current_time)
+            # if using time-dependence, update operator rep and clear cache
+            if self.use_time_dependence:
+                op.set_time(self.current_time)
 
-        if self.use_embedded_op and isinstance(op, EmbeddedOp):
-            # Sanity-check the tensor-product basis shape; op.to_dense()
-            # already returns a PTM in the per-gate basis regardless.
-            assert isinstance(self.model.basis, TensorProdBasis)
-            assert op.target_labels is not None
-            target_indices = [
-                op.state_space.qubit_labels.index(q) for q in op.target_labels
-            ]
-            assert all(
-                i < len(self.model.basis.component_bases)
-                for i in target_indices
-            )
+            if self.use_embedded_op and isinstance(op, EmbeddedOp):
+                # Sanity-check the tensor-product basis shape; op.to_dense()
+                # already returns a PTM in the per-gate basis regardless.
+                assert isinstance(self.model.basis, TensorProdBasis)
+                assert op.target_labels is not None
+                target_indices = [
+                    op.state_space.qubit_labels.index(q)
+                    for q in op.target_labels
+                ]
+                assert all(
+                    i < len(self.model.basis.component_bases)
+                    for i in target_indices
+                )
 
-            op = op.embedded_op
+                op = op.embedded_op
 
-        # This is already in the "pp" basis convert()'s machinery assumes;
-        # let convert() produce whichever concrete GateRep is requested.
-        ptm_rep = PTMGateRep(op.to_dense(on_space="HilbertSchmidt"), qubits)
+            # This is already in the "pp" basis convert()'s machinery
+            # assumes; convert() produces whichever GateRep is requested.
+            return PTMGateRep(op.to_dense(on_space="HilbertSchmidt"), qubits)
 
-        return self._first_successful_rep(
-            self._gate_rep_cache,
+        return first_successful_rep(
+            None if self.use_time_dependence else self._gate_rep_cache,
             op_key,
             gatereps,
-            lambda gaterep: convert_rep(ptm_rep, gaterep),
+            make_source,
+            convert_rep,
             kind="gate rep",
         )
 
@@ -800,12 +775,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     def _get_instrument_rep(self, name, qubits, instreps):
         inst_key = (name,) + tuple(qubits)
-        # Check cache
-        for instrep in instreps:
-            if (inst_key, instrep) in self._inst_rep_cache:
-                return self._inst_rep_cache[inst_key, instrep]
 
-        def _make_rep(instrep):
+        def _make_rep(_source, instrep):
             if instrep is ZBasisProjectionInstrumentRep:
                 reset = 0 if self.zbasis_proj_resets else None
                 return ZBasisProjectionInstrumentRep(reset, True, qubits)
@@ -816,10 +787,11 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                     f"Cannot create instrument rep for {instrep}"
                 )
 
-        return self._first_successful_rep(
-            self._inst_rep_cache,
+        return first_successful_rep(
+            None if self.use_time_dependence else self._inst_rep_cache,
             inst_key,
             instreps,
+            lambda: None,
             _make_rep,
             kind="instrument rep",
         )
