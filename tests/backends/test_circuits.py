@@ -370,17 +370,30 @@ def test_discrete_error_locations(adapter):
     ) == [(2, (0, 1))]
 
 
-def test_serialization_round_trip(adapter, make_temp_path):
+@pytest.mark.parametrize("suffix", [".json", ".h5"])
+def test_serialization_round_trip(adapter, make_temp_path, suffix):
     a = adapter
     layers = [
         [(a.v["h"], _q("Q0")), (a.v["x"], _q("Q1"))],
         [(a.v["cnot"], _q("Q0", "Q1"))],
     ]
     circ = a.make(layers, ["Q0", "Q1"])
-    with make_temp_path(suffix=".json") as tmp_path:
+    with make_temp_path(suffix=suffix) as tmp_path:
         circ.write(tmp_path)
         loaded = a.cls.read(tmp_path)
 
     assert isinstance(loaded, a.cls)
     assert a.layers_of(loaded) == _expect(*layers)
     assert list(loaded.qubit_labels) == ["Q0", "Q1"]
+    assert loaded == circ
+    assert hash(loaded) == hash(circ)
+
+
+def test_equality_compares_content(adapter):
+    a = adapter
+    layers = [[(a.v["h"], _q("Q0")), (a.v["x"], _q("Q1"))]]
+    other = [[(a.v["h"], _q("Q0")), (a.v["h"], _q("Q1"))]]
+    circ = a.make(layers, ["Q0", "Q1"])
+
+    assert circ != a.make(other, ["Q0", "Q1"])
+    assert circ != a.make(layers, ["Q1", "Q0"])
