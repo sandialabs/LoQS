@@ -69,6 +69,23 @@ class STIMQuantumState(BaseQuantumState):
 
     name: ClassVar[str] = "STIM Tableau"
 
+    # Instructions whose record bits are filed under a qubit label, and
+    # the ones that write bits this state can't file (it refuses them).
+    _recorded_measurements: ClassVar[frozenset[str]] = frozenset(
+        {"M", "MX", "MY", "MZ", "MR", "MRX", "MRY", "MRZ"}
+    )
+    _unrecorded_measurements: ClassVar[frozenset[str]] = frozenset(
+        {
+            "MXX",
+            "MYY",
+            "MZZ",
+            "MPP",
+            "MPAD",
+            "HERALDED_ERASE",
+            "HERALDED_PAULI_CHANNEL_1",
+        }
+    )
+
     _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
     """`seed` is deliberately not here to avoid triggering re-caching."""
 
@@ -282,29 +299,25 @@ class STIMQuantumState(BaseQuantumState):
                 continue
 
             entries = line.split()
+            command = entries[0].split("(")[0]
 
-            internal_entries = [entries[0]]  # instruction is unchanged
-            internal_entries += [local_to_internal[e] for e in entries[1:]]
+            # Refuse before mapping targets or running anything
+            if command in self._unrecorded_measurements:
+                raise NotImplementedError(
+                    f"STIMQuantumState can't record the outcomes of {command}"
+                )
+
+            # instruction is unchanged
+            internal_entries = [entries[0]] + [
+                local_to_internal[e] for e in entries[1:]
+            ]
 
             # Pull measurement labels, if they exist
-            command = entries[0].split("(")[0]
-            # Subset of measure/reset gates that we want to record
-            include_outcomes = [
-                "M",
-                "MX",
-                "MY",
-                "MZ",
-                "MR",
-                "MRX",
-                "MRY",
-                "MRZ",
-            ]
-            if command in include_outcomes:
-                noneg_internal_entries = [
+            if command in self._recorded_measurements:
+                self.latest_measurement_labels.extend(
                     self.qubit_labels[int(me.strip("!"))]
                     for me in internal_entries[1:]
-                ]
-                self.latest_measurement_labels.extend(noneg_internal_entries)
+                )
 
             internal_lines.append(" ".join(internal_entries))
 
@@ -401,6 +414,7 @@ class STIMQuantumState(BaseQuantumState):
         circuit_str = rep.circuit_str
 
         self.latest_measurement_labels = []
+        start = len(self.state.current_measurement_record())
 
         # We'll reuse the gate apply code...
         self.apply_reps_inplace(
@@ -408,15 +422,18 @@ class STIMQuantumState(BaseQuantumState):
             reset_latest_circ=False,
         )
 
-        # but then post-process to grab the outcomes from the measurement record
-        current_mr = self.state.current_measurement_record()
-        mr_entries = [
-            int(mre)
-            for mre in current_mr[-len(self.latest_measurement_labels) :]
-        ]
+        # but then read only the bits this circuit wrote, which must match
+        # the recorded labels one to one (a tagged M, say, breaks the match)
+        mr_entries = self.state.current_measurement_record()[start:]
+        if len(mr_entries) != len(self.latest_measurement_labels):
+            raise NotImplementedError(
+                f"{circuit_str!r} wrote {len(mr_entries)} record bits for "
+                f"{len(self.latest_measurement_labels)} recorded labels; "
+                "STIMQuantumState can't match them"
+            )
 
         for qbit, cbit in zip(self.latest_measurement_labels, mr_entries):
-            outcomes[qbit].append(cbit)
+            outcomes[qbit].append(int(cbit))
 
         return outcomes
 

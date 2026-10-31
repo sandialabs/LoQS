@@ -48,12 +48,19 @@ requires_stim = pytest.mark.skipif(
 
 
 def test_copy_constructor():
-    gate_dict = {("X", ("Q0",)): np.eye(4)}
-    original = DictNoiseModel(gate_dict, {})
+    original = DictNoiseModel(
+        {("X", ("Q0",)): _UNITARY_1Q},
+        gatereps=[UnitaryGateRep],
+        instreps=[OutcomeOperationDictInstrumentRep],
+        gaterep_array_cast_rep=UnitaryGateRep,
+    )
     copy = DictNoiseModel.from_model(original)
     assert copy.gate_dict.keys() == original.gate_dict.keys()
-    assert copy is not original
     assert copy.gate_dict is not original.gate_dict
+    assert (copy.output_gate_reps, copy.output_instrument_reps) == (
+        original.output_gate_reps,
+        original.output_instrument_reps,
+    )
 
 
 class TestGateDispatch:

@@ -259,10 +259,8 @@ class DictNoiseModel(BaseNoiseModel):
     def from_model(
         cls: type[T],
         model: BaseNoiseModel,
-        gatereps: Sequence[type[GateRep]] = (QSimSuperopGateRep,),
-        instreps: Sequence[type[InstrumentRep]] = (
-            ZBasisProjectionInstrumentRep,
-        ),
+        gatereps: Sequence[type[GateRep]] | None = None,
+        instreps: Sequence[type[InstrumentRep]] | None = None,
         **kwargs,
     ) -> T:
         """Build a [](api:DictNoiseModel) by converting an existing model.
@@ -273,22 +271,26 @@ class DictNoiseModel(BaseNoiseModel):
         [](api:DictNoiseModel)'s dicts, or building fresh ones from a
         `PyGSTiNoiseModel` (matched by `type(model).__name__` rather than
         `isinstance`, so this works without hard-requiring `pygsti` to be
-        importable).
+        importable). Keys are `(name, tuple(qubits))`, using the
+        `PyGSTiNoiseModel`'s aliased qubit labels.
 
         Parameters
         ----------
         model:
-            The model to convert from.
+            The model to convert from. A `PyGSTiNoiseModel` that uses time
+            dependence raises `NotImplementedError`.
 
         gatereps:
-            [](api:GateRep) classes this model will return. Also used
-            when querying `model`'s own representations, if `model` is a
-            `PyGSTiNoiseModel`.
+            [](api:GateRep) classes the new model's entries may hold, and
+            the classes requested from a `PyGSTiNoiseModel`. These must
+            describe the entries being copied. `None` means the source's
+            own declared classes for a [](api:DictNoiseModel), and
+            [](api:QSimSuperopGateRep) for a `PyGSTiNoiseModel`.
 
         instreps:
-            [](api:InstrumentRep) classes this model will return. Also
-            used when querying `model`'s own representations, if `model`
-            is a `PyGSTiNoiseModel`.
+            [](api:InstrumentRep) classes likewise. `None` means the
+            source's own declared classes for a [](api:DictNoiseModel), and
+            [](api:ZBasisProjectionInstrumentRep) for a `PyGSTiNoiseModel`.
 
         **kwargs:
             Forwarded to [](api:DictNoiseModel.__init__).
@@ -297,30 +299,36 @@ class DictNoiseModel(BaseNoiseModel):
         -------
             A [](api:DictNoiseModel) equivalent to `model`.
         """
-        gate_dict: dict[MemberLabel, Any] = {}
-        inst_dict: dict[MemberLabel, Any] = {}
-
         if isinstance(model, DictNoiseModel):
-            gate_dict = model.gate_dict.copy()
-            inst_dict = model.inst_dict.copy()
-        elif type(model).__name__ == "PyGSTiNoiseModel":
-            pygsti_model: Any = model
-            for gate_key in pygsti_model.gate_keys:
-                label = (gate_key.name, gate_key.qubits)
-                circ = ListPhysicalCircuit([[label]])
-                gate_dict[label] = pygsti_model.get_reps(
-                    circ, gatereps=gatereps, instreps=instreps
-                )[0][0]
-
-            for inst_key in pygsti_model.instrument_keys:
-                label = (inst_key.name, inst_key.qubits)
-                circ = ListPhysicalCircuit([[label]])
-                inst_dict[label] = pygsti_model.get_reps(
-                    circ, gatereps=gatereps, instreps=instreps
-                )[0][0]
-        else:
+            return cls(
+                model.gate_dict.copy(),
+                model.inst_dict.copy(),
+                gatereps=model._gatereps if gatereps is None else gatereps,
+                instreps=model._instreps if instreps is None else instreps,
+                **kwargs,
+            )
+        if type(model).__name__ != "PyGSTiNoiseModel":
             raise TypeError("Can only convert from other NoiseModels")
+        if getattr(model, "use_time_dependence", False):
+            raise NotImplementedError(
+                "Can't convert a time-dependent model to a DictNoiseModel"
+            )
 
+        gatereps = (QSimSuperopGateRep,) if gatereps is None else gatereps
+        instreps = (
+            (ZBasisProjectionInstrumentRep,) if instreps is None else instreps
+        )
+        gate_dict: dict = {}
+        inst_dict: dict = {}
+        for keys, out in (
+            (model.gate_keys, gate_dict),
+            (model.instrument_keys, inst_dict),
+        ):
+            for name, qubits in keys:
+                label = (name, tuple(qubits))
+                out[label] = model.get_reps(
+                    ListPhysicalCircuit([[label]]), gatereps, instreps
+                )[0]
         return cls(
             gate_dict,
             inst_dict,
