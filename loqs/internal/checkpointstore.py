@@ -216,12 +216,17 @@ class BaseCheckpointStore(ABC):
 
     @abstractmethod
     def write_snapshot(
-        self, obj: Serializable, *, keep_entries: bool = False
+        self,
+        obj: Serializable,
+        *,
+        keep_entries: bool = False,
+        encode_cache: dict | None = None,
     ) -> None:
         """Atomically write the canonical file from `obj`.
 
         With `keep_entries`, the committed entries of the existing file
-        replace `obj`'s own streamed entries."""
+        replace `obj`'s own streamed entries. `encode_cache` receives the
+        new file's seed (see `CheckpointStore.write_snapshot`)."""
 
     @abstractmethod
     def nested(
@@ -916,29 +921,40 @@ class CheckpointStore(_ReadableStore):
     # -- writing ----------------------------------------------------------
 
     def write_snapshot(
-        self, obj: Serializable, *, keep_entries: bool = False
+        self,
+        obj: Serializable,
+        *,
+        keep_entries: bool = False,
+        encode_cache: dict | None = None,
     ) -> None:
         """Atomically write the canonical file from `obj`.
 
-        Inside the temp file and before the rename, empty groups-format
-        streamed attributes are removed, every fixed-size dataset side is
-        made growable and the commit marker is written from the physical
-        lengths.
+        Before the rename, empty groups-format streamed attributes are
+        removed, fixed-size datasets made growable, and the commit marker
+        and next free cache ID (`NEXT_CACHE_ID_ATTR`) recorded.
 
-        With `keep_entries`, the existing canonical file must exist and be
-        readable. Its committed entries of every streamed attribute are
-        copied into the new file as stored, never decoded, in place of
-        whatever `obj` held. Any tail beyond the old marker is dropped, and
-        the new cache IDs continue above every ID the old file holds.
-        Either way the next free cache ID is recorded in the new file
-        (`NEXT_CACHE_ID_ATTR`).
+        With `keep_entries`, the existing canonical file must be readable;
+        its committed streamed entries (not any tail past its marker) are
+        copied in as stored, replacing `obj`'s, and new cache IDs continue
+        above its own.
+
+        `encode_cache` (pass an empty dict) receives, once the file is in
+        place, an object-ID-free entry per object the new file holds, for
+        canonical appends to reference. A `keep_entries` rewrite adds none.
         """
+        dump_cache: dict = {}
         with contextlib.ExitStack() as stack:
             old: tuple[h5py.Group, dict[str, int], int] | None = None
             if keep_entries:
                 old = self._open_for_rewrite(stack)
             self.directory.mkdir(parents=True, exist_ok=True)
-            self._write_snapshot_file(obj, old, stack)
+            self._write_snapshot_file(obj, old, stack, dump_cache)
+        if encode_cache is not None:
+            encode_cache.update(
+                (h, [(None, e[0][1])])
+                for h, e in dump_cache.items()
+                if e[0][0] != id(obj)
+            )
         self._canonical_decode_cache = None
         self._canonical_identity = None
 
@@ -999,10 +1015,11 @@ class CheckpointStore(_ReadableStore):
         obj: Serializable,
         old: tuple[h5py.Group, dict[str, int], int] | None,
         stack: contextlib.ExitStack,
+        encode_cache: dict,
     ) -> None:
         with atomic_h5_file(self.canonical_path) as f:
             if old is None:
-                obj.dump(f, "hdf5")
+                obj.dump(f, "hdf5", encode_cache=encode_cache)
             else:
                 # Continue above every ID the carried entries may hold.
                 HDF5Encoder.ENCODE_ID = max(HDF5Encoder.ENCODE_ID, old[2])
@@ -1740,7 +1757,11 @@ class MemoryCheckpointStore(BaseCheckpointStore):
         return ()
 
     def write_snapshot(
-        self, obj: Serializable, *, keep_entries: bool = False
+        self,
+        obj: Serializable,
+        *,
+        keep_entries: bool = False,
+        encode_cache: dict | None = None,
     ) -> None:
         return None
 

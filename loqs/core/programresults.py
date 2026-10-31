@@ -241,7 +241,11 @@ class ProgramResults(Displayable):
         self._checkpoint_encode_cache: dict = {}
         """Persistent `Serializable.encode` cache shared across every `checkpoint()`
         call for this object's lifetime, so an object reused across shots is written
-        once and cheaply referenced afterward, instead of re-expanded every time."""
+        once and cheaply referenced afterward, instead of re-expanded every time.
+        It is seeded from the snapshot's own encode when this object writes the
+        canonical file, by decoding the file when it already exists at
+        construction, and emptied whenever the store is rebuilt for another
+        directory or filename."""
 
         self._shot_store_cache: CheckpointStore | None = None
         """The store `_shot_store()` hands out. Not serialized."""
@@ -251,11 +255,12 @@ class ProgramResults(Displayable):
         from loqs.core import QuantumProgram
 
         if checkpoint_enabled and isinstance(parent_program, QuantumProgram):
-            self._ensure_snapshot()
+            wrote = self._ensure_snapshot()
             self.parent_program = str(self._shot_store().canonical_path)
-            self._checkpoint_encode_cache = (
-                self._shot_store().shared_encode_cache()
-            )
+            if not wrote:
+                self._checkpoint_encode_cache = (
+                    self._shot_store().shared_encode_cache()
+                )
 
     def _set_nested_shot_source(self, view: _NestedStore) -> None:
         """Configure this ProgramResults to read from a nested view.
@@ -331,7 +336,8 @@ class ProgramResults(Displayable):
 
     def _shot_store(self) -> CheckpointStore:
         """The shot-level checkpoint store for this object's directory and
-        canonical filename, rebuilt only when either changes."""
+        canonical filename, rebuilt only when either changes. A rebuild
+        empties `_checkpoint_encode_cache`, whose IDs name the old file."""
         directory = (
             self._checkpoint_dir
             if self._checkpoint_dir is not None
@@ -349,17 +355,20 @@ class ProgramResults(Displayable):
                 canonical_filename=self._results_filename,
             )
             self._shot_store_cache = store
+            self._checkpoint_encode_cache = {}
         return store
 
-    def _ensure_snapshot(self) -> None:
+    def _ensure_snapshot(self) -> bool:
         """Write the canonical file as a shot-free shell of this object if
-        it doesn't exist yet. An existing file is never rewritten, so a
-        resuming call keeps the config it was started with."""
+        it doesn't exist yet, and return whether it was written. An existing
+        file is never rewritten, so a resuming call keeps the config it was
+        started with. A written file also seeds `_checkpoint_encode_cache`
+        from the snapshot's own encode."""
         if self._checkpoint_dir is None:
             self._checkpoint_dir = Path("./checkpoints")
         store = self._shot_store()
         if store.canonical_path.exists():
-            return
+            return False
         shell = ProgramResults(
             name=self.name,
             parent_program=self.parent_program,
@@ -367,7 +376,9 @@ class ProgramResults(Displayable):
             max_frame_limit=self.max_frame_limit,
             results_filename=self._results_filename,
         )
-        store.write_snapshot(shell)
+        self._checkpoint_encode_cache = {}
+        store.write_snapshot(shell, encode_cache=self._checkpoint_encode_cache)
+        return True
 
     def add_shot(
         self,

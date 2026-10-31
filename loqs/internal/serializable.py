@@ -1192,6 +1192,15 @@ class Serializable:
             For example, the JSON format accepts `indent` as an argument
             because `json.dump` does.
 
+        use_caching : bool, optional
+            If True (default), repeated objects are written once and
+            referenced afterward. If False, `encode_cache` is ignored.
+
+        encode_cache : dict, optional
+            The encode cache to use when `use_caching` is True. A given
+            cache is filled in place, so the caller can reuse it for later
+            encodes. If None, a new cache is used and then discarded.
+
         reset_encode_id : bool, optional
             If True (default), the encoder's cache ID counter restarts at 0.
             If False, encoding continues from the current counter, so the
@@ -1210,9 +1219,11 @@ class Serializable:
 
         assert format is not None
 
-        encode_cache = None
-        if use_caching:
-            encode_cache = encode_cache if encode_cache is not None else {}
+        encode_cache = (
+            (encode_cache if encode_cache is not None else {})
+            if use_caching
+            else None
+        )
 
         if format in ["json", "json.gz"]:
             # Check if it's a file-like object that supports text I/O

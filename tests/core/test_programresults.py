@@ -30,6 +30,11 @@ from loqs.core.history import History
 from loqs.core import Frame, QuantumProgram
 from loqs.internal.serializable import Serializable
 from loqs.internal import worker_id as global_worker_id
+from tests.tools._shared_checkpoint_test_helpers import (
+    as_fresh_process,
+    build_tagged_program,
+    cache_nodes,
+)
 
 
 def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
@@ -1136,6 +1141,71 @@ class TestParentProgramFileWriting:
                 checkpoint_enabled=True,
                 checkpoint_dir=checkpoint_dir,
             )
+
+    def test_fresh_snapshot_seeds_from_its_own_encode(self, tmp_path):
+        """A fresh object's seed equals the one a resume decodes, and shots
+        written after either seeding read back with the right program."""
+        d = tmp_path / "ckpt"
+        program = build_tagged_program()
+        as_fresh_process()
+        fresh = ProgramResults(
+            parent_program=program, checkpoint_enabled=True, checkpoint_dir=d
+        )
+        seed = fresh._checkpoint_encode_cache
+        assert seed
+        assert seed == CheckpointStore(d, SHOT_LAYOUT).shared_encode_cache()
+
+        def add(results, i):
+            frame = Frame({"program_ref": program, "seed": i})
+            results.add_shot(i, History([frame]))
+            results.checkpoint(checkpoint_dir=d)
+
+        add(fresh, 0)
+        add(fresh, 1)
+        as_fresh_process()
+        resumed = ProgramResults(
+            parent_program=program, checkpoint_enabled=True, checkpoint_dir=d
+        )
+        add(resumed, 2)
+        add(resumed, 3)
+
+        path = d / "results.h5"
+        assert [
+            n["cache_type"]
+            for n in cache_nodes(path)
+            if n.get("class") == "QuantumProgram"
+        ] == ["source"]
+        store = CheckpointStore(d, SHOT_LAYOUT)
+        for i in range(4):
+            frame = store.get(i)[0]
+            assert frame["seed"] == i
+            assert Serializable._serial_hash(
+                frame["program_ref"]
+            ) == Serializable._serial_hash(program)
+
+    def test_checkpoint_into_a_second_directory_reads_back(self, tmp_path):
+        """Checkpointing into a second directory drops the first one's cache,
+        so a shot written there reads back as the right program."""
+        a, b = tmp_path / "a", tmp_path / "b"
+        program = build_tagged_program()
+        other = build_tagged_program()
+        other.name = "another program"
+        ProgramResults(
+            parent_program=other, checkpoint_enabled=True, checkpoint_dir=b
+        )
+        results = ProgramResults(
+            parent_program=program, checkpoint_enabled=True, checkpoint_dir=a
+        )
+        for i, target in enumerate((a, b)):
+            frame = Frame({"program_ref": program, "seed": i})
+            results.add_shot(i, History([frame]))
+            results.checkpoint(checkpoint_dir=target)
+
+        frame = CheckpointStore(b, SHOT_LAYOUT).get(1)[0]
+        assert frame["seed"] == 1
+        assert Serializable._serial_hash(
+            frame["program_ref"]
+        ) == Serializable._serial_hash(program)
 
 
 class TestResumeCheckpointing:
