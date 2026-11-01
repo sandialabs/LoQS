@@ -841,10 +841,11 @@ class TestMixedFormatShotCheckpoints:
         for i in range(8):
             assert consolidated.shot_histories[i][0]["shot_id"] == i
 
-    def test_lazy_reads_follow_a_payload_into_consolidation(self, tmp_path):
-        """A lazy reader finds a shot in an unconsolidated payload, and
-        keeps finding the others once consolidation moved them into
-        `results.h5` and deleted the payload."""
+    def test_lazy_reads_follow_other_writers(self, tmp_path, monkeypatch):
+        """A lazy reader's cached key index follows another writer's new
+        payload, consolidation deleting payloads, and a canonical append
+        that leaves the source list and (on a coarse-timestamp filesystem)
+        the file identity unchanged."""
         checkpoint_dir = tmp_path / "checkpoints"
         results = ProgramResults()
         for i in range(2):
@@ -853,16 +854,49 @@ class TestMixedFormatShotCheckpoints:
         payload_file = checkpoint_dir / "worker_w0_shots_0_payload.h5"
         assert payload_file.exists()
 
-        shot_1 = results.get_shot_history(1)
-        assert shot_1 is not None
-        assert shot_1[0]["shot_id"] == 1
+        def shot_id(i: int) -> int | None:
+            shot = results.get_shot_history(i)
+            return None if shot is None else shot[0]["shot_id"]
+
+        def other_writes(i: int, **kwargs: Any) -> None:
+            other = ProgramResults()
+            other.add_shot(i, self._shot_history(i))
+            other.checkpoint(checkpoint_dir=checkpoint_dir, **kwargs)
+
+        assert shot_id(1) == 1
+        other_writes(2, worker_id="w1")
+        assert shot_id(2) == 2
 
         ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
         assert not payload_file.exists()
 
-        shot_0 = results.get_shot_history(0)
-        assert shot_0 is not None
-        assert shot_0[0]["shot_id"] == 0
+        monkeypatch.setattr(
+            CheckpointStore,
+            "_identity",
+            staticmethod(lambda st: (st.st_dev, st.st_ino)),
+        )
+        assert shot_id(0) == 0
+        other_writes(3)
+        assert shot_id(3) == 3
+
+    def test_collect_shot_data_leaves_no_history_in_the_decode_cache(
+        self, tmp_path
+    ):
+        """After a lazy collect and a `get_shot_history`, the store's decode
+        cache holds no shot `History`, including a source another shot's
+        `copy` resolved."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        writer = ProgramResults(lazy_loading=False)
+        for i in (1, 2, 0):
+            writer.add_shot(i, self._shot_history(i % 2))
+            writer.checkpoint(checkpoint_dir=checkpoint_dir)
+        results = ProgramResults(checkpoint_dir=checkpoint_dir)
+        assert results.collect_shot_data("shot_id", [0]) == [[0], [1], [0]]
+        results.get_shot_history(1)
+        assert not any(
+            isinstance(v, History)
+            for v in results._shot_store()._canonical_decode_cache.values()
+        )
 
     def test_checkpoint_closes_shot_ledger_on_return(self, tmp_path):
         """A lone `checkpoint()` call closes and unregisters its shot ledger
@@ -1212,7 +1246,8 @@ class TestResumeCheckpointing:
     """Test resume functionality for checkpoint-enabled runs."""
 
     def test_nested_source_reads(self, tmp_path):
-        """A nested proxy returns its own entry's shots, `None` for another
+        """A nested proxy returns its own entry's shots, leaving no
+        `History` in the enclosing store's decode cache, `None` for another
         entry's, and `collect_shot_data` reads it."""
         store = _write_nested_source(
             tmp_path,
@@ -1228,7 +1263,10 @@ class TestResumeCheckpointing:
         history = nested_pr.get_shot_history(1)
         assert history is not None
         assert history[0]["nested"] == 1
-        assert 1 in nested_pr._memory_cache
+        assert not any(
+            isinstance(v, History)
+            for v in store._canonical_decode_cache.values()
+        )
         assert nested_pr.get_shot_history(4) is None
 
         assert not nested_pr.shot_histories

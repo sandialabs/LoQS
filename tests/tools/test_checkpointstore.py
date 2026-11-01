@@ -616,7 +616,7 @@ def test_get_sees_a_replacement_between_open_and_identity_check(
         return f
 
     monkeypatch.setattr(checkpointstore, "open_h5", open_then_replace)
-    # `get` opens twice: once for the key index, then to decode, which
+    # `get` opens twice: once for the index stamp, then to decode, which
     # reads the old file while the path already names the new one.
     assert _digest(store.get(1)) == _digest(versions[0][1])
     assert _digest(store.get(1)) == _digest(versions[1][1])
@@ -672,15 +672,17 @@ def test_open_retries_only_lock_contention(tmp_path, histories, monkeypatch):
 
         return opener
 
+    # Each check reads through a new store: a cached index would skip the
+    # open under test.
     monkeypatch.setattr(h5py, "File", flaky(2))
-    assert store.keys() == [0, 1]
+    assert CheckpointStore(tmp_path, SHOT_LAYOUT).keys() == [0, 1]
 
     calls.clear()
     monkeypatch.setattr(h5py, "File", flaky(10**6))
     with pytest.raises(CheckpointReadError) as info:
-        store.keys(strict=True)
+        CheckpointStore(tmp_path, SHOT_LAYOUT).keys(strict=True)
     assert isinstance(info.value.__cause__, BlockingIOError)
-    assert store.keys(strict=False) == []
+    assert CheckpointStore(tmp_path, SHOT_LAYOUT).keys(strict=False) == []
 
     # A different open error is not retried.
     calls.clear()
@@ -691,7 +693,7 @@ def test_open_retries_only_lock_contention(tmp_path, histories, monkeypatch):
 
     monkeypatch.setattr(h5py, "File", broken)
     with pytest.raises(CheckpointReadError):
-        store.keys()
+        CheckpointStore(tmp_path, SHOT_LAYOUT).keys()
     assert len(calls) == 1
 
 

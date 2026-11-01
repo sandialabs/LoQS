@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import itertools
 import json
 import os
 import random
@@ -460,20 +461,52 @@ class _Opened:
         all_keys = _read_iterable_side(keys_group, fmt, None)
         return [int(k) for k in all_keys[:n]]
 
-    def read(self, streamed: StreamedAttr, pos: int) -> Any:
-        """Decode the value at physical position `pos`."""
+    def read(
+        self,
+        streamed: StreamedAttr,
+        pos: int,
+        transient: list | None = None,
+        by_type: bool = False,
+    ) -> Any:
+        """Decode the value at physical position `pos`.
+
+        When `transient` is given, a `(cache, cache_id)` pair is appended
+        for each key this decode newly added to the cache whose value is
+        the decoded value (or, with `by_type`, has its type). Keys already
+        cached are never listed. `by_type` exists because a `copy` whose
+        source has a higher key resolves that source into the cache by a
+        file scan, so the source's own later read adds no new key.
+        """
         sides = self.sides(streamed)
         assert sides is not None
         values_group = sides[1]
         if values_group.attrs.get("storage_format", "groups") == "dataset":
             return _dataset_value(values_group, pos)
+        before = len(self.cache)
         try:
-            return _decode_group_entry(values_group, pos, self.cache)
+            value = _decode_group_entry(values_group, pos, self.cache)
         except BaseException:
             # A cut-short decode leaves `DeferredRef` placeholders; reset.
             # The cache's fallback still supplies the shared objects.
             self.cache.clear()
             raise
+        if transient is not None:
+            added = len(self.cache) - before
+            for cache_id in itertools.islice(reversed(self.cache), added):
+                cached = self.cache[cache_id]
+                if (
+                    (type(cached) is type(value))
+                    if by_type
+                    else (cached is value)
+                ):
+                    transient.append((self.cache, cache_id))
+        return value
+
+
+def _drop_transient(transient: list) -> None:
+    """Remove the listed `(cache, cache_id)` entries from their caches."""
+    for cache, cache_id in transient:
+        cache.pop(cache_id, None)
 
 
 @dataclass
@@ -552,13 +585,16 @@ class _ReadableStore(BaseCheckpointStore):
         if key not in index:
             raise KeyError(key)
         source, pos = index[key]
+        transient: list = []
         try:
             with self._opened(source) as opened:
-                return opened.read(streamed, pos)
+                return opened.read(streamed, pos, transient)
         except CheckpointReadError as exc:
             if strict:
                 raise
             raise KeyError(key) from exc
+        finally:
+            _drop_transient(transient)
 
     def iter_items(
         self,
@@ -573,32 +609,38 @@ class _ReadableStore(BaseCheckpointStore):
             wanted = sorted(index)
         else:
             wanted = sorted({int(k) for k in keys}.intersection(index))
-        # Only one decoded value is alive at a time, and a source stays
-        # open while consecutive keys come from it.
-        with contextlib.ExitStack() as stack:
-            current: _Source | None = None
-            opened: _Opened | None = None
-            for key in wanted:
-                source, pos = index[key]
-                try:
-                    if source is not current:
-                        stack.close()
-                        current = None
-                        opened = stack.enter_context(self._opened(source))
-                        current = source
-                    assert opened is not None
-                    value = opened.read(streamed, pos)
-                except CheckpointReadError:
-                    if strict:
-                        raise
-                    continue
-                except Exception as exc:
-                    if strict:
-                        raise CheckpointReadError(
-                            source.path, f"{type(exc).__name__}: {exc}"
-                        ) from exc
-                    continue
-                yield key, value
+        # One decoded value is alive at a time, a source stays open across
+        # consecutive keys, and what this pass cached is dropped at its end.
+        transient: list = []
+        try:
+            with contextlib.ExitStack() as stack:
+                current: _Source | None = None
+                opened: _Opened | None = None
+                for key in wanted:
+                    source, pos = index[key]
+                    try:
+                        if source is not current:
+                            stack.close()
+                            current = None
+                            opened = stack.enter_context(self._opened(source))
+                            current = source
+                        assert opened is not None
+                        value = opened.read(
+                            streamed, pos, transient, by_type=True
+                        )
+                    except CheckpointReadError:
+                        if strict:
+                            raise
+                        continue
+                    except Exception as exc:
+                        if strict:
+                            raise CheckpointReadError(
+                                source.path, f"{type(exc).__name__}: {exc}"
+                            ) from exc
+                        continue
+                    yield key, value
+        finally:
+            _drop_transient(transient)
 
 
 def _working_copy(encode_cache: dict | None) -> dict:
@@ -614,7 +656,9 @@ def _working_copy(encode_cache: dict | None) -> dict:
     }
 
 
-_PAYLOAD_SEED: tuple[tuple[str, tuple[int, int, int]], tuple[dict, int]] | None
+_PAYLOAD_SEED: (
+    tuple[tuple[str, tuple[int, int, int, int]], tuple[dict, int]] | None
+)
 _PAYLOAD_SEED = None
 """The process's one payload seed: `((canonical path, file identity),
 (encode seed, next-ID record))`. Each batch builds a new store, so only a
@@ -833,7 +877,8 @@ class CheckpointStore(_ReadableStore):
 
     def _init_caches(self) -> None:
         self._canonical_decode_cache: Any = None
-        self._canonical_identity: tuple[int, int, int] | None = None
+        self._canonical_identity: tuple[int, int, int, int] | None = None
+        self._key_indexes: dict[str, tuple[tuple, dict]] = {}
 
     def __getstate__(self) -> dict[str, Any]:
         return {"directory": self.directory, "layout": self.layout}
@@ -1208,7 +1253,10 @@ class CheckpointStore(_ReadableStore):
 
     def _shared_loader(self) -> Callable[[], Mapping[int, Any]] | None:
         """A loader of the shared objects that decodes them at most once,
-        for one store call; None for a layout without a shared attribute."""
+        for one store call; None for a layout without a shared attribute.
+
+        Payload sources of a cached index share one decode of the shared
+        objects for as long as that index stands."""
         if self.layout.shared_attr is None:
             return None
         loaded: dict[int, Any] | None = None
@@ -1255,6 +1303,46 @@ class CheckpointStore(_ReadableStore):
         value = (_invert_shared(cache), floor)
         _PAYLOAD_SEED = ((key, identity), value)
         return value
+
+    def _stamp(self) -> tuple | None:
+        """What the sources look like now, or None if one can't be read.
+
+        The canonical entry carries the file's commit marker next to its
+        identity: the committed canonical keys are fixed by the file's inode
+        and marker, so an index can't go stale on a filesystem with coarse
+        timestamps. Payload files are never changed in place.
+        """
+        try:
+            entries: list[tuple] = []
+            for source in self._sources():
+                if source.path == self.canonical_path:
+                    with open_h5(source.path, "r") as f:
+                        identity = self._identity(
+                            os.fstat(f.id.get_vfd_handle())
+                        )
+                        marker = f.attrs.get(COMMIT_MARKER_ATTR)
+                    entries.append((source.path, identity, marker))
+                else:
+                    entries.append(
+                        (source.path, self._identity(os.stat(source.path)))
+                    )
+            return tuple(entries)
+        except OSError:
+            return None
+
+    def _key_index(
+        self, streamed: StreamedAttr, strict: bool
+    ) -> dict[int, tuple[_Source, int]]:
+        stamp = self._stamp()
+        cached = self._key_indexes.get(streamed.canonical)
+        if stamp is not None and cached is not None and cached[0] == stamp:
+            return cached[1]
+        index = super()._key_index(streamed, strict)
+        # A strict build raises on any unreadable source, so it's complete;
+        # a non-strict one may have skipped a source.
+        if strict and stamp is not None:
+            self._key_indexes[streamed.canonical] = (stamp, index)
+        return index
 
     def _sources(self) -> list[_Source]:
         sources: list[_Source] = []
@@ -1321,8 +1409,8 @@ class CheckpointStore(_ReadableStore):
     # -- canonical appends and consolidation -------------------------------
 
     @staticmethod
-    def _identity(stat: os.stat_result) -> tuple[int, int, int]:
-        return stat.st_dev, stat.st_ino, stat.st_mtime_ns
+    def _identity(stat: os.stat_result) -> tuple[int, int, int, int]:
+        return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size
 
     @contextlib.contextmanager
     def _canonical_writer(self) -> Iterator[_CanonicalWriter]:
@@ -1512,7 +1600,7 @@ class CheckpointStore(_ReadableStore):
         layout: StoreLayout = SHOT_LAYOUT,
     ) -> _NestedStore:
         """A read-only store over the `ProgramResults` held at `key` in
-        `attr`, located afresh on every read."""
+        `attr`, found through this store's cached key index."""
         return _NestedStore(self, key, self._streamed(attr), layout)
 
     def payload_view(self, path: str | os.PathLike) -> _PayloadView:
@@ -1589,27 +1677,15 @@ class _NestedStore(_ReadOnlyStore):
 
     @contextlib.contextmanager
     def _open_nested(self) -> Iterator[_Opened]:
-        # The first source holding the key wins, as in a key index; later
-        # sources are never opened.
+        # The parent's cached key index names the winning source and
+        # position; only that source is opened.
         parent = self._parent
+        index = parent._key_index(self._parent_attr, strict=True)
+        if self._key not in index:
+            raise KeyError(self._key)
+        source, pos = index[self._key]
         with contextlib.ExitStack() as stack:
-            pos = -1
-            for source in parent._sources():
-                outer = stack.enter_context(
-                    parent._opened(source, validate=False)
-                )
-                try:
-                    keys = outer.keys(self._parent_attr)
-                except Exception as exc:
-                    raise CheckpointReadError(
-                        source.path, f"{type(exc).__name__}: {exc}"
-                    ) from exc
-                if self._key in keys:
-                    pos = keys.index(self._key)
-                    break
-                stack.close()
-            if pos < 0:
-                raise KeyError(self._key)
+            outer = stack.enter_context(parent._opened(source, validate=False))
             sides = outer.sides(self._parent_attr)
             assert sides is not None
             group = _resolve_checkpoint_object_group(sides[1][str(pos)])
@@ -1635,21 +1711,24 @@ class _NestedStore(_ReadOnlyStore):
         # One open of the enclosing file serves the lookup and the read.
         # Nothing is validated on open: a cut-short entry fails on its read.
         streamed = self._streamed(attr)
+        transient: list = []
         try:
             with self._opened(self._sources()[0], validate=False) as opened:
                 # A committed entry never changes, so a position found
-                # once stays valid; a miss re-reads the keys.
+                # once stays valid; a miss re-reads this entry's keys.
                 positions = self._positions.setdefault(streamed.name, {})
                 if key not in positions:
                     positions.clear()
                     for pos, k in enumerate(opened.keys(streamed)):
                         positions.setdefault(k, pos)
                 if key in positions:
-                    return opened.read(streamed, positions[key])
+                    return opened.read(streamed, positions[key], transient)
         except CheckpointReadError as exc:
             if strict:
                 raise
             raise KeyError(key) from exc
+        finally:
+            _drop_transient(transient)
         raise KeyError(key)
 
     def read_attrs(

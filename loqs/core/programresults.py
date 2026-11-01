@@ -822,10 +822,9 @@ class ProgramResults(Displayable):
 
             # Not cached: load from the reader (a missing shot is None; a
             # corrupt file raises `CheckpointReadError`).
-            # Known and deferred: right after `collect_shot_data` this read
-            # is about 1 ms slower per call than before the checkpoint store
-            # (cold and repeated reads aren't). Probably the collect leaves
-            # no decoded shots for it to hit; keeping them would cost memory.
+            # Since #146 `collect_shot_data` reads through the store, not this
+            # method, so it leaves `_memory_cache` empty and a read right after
+            # it decodes from the file; the store keeps no decoded shot.
             loaded = False
             reader = self._shot_reader()
             if reader is not None:
