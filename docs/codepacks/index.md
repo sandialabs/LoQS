@@ -7,8 +7,8 @@ from the committed artifact without needing Stim. Each page below is
 rendered from a spec and committed with it.
 
 Each codepack is certified by the validation harness: see its
-[README](https://github.com/sandialabs/LoQS/tree/main/validation) and its
-[records](https://github.com/sandialabs/LoQS/tree/main/validation/records).
+[README](https://github.com/sandialabs/LoQS/tree/feat-66/validation) and its
+[records](https://github.com/sandialabs/LoQS/tree/feat-66/validation/records).
 
 - [Steane [[7,1,3]]](steane.md)
 
