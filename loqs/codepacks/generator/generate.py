@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -315,6 +315,8 @@ How to read `GENERATED["tables"]` (each map acts on a bit column, mod 2):
   bits, concatenated in `roles` order; `qubit_frame_map` acts on the
   per-qubit frames as every x bit, then every z bit; `layers` is its
   circuit.
+
+`docs/markdown/codepack-specs.md` explains these tables in prose.
 """
 
 from typing import Any

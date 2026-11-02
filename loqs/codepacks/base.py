@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -147,12 +147,14 @@ class BaseCodepack(ABC):
         model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
         gaterep: type[GateRep] = QSimSuperopGateRep,
         instrep: type[InstrumentRep] = ZBasisProjectionInstrumentRep,
-        evotype: str = "statevec",
     ) -> BaseNoiseModel:
         """Create an ideal (noiseless) model for this codepack's code.
 
         The model holds exactly the gates and instruments that the code's
-        instructions use.
+        instructions use. A pyGSTi model of up to 31 qubits is a
+        density-matrix model, so its gates can be replaced by noisy pyGSTi
+        operations; above 31 qubits, where pyGSTi can't build one, it is a
+        state-vector model, which holds only unitary gates.
 
         Parameters
         ----------
@@ -168,10 +170,6 @@ class BaseCodepack(ABC):
         instrep : type[InstrumentRep], optional
             Instrument representation class. Default is
             [](api:ZBasisProjectionInstrumentRep).
-
-        evotype : str, optional
-            pyGSTi evotype, used by the pyGSTi backend only. Default is
-            `"statevec"`; other evotypes are refused above 31 qubits.
 
         Returns
         -------
@@ -206,11 +204,8 @@ class BaseCodepack(ABC):
                 raise ImportError(
                     "pyGSTi not found, cannot construct pyGSTi noise model"
                 )
-            if evotype != "statevec" and len(qubits) > 31:
-                raise ValueError(
-                    f"evotype {evotype!r} cannot hold {len(qubits)} qubits; "
-                    "use evotype='statevec' above 31 qubits"
-                )
+            # pyGSTi's densitymx embedding overflows a C long above 31 qubits
+            evotype = "densitymx" if len(qubits) <= 31 else "statevec"
             if instrep is not ZBasisProjectionInstrumentRep:
                 raise ValueError(
                     "The pyGSTi ideal model supports only "

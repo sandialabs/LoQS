@@ -32,6 +32,20 @@ def test_every_codepack_file_has_a_record():
     shipped = {
         p.relative_to(ROOT).as_posix()
         for p in (ROOT / "loqs" / "codepacks").rglob("*.py")
+        if "generator" not in p.relative_to(ROOT / "loqs" / "codepacks").parts
     }
     shipped.discard("loqs/codepacks/__init__.py")
     assert sorted(shipped - covered) == []
+
+
+@pytest.mark.parametrize("record_path", RECORDS, ids=lambda p: p.stem)
+def test_records_match_rendering(record_path):
+    """A codepack's rendering changed after its record certified it."""
+    pytest.importorskip("stim")
+    pytest.importorskip("pygsti")
+    from validation.declarations import DECLARATIONS
+    from validation.records import rendering_fingerprint
+
+    recorded = json.loads(record_path.read_text(encoding="utf-8"))
+    decl = DECLARATIONS[recorded["codepack"]]
+    assert rendering_fingerprint(decl) == recorded["rendering"]

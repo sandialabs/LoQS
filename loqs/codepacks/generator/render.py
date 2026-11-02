@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -258,8 +258,8 @@ def render(
     *,
     circuit_backend: Any = PyGSTiPhysicalCircuit,
     include_idles: bool = False,
-    gate_durations: Mapping[str, int] | None = None,
-    idle_gates: Mapping[int, str] | None = None,
+    gate_durations: Mapping[str, int | float] | None = None,
+    idle_gates: Mapping[int | float, str] | None = None,
     ft_state_prep_max_repeats: int = 100,
 ) -> QECCode:
     """Build the spec's `QECCode` from its generated tables and options."""
@@ -378,8 +378,8 @@ def render_two_patch(
     *,
     circuit_backend: Any = PyGSTiPhysicalCircuit,
     include_idles: bool = False,
-    gate_durations: Mapping[str, int] | None = None,
-    idle_gates: Mapping[int, str] | None = None,
+    gate_durations: Mapping[str, int | float] | None = None,
+    idle_gates: Mapping[int | float, str] | None = None,
 ) -> Instruction:
     """A two-patch gate on a `PatchGeometry` whose roles are the gate's.
 

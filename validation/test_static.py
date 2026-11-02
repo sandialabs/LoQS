@@ -76,7 +76,7 @@ def completeness(case, decl):
 def memory_cap(limit: int = _MODEL_BUILD_LIMIT):
     """Cap the address space so a runaway dense model build raises.
 
-    A pyGSTi model without a `statevec` evotype builds dense operators over
+    A pyGSTi model with a state prep or POVM builds a dense vector over
     every qubit, which must fail with a `MemoryError` rather than exhaust
     the machine. Windows has no `resource`, so there the cap is skipped.
     """
@@ -96,7 +96,8 @@ def _backend(config, name):
 
 
 def model_coverage(case, decl):
-    """Walked gate names are in the ideal model, which is `statevec`."""
+    """Walked gate names are in the ideal model, which has no state prep or
+    POVM."""
     config = _config(decl, case)
     backend = _backend(config, case.params["backend"])
     code = engine.build_code(decl, config, backend)
@@ -113,12 +114,12 @@ def model_coverage(case, decl):
     failing = {}
     if missing:
         failing["outcome"] = f"model lacks {sorted(missing)}"
-    inner = getattr(model, "model", None)
-    evotype = getattr(inner, "evotype", None)
-    if evotype is not None and str(getattr(evotype, "name", evotype)) != (
-        "statevec"
+    if isinstance(model, PyGSTiNoiseModel) and (
+        model.model.prep_blks["layers"] or model.model.povm_blks["layers"]
     ):
-        failing["outcome"] = f"{failing.get('outcome', '')} evotype {evotype}"
+        failing["outcome"] = (
+            f"{failing.get('outcome', '')} model has state prep or POVM"
+        )
     return failing
 
 

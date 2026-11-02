@@ -1,5 +1,6 @@
 """Self-tests of the harness: record decision and judging."""
 
+import importlib.util
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ from validation.cases import (
     judge,
     validate_declaration,
 )
+from validation.bugs import KNOWN_BUGS
 from validation.mutations import MUTATIONS
 from validation.test_fault_tolerance import run_ft
 from validation.test_patch_independence import run_independence
@@ -19,7 +21,7 @@ from validation.test_tracking import run_tracking
 from validation.test_truth_tables import run_truth
 from validation.declarations import DECLARATIONS
 from validation.logical import Cond, Gate, Meas, Prep, check_shot
-from validation.records import decide_record, file_digests
+from validation.records import decide_record, file_digests, source_digest
 
 DECL = DECLARATIONS["trivial_counter"]
 IDS = ["a.default.static.x.1", "a.default.static.x.2"]
@@ -28,8 +30,8 @@ IDS = ["a.default.static.x.1", "a.default.static.x.2"]
 FILES = file_digests(DECL)
 
 
-def _decide(reports, ids=IDS, start_files=FILES):
-    return decide_record(DECL, ids, reports, start_files)
+def _decide(reports, ids=IDS, start_files=FILES, decl=DECL, **kwargs):
+    return decide_record(decl, ids, reports, start_files, **kwargs)
 
 
 def test_record_decision():
@@ -45,6 +47,16 @@ def test_record_decision():
     # A file edited during the run refuses.
     edited = {**FILES, DECL.files[0]: "0" * 64}
     assert isinstance(_decide(ok, start_files=edited), str)
+    # A rendering that differs from the session start's refuses.
+    assert isinstance(_decide(ok, start_rendering="0" * 64), str)
+    assert isinstance(_decide(ok, start_rendering=record["rendering"]), dict)
+    # A declared failure writes its bug's summary once, under `bugs`.
+    known = replace(DECL, known_failures={"a.default.*:O1": "steane-1"})
+    declared = _decide(ok, decl=known)
+    assert isinstance(declared, dict)
+    assert list(declared["bugs"]) == ["steane-1"]
+    assert declared["bugs"]["steane-1"] == KNOWN_BUGS["steane-1"]
+    assert "known_failures" not in declared
 
 
 def test_report_status(monkeypatch):
@@ -174,3 +186,57 @@ def test_judge():
         judge({"O4"}, {"O4", "O3"})  # a second bug hides behind a known one
     with pytest.raises(AssertionError):
         judge({"O4"}, set())  # a fix that flips nothing
+
+
+_MODULE = """
+LIMIT = {limit}
+
+
+def helper(x):
+    {helper_doc}
+    return x + {helper_k}
+
+
+def apply(x):
+    {apply_doc}
+    # {comment}
+    return helper(x) * LIMIT + {apply_k}
+"""
+
+
+def _digest(tmp_path, name, **changes):
+    fields = dict(
+        limit=2,
+        helper_k=1,
+        apply_k=0,
+        helper_doc='"""Helper."""',
+        apply_doc='"""Apply."""',
+        comment="a comment",
+    )
+    fields.update(changes)
+    path = tmp_path / f"{name}.py"
+    path.write_text(_MODULE.format(**fields), encoding="utf-8")
+    # One module name for every variant: the digest names functions by it.
+    spec = importlib.util.spec_from_file_location("fp_module", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return source_digest(module.apply)
+
+
+def test_fingerprint_sees_behaviour_not_docs(tmp_path):
+    base = _digest(tmp_path, "m_base")
+    # Docstrings and comments don't move the digest.
+    assert base == _digest(
+        tmp_path,
+        "m_docs",
+        helper_doc='"""Other help."""',
+        apply_doc='"""Other."""',
+        comment="another comment",
+    )
+    # The body, a same-module helper and a module constant do.
+    for name, change in (
+        ("m_body", {"apply_k": 1}),
+        ("m_helper", {"helper_k": 2}),
+        ("m_const", {"limit": 3}),
+    ):
+        assert base != _digest(tmp_path, name, **change)

@@ -20,11 +20,13 @@ How to read `GENERATED["tables"]` (each map acts on a bit column, mod 2):
   bits, concatenated in `roles` order; `qubit_frame_map` acts on the
   per-qubit frames as every x bit, then every z bit; `layers` is its
   circuit.
+
+`docs/markdown/codepack-specs.md` explains these tables in prose.
 """
 
 from typing import Any
 
-INPUT_HASH = '545376e4d90c291a0348cd741b37c1ef9f7a6a50facc16632f64deeab92875f3'
+INPUT_HASH = '9860684bd66644a2e630fe8f5f03f2b0617ddc5344e4964d36795f098c490ee3'
 GENERATOR_VERSION = 1
 STIM_VERSION = '1.16.0'
 TABLES_HASH = 'e631d046b1b40452bd31bec07eee518a696532ce415b78645e9479556478bbf7'

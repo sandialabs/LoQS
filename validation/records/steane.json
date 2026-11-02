@@ -1,5 +1,6 @@
 {
   "big_configs": [],
+  "bugs": {},
   "cases": {
     "steane.all.static.completeness.all": "pass",
     "steane.default.ft.ft.check-S1-S5-S6-FT_Zero_Prep+H-FT_Logical_X_Measure-none-clean": "pass",
@@ -1442,46 +1443,37 @@
   },
   "codepack": "steane",
   "command": "python -m pytest validation -k steane -n 4 --timeout 1800 --write-records -q -p no:cacheprovider",
-  "commit": "ce1ee55b163abcd4d50424e59dcf0e9778bf063e",
-  "date": "2026-11-02T02:32:10+00:00",
+  "commit": "86d81a751dd77c32eac59f3e33fc9bfc219bf126",
+  "date": "2026-11-02T17:10:30+00:00",
   "dirty": true,
   "files": {
-    "loqs/codepacks/base.py": "bb8d72ece3daab7e54bc0ed561f379812d300ff6e27c40dbc5f6c176634b7e20",
-    "loqs/codepacks/codepack_7_1_3_multipatch.py": "1798b7638ae7ae53ef070e1f9420a2721bf0fc3bbf2f6cc9464a6fd651d02eff",
-    "loqs/codepacks/codepack_7_1_3_quantinuum2021.py": "e107f38734a4adf9a039dd807b71f2006c2f66268b888c30b477636ff8f307d1",
-    "loqs/codepacks/generator/__init__.py": "e7c21e0810c10f1128cb8422b88635b191991a5577888f00f796063df12f5217",
-    "loqs/codepacks/generator/__main__.py": "220ba4012e3291380fd36339b15d6335706f5dee498d33e32faef07a486be4fd",
-    "loqs/codepacks/generator/codepack.py": "c5208ec106461ea4d00bcf27160c5def31086bedf042f8d03e55920ef8bac3cf",
-    "loqs/codepacks/generator/derive.py": "a0294d867f6b69ddddf49daa8ba68f48066db0c28fd1443a19a54ff3b933ce74",
-    "loqs/codepacks/generator/gates.py": "3130c74f7ea1d893214eaada78708614e8e2456cf77c96fffdbf73c3b313c5b6",
-    "loqs/codepacks/generator/generate.py": "b7a71712ead4cb6a0acb94b8519e62ab62cc11e69166ac8998104659a4b27796",
-    "loqs/codepacks/generator/render.py": "24b16d938b463c3ae6c54c65c125e2c7f1f357607d3f6d20080da564c5569269",
-    "loqs/codepacks/generator/schema.py": "c4d0674767e6db2a5dcde572e74e1e106e0a5d81a5cd9de56a1a644545255a71",
-    "loqs/codepacks/steane/__init__.py": "9dc5f3d48da850aa24599d72b83683ff558e767e1a349fc2060455f8df32979e",
-    "loqs/codepacks/steane/_generated.py": "db74a4c07b1856552da8e128ad86c73939e6ebdbb99e5c16fccdcfc1007967a9",
-    "loqs/codepacks/steane/custom_apply_fns.py": "47c2465f9b739ca33ccbaef32485f425063cb531fbbb83c33c52b58f069e9120",
-    "loqs/codepacks/steane/spec.py": "a47e6c43a9c199f55d0e350f429a2affe260d12be88555f85a318dacbc21c966",
-    "validation/declarations/steane.py": "3e9baf1eba30b400202a3f234df51122209323194bd61933e7860cc84a64ea72"
+    "loqs/codepacks/base.py": "a8f5fc43d75d4312119f401de632a7f691b586a4b27b23df7cb9485982da9465",
+    "loqs/codepacks/codepack_7_1_3_multipatch.py": "89c2564ffcbf730a98e885652768aa74d3e46952581d245316e217e54bff4361",
+    "loqs/codepacks/codepack_7_1_3_quantinuum2021.py": "9486c9834fe71e203d6aed02df31d20d0b36f61c74e3bad0b23a7244d7dec1c9",
+    "loqs/codepacks/steane/__init__.py": "ca21e4c017283e9f341f2a8be960ab050b98856b4230d1bb6ae528a4f6dc88b3",
+    "loqs/codepacks/steane/_generated.py": "cd5211218657e427df5b8ee6a80117f0a0aa50512d625f6c5c5aad59aafc531b",
+    "loqs/codepacks/steane/custom_apply_fns.py": "594f5e3e22add95494ee511c1267ded1736ed2e0944671ebf8440d877970b70a",
+    "loqs/codepacks/steane/spec.py": "11f9e09f90e6d27943556bb7b126b63e9d54ac304e6250a261235abefe8451d0",
+    "validation/declarations/steane.py": "0b81b90dd8e5269dbb5e5c0af519b00d0f62632dfe843c2af53a331eff4950d0"
   },
   "harness": {
     "validation/__init__.py": "3583a22e094fc5516aba2fa7aaf5294e1951cf9257311166a995a12567d65f9c",
     "validation/bugs.py": "10e6f4305964b62de65be5396abe884e879866e02d33286dd007cd0a1d11c3c0",
     "validation/cases.py": "d12906718ed645d0f6ec5e67044a8aa7ec4277475a98c0b6a91974af24cdc8a5",
-    "validation/conftest.py": "fbbbd0bcb8f4340bb490e05fce19181f70b843a4eaadbb86abe044ffe7bb341c",
+    "validation/conftest.py": "aa17ec006b2ce3d39ec94daff4a838798cba8bcb896c1ddbd148cc353b3d943f",
     "validation/declaration.py": "9a7bea432c1884a7204a14f39352cf90cf3912706b7f2358823ca5ee51b64b78",
     "validation/engine.py": "d6af9a23e93fe3b11518082626e6bac8845205212d48d2eab558c15697db895e",
     "validation/logical.py": "c1fea1ffc5ffd5f7de2c0515b0f9ba013f38e2def34185dfa22fb4b8e5a28586",
-    "validation/mutations.py": "532f30456d52ab8525942364833ea7fd307a88690d9ccf6b484dc15ba1d72642",
+    "validation/mutations.py": "9769e08a1102b9cfb03f49fe39aef070ee621f433ade05a5a0dcebfcf0005435",
     "validation/oracle.py": "f52fbe49c6bec18abef2c3b0300f00a4d286f609cdcfe5eeddc9f2cfe82db4f3",
-    "validation/records.py": "a464612bfd59297711ef7a555738d8273a91ca86196c2eb077a8167b82446326",
+    "validation/records.py": "e6ead7fbfb0c0233990274557ac2f9aecdae70aa8fbb2a08a4ae7a517c5e1084",
     "validation/test_fault_tolerance.py": "d7cdb270e317ac3f6390ed08984ac3ccdac07985d5ecf7f18ddb3833e2196fff",
-    "validation/test_harness.py": "4f4fa85aca0794ee3c96753495486bf28880951e83dcf21e54a9543ea6302129",
+    "validation/test_harness.py": "bd94fc36f87219f3c61d0950372d1184ecdcd3c44be080318a74e88dca5e25a4",
     "validation/test_patch_independence.py": "1c701983f56321d2588e914d216e2bef6d21a16c083dfb20fe9db1afc695049d",
-    "validation/test_static.py": "bff9e9afbb6036826f7dafc2cd76602e191d1a83135fccd4def99ad77e8d41e9",
+    "validation/test_static.py": "b79fe645af3b0567f7982594efc02ec3a084c26634f7a043f2cb11b91a0d7529",
     "validation/test_tracking.py": "15adfa9b272fff3efa8c8e00b330db480151238dfcbfa334fae060b70c820fef",
     "validation/test_truth_tables.py": "a60be6ac962d15ea45ef286821ba77c8b733d9956f3d393ecea64c935278b646"
   },
-  "known_failures": {},
   "machine": {
     "cpus": 4,
     "platform": "Linux-7.0.12-201.fc44.aarch64-aarch64-with-glibc2.39",
@@ -1489,5 +1481,6 @@
     "python": "3.13.15",
     "stim": "1.16.0"
   },
-  "runtime_s": 538.9
+  "rendering": "590234af8502be01bc6554f08aa26811a8c1a6ea248d54a6f2f717e0fc54866f",
+  "runtime_s": 545.6
 }

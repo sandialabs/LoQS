@@ -2,19 +2,17 @@
 
 import dataclasses
 import importlib
-import pkgutil
+import re
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
-import loqs.codepacks
+import loqs
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
-from loqs.codepacks.generator import (
-    GeneratedCodepack,
-    StaleArtifactError,
-)
-from loqs.codepacks.generator.codepack import tables_hash
+from loqs.codepacks.generator import StaleArtifactError
+from loqs.codepacks.generator.codepack import shipped_codepacks, tables_hash
 from loqs.codepacks.steane import SteaneCodepack
 from loqs.codepacks.steane import _generated as steane_artifact
 
@@ -87,27 +85,54 @@ def test_unlocked_subclass_derives():
     assert "Renamed S" in names
 
 
-def _subclasses(cls):
-    for sub in cls.__subclasses__():
-        yield sub
-        yield from _subclasses(sub)
-
-
 def test_shipped_artifacts_current():
     pytest.importorskip("stim")
     from loqs.codepacks.generator.generate import generate
 
-    for info in pkgutil.walk_packages(
-        loqs.codepacks.__path__, "loqs.codepacks."
-    ):
-        importlib.import_module(info.name)
-    shipped = [
-        c
-        for c in set(_subclasses(GeneratedCodepack))
-        if c.__module__.startswith("loqs.codepacks.")
-    ]
+    shipped = shipped_codepacks()
     assert SteaneCodepack in shipped
     for cls in shipped:
         assert cls.locked, cls
         loaded = cls().generated
         assert tables_hash(loaded) == tables_hash(generate(cls.spec)), cls
+    docs = Path(loqs.__file__).parents[1] / "docs"
+    if not (docs.parent / "mkdocs.yml").exists():
+        return
+    from loqs.codepacks.generator.document import document
+
+    index = (docs / "codepacks" / "index.md").read_text()
+    for cls in shipped:
+        page, figures = document(cls, generate(cls.spec))
+        committed = docs / "codepacks" / f"{cls.spec.name}.md"
+        assert committed.read_text() == page, cls
+        assert all((docs / "codepacks" / p).exists() for p in figures), cls
+        paper = re.findall(rf"\]\(({cls.spec.name}/paper/[^)]+)\)", page)
+        assert all((docs / "codepacks" / p).exists() for p in paper), cls
+        assert f"({cls.spec.name}.md)" in index, cls
+
+
+def test_cli_documents_only_shipped(monkeypatch, tmp_path):
+    pytest.importorskip("stim")
+    from loqs.codepacks.generator import __main__ as cli
+
+    written = []
+    monkeypatch.setattr(
+        cli, "write_artifact", lambda cls: written.append(("a", cls)) or "a"
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_document",
+        lambda cls, generated, docs: written.append(("d", cls)) or "d",
+    )
+    monkeypatch.setattr(cli.loqs, "__file__", str(tmp_path / "loqs" / "x.py"))
+
+    class Mine(SteaneCodepack):
+        pass
+
+    monkeypatch.setattr(sys.modules[__name__], "Mine", Mine, raising=False)
+    assert cli.main([f"{__name__}:Mine"]) == 0
+    assert written == [("a", Mine)]
+
+    with pytest.raises(FileNotFoundError):
+        cli.main(["loqs.codepacks.steane:SteaneCodepack"])
+    assert written == [("a", Mine)]

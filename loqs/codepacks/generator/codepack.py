@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -20,8 +20,9 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import pkgutil
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
@@ -40,6 +41,33 @@ from loqs.core import Instruction, QECCode
 
 class StaleArtifactError(RuntimeError):
     """A locked codepack's generated artifact is missing, stale or edited."""
+
+
+def shipped_codepacks() -> list[type[GeneratedCodepack]]:
+    """The generated codepack classes that ship in `loqs.codepacks`.
+
+    Imports only the subpackages of `loqs.codepacks`, never its old
+    top-level modules, which need pyGSTi. Returns every
+    `GeneratedCodepack` subclass defined under `loqs.codepacks.`, locked
+    or not, sorted by spec name.
+    """
+    import loqs.codepacks
+
+    for info in pkgutil.iter_modules(loqs.codepacks.__path__):
+        if info.ispkg:
+            importlib.import_module(f"loqs.codepacks.{info.name}")
+
+    def walk(cls: type) -> Iterator[type]:
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from walk(sub)
+
+    found = {
+        c
+        for c in walk(GeneratedCodepack)
+        if c.__module__.startswith("loqs.codepacks.")
+    }
+    return sorted(found, key=lambda c: c.spec.name)  # type: ignore[attr-defined]
 
 
 def tables_hash(generated: Mapping[str, Any]) -> str:
@@ -109,8 +137,8 @@ class GeneratedCodepack(BaseCodepack):
         *,
         circuit_backend: Any = PyGSTiPhysicalCircuit,
         include_idles: bool = False,
-        gate_durations: Mapping[str, int] | None = None,
-        idle_gates: Mapping[int, str] | None = None,
+        gate_durations: Mapping[str, int | float] | None = None,
+        idle_gates: Mapping[int | float, str] | None = None,
         ft_state_prep_max_repeats: int = 100,
     ) -> None:
         self.circuit_backend = circuit_backend

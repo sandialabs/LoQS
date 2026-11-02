@@ -22,6 +22,7 @@ _BY_ID = {c.id: c for cases in _ALL.values() for c in cases}
 _REPORTS: dict[str, dict[str, str]] = {}
 _START = [time.time()]
 _START_FILES: dict[str, dict[str, str]] = {}  # codepack -> digests at start
+_START_RENDERING: dict[str, str] = {}  # codepack -> fingerprint at start
 
 
 def pytest_addoption(parser):
@@ -93,6 +94,7 @@ def pytest_sessionstart(session):
     if session.config.getoption("--write-records"):
         for name, decl in DECLARATIONS.items():
             _START_FILES[name] = records.file_digests(decl)
+            _START_RENDERING[name] = records.rendering_fingerprint(decl)
 
 
 def pytest_runtest_logreport(report):
@@ -126,6 +128,7 @@ def pytest_sessionfinish(session, exitstatus):
             _START_FILES[name],
             meta,
             big,
+            _START_RENDERING[name],
         )
         if isinstance(result, str):
             print(f"\nno record for {name}: {result}")

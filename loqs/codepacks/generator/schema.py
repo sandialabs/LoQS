@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -38,11 +38,18 @@ class SpecError(ValueError):
 @dataclass(frozen=True)
 class Src:
     """Where a spec element comes from: "paper" with its citation, or
-    "ours" with a reason."""
+    "ours" with a reason.
+
+    Text may cite a paper by its BibTeX key as `[@key]`, which the docs
+    site renders from `docs/references.bib`. `figures` name images of the
+    cited figures, files in the spec document's `paper/` folder, drawn
+    beside the element so a reader can compare the two.
+    """
 
     kind: str
     cite: str = ""
     reason: str = ""
+    figures: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in ("paper", "ours"):
@@ -53,14 +60,14 @@ class Src:
             raise SpecError("an item of ours needs a reason")
 
 
-def paper(cite: str, reason: str = "") -> Src:
+def paper(cite: str, reason: str = "", figures: tuple[str, ...] = ()) -> Src:
     """An element taken from a paper, cited by figure, table or section."""
-    return Src("paper", cite, reason)
+    return Src("paper", cite, reason, figures)
 
 
-def ours(reason: str, cite: str = "") -> Src:
+def ours(reason: str, cite: str = "", figures: tuple[str, ...] = ()) -> Src:
     """An element of our own choosing, with the reason."""
-    return Src("ours", cite, reason)
+    return Src("ours", cite, reason, figures)
 
 
 # --- facts ------------------------------------------------------------------
@@ -204,7 +211,9 @@ class CustomApplyFn:
     add to `Instruction.data` (`data key -> table name`). `qubit_data`
     lists the data keys holding qubit labels, so the renderer builds the
     `map_qubits_fn`. `scratch` lists patch-data keys the function writes,
-    which a prep clears, and `inserts` the keys it pushes onto the stack."""
+    which a prep clears. `branches` lists `(condition, keys)`: the keys
+    the function pushes onto the stack when the condition holds, which
+    the spec document draws as a flowchart; empty keys push nothing."""
 
     key: str
     fn: str
@@ -215,8 +224,13 @@ class CustomApplyFn:
     param_priorities: tuple[tuple[str, tuple[str, ...]], ...] = ()
     param_aliases: tuple[tuple[str, str], ...] = ()
     scratch: tuple[str, ...] = ()
-    inserts: tuple[str, ...] = ()
+    branches: tuple[tuple[str, tuple[str, ...]], ...] = ()
     name: str = ""
+
+    @property
+    def inserts(self) -> tuple[str, ...]:
+        """Every key some branch pushes, in branch order."""
+        return tuple(dict.fromkeys(k for _, ks in self.branches for k in ks))
 
 
 @dataclass(frozen=True)
@@ -275,7 +289,9 @@ Item = (
 
 @dataclass(frozen=True)
 class CodeSpec:
-    """A whole code: facts, items, lookup tables, two-patch gates, roles."""
+    """A whole code: facts, items, lookup tables, two-patch gates, roles.
+    `figure_credit` is the credit the spec document gives the paper
+    figures that `Src.figures` name, such as their licence."""
 
     name: str
     title: str
@@ -284,6 +300,7 @@ class CodeSpec:
     tables: tuple[LookupTable, ...] = ()
     two_patch: tuple[TwoPatchGate, ...] = ()
     roles: tuple[Role, ...] = field(default=())
+    figure_credit: str = ""
 
     def item(self, key: str) -> Item:
         """The item with this key."""

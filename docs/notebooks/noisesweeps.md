@@ -29,7 +29,7 @@ the whole feature, using the same Steane `[[7,1,3]]` code and depolarizing-noise
 short course.
 
 ```{code-cell} ipython3
-from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
+from loqs.codepacks import SteaneCodepack
 from loqs.core import Frame, History, InstructionStack, PatchLayout
 from loqs.backends import NumpyStatevectorQuantumState, PyGSTiNoiseModel
 from loqs.tools.noisesweeptools import (
@@ -51,7 +51,7 @@ reuse them across every sweep point.
 
 ```{code-cell} ipython3
 qubits = ["A0", "A1", "A2"] + [f"D{i}" for i in range(7)]
-steane_code = codepack_Steane.create_qec_code()
+steane_code = SteaneCodepack().create_qec_code()
 
 init_state = NumpyStatevectorQuantumState(10, qubit_labels=qubits)
 init_patches = PatchLayout({"L0": steane_code.create_patch(qubits=qubits)})

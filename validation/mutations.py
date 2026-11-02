@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from loqs.backends import ListPhysicalCircuit
-from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
 from loqs.codepacks import codepack_surf17_multipatch as surf_multipatch
+from loqs.codepacks.steane import SteaneCodepack
 from loqs.core import Instruction
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
@@ -89,30 +89,15 @@ def _cx_frame_only(op, entries, geometry):
     """The transversal CX's bookkeeping skips the syndrome conjugation."""
     if op.key != "transversal-cx":
         return entries
-    ctrl, tgt = geometry.label("ctrl"), geometry.label("tgt")
-
-    def apply_fn(patches, ctrl_patch_label, tgt_patch_label):
-        pc, pt = patches[ctrl_patch_label], patches[tgt_patch_label]
-        fc, ft = multipatch.conjugate_cx_logical_pauli_frames(
-            pc.data.get("logical_pauli_frame", [0, 0]),
-            pt.data.get("logical_pauli_frame", [0, 0]),
-        )
-        new_c, new_t = pc.copy(), pt.copy()
-        new_c.data["logical_pauli_frame"] = fc
-        new_t.data["logical_pauli_frame"] = ft
-        new_patches = patches.copy()
-        new_patches[ctrl_patch_label] = new_c
-        new_patches[tgt_patch_label] = new_t
-        return Frame({"patches": new_patches})
-
-    circuit = multipatch.build_transversal_cx_circuit_instruction(
-        geometry, circuit_backend=ListPhysicalCircuit
+    cx = SteaneCodepack(circuit_backend=ListPhysicalCircuit).build_two_patch(
+        "Transversal CX", geometry
     )
-    book = Instruction(
-        apply_fn,
-        data={"ctrl_patch_label": ctrl, "tgt_patch_label": tgt},
-        name="CX frame only",
-    )
+    circuit, book = cx.data["instructions"]
+    n = len(book.data["syndrome_map"])
+    book.data["syndrome_map"] = [
+        [int(i == j) for j in range(n)] for i in range(n)
+    ]
+    book.name = "CX frame only"
     return [(circuit, None), (book, None)]
 
 

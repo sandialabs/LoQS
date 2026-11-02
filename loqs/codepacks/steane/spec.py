@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -9,15 +9,12 @@
 
 """Steane [[7,1,3]] (Quantinuum 2021) as a spec.
 
-Transcribed from `loqs/codepacks/codepack_7_1_3_quantinuum2021.py` at
-ce1ee55 (cited as S:<line>) and `codepack_7_1_3_multipatch.py` (M:<line>).
-Paper: Ryan-Anderson et al., PRX 11, 041058 (2021) [PRX], cited by its own
-figure, table and section numbers (arXiv:2107.07505v1 numbers them
-differently); its qubits 1-7 are D0-D6 here. Fig 10's circuit drawings
-don't show the CNOT schedules legibly, so the prep and flagged-check
-schedules are transcribed from S and their fault tolerance rests on the
-validation harness's sweeps. Names (`name=`) are the old ones verbatim,
-slips included, so the comparison is exact; standardizing them is a non-goal.
+Paper: Ryan-Anderson et al., [@ryananderson_realizing_2021] (PRX 11,
+041058), cited by its own figure, table and section numbers
+(arXiv:2107.07505v1 numbers them differently); its qubits 1-7 are D0-D6
+here. The circuits are Fig 10's, gate for gate. Instruction names
+(`name=`) are LoQS 1.3's verbatim, slips included, so existing scripts
+find them; standardizing them is a non-goal.
 """
 
 from loqs.codepacks.generator.schema import (
@@ -41,11 +38,11 @@ from loqs.codepacks.generator.schema import (
 D = tuple(f"D{i}" for i in range(7))
 A = ("A0", "A1", "A2")
 ALL_D = " ".join(D)
-FIG1 = "PRX Fig 1"
-FIG10 = "PRX Fig 10"
-NOT_LEGIBLE = (
-    "the figure doesn't show the schedule legibly; transcribed from S"
-)
+PRX = "[@ryananderson_realizing_2021]"
+FIG1 = PRX + " Fig 1"
+FIG10 = PRX + " Fig 10"
+PACKED = "CNOTs on disjoint qubits in neighbouring columns share a layer"
+FIG1_LOGICALS = ("fig1-logicals.png",)
 
 FACTS = Facts(
     data=D,
@@ -60,16 +57,18 @@ FACTS = Facts(
         "IIZZIZZ",
     ),
     logicals=(("IIIIXXX", "IIIIZZZ"),),
-    src=paper(FIG1),
+    src=paper(FIG1, figures=("fig1.png",)),
     frame_layout=("Z", "X"),
     conventions_src=ours(
-        "tracking layout of the old module: logical_pauli_frame is "
-        "[Z_bit, X_bit], latest_syndrome is S1..S6 (S:895-921, M:126)"
+        "the frame's bit order and the syndrome's stabilizer order are the "
+        "ones existing LoQS scripts read"
     ),
 )
 
 _CUSTOM = "loqs.codepacks.steane.custom_apply_fns"
 _FF = f"{_CUSTOM}:flagged_feedforward"
+_CHANGED = "a flagged reading differs from latest_syndrome"
+_UNCHANGED = "none differs"
 _UNFLAGGED = (
     "Unflagged Parallel S1-S2-S3 Check",
     "Unflagged Parallel S4-S5-S6 Check",
@@ -86,7 +85,12 @@ ITEMS: tuple[Item, ...] = (
         Gcnot D0 D3 D4 D2 D6 D5
         Gcnot D4 D1 D3 D2
         """,
-        paper(FIG10 + ", encoding circuit (S:123-145)", NOT_LEGIBLE),
+        paper(
+            FIG10 + ", encoding circuit",
+            "the paper leaves its wires unlabelled; ours are read top to "
+            "bottom. " + PACKED,
+            figures=("fig10-encoder.png",),
+        ),
         name="Non-FT zero state prep",
     ),
     Circuit(
@@ -99,11 +103,9 @@ ITEMS: tuple[Item, ...] = (
         Imrz A0
         """,
         paper(
-            FIG10
-            + " and Sec II.A.1, encoding circuit and its Z_L check (S:166-175)",
-            NOT_LEGIBLE + "; the controls D1 D3 D5 read Z_L times S5 S6, not "
-            "Fig 1's Z on D4 D5 D6, which the harness's prep sweep rejects "
-            "with this encoder",
+            FIG10 + " and Sec II.A.1, encoding circuit and its Z_L check",
+            "note: the check measures Z_L·S5·S6 (Z on D1, D3, D5)",
+            figures=("fig10-encoder.png",),
         ),
         name="Non-FT Zero Prep + Checks",
     ),
@@ -115,20 +117,39 @@ ITEMS: tuple[Item, ...] = (
         src=ours(
             "the reset-then-retry loop and the default of 100 repeats; the "
             "paper repeats up to 3 times and then proceeds",
-            cite="PRX Fig 10 caption, Fig 14",
+            cite=PRX + " Fig 10 caption, Fig 14",
+            figures=("fig14-prep.png",),
         ),
         name="Repeat-until-success FT Zero Prep",
         reset_name="Reset to all 0 state",
     ),
     # --- gates (Fig 1 table) --------------------------------------------------
-    Gate("X", "Gxpi D4 D5 D6", "X", paper(FIG1), name="Logical X"),
-    Gate("Y", "Gypi D4 D5 D6", "Y", paper(FIG1), name="Logical Y"),
-    Gate("Z", "Gzpi D4 D5 D6", "Z", paper(FIG1), name="Logical Z"),
+    Gate(
+        "X",
+        "Gxpi D4 D5 D6",
+        "X",
+        paper(FIG1, figures=FIG1_LOGICALS),
+        name="Logical X",
+    ),
+    Gate(
+        "Y",
+        "Gypi D4 D5 D6",
+        "Y",
+        paper(FIG1, figures=FIG1_LOGICALS),
+        name="Logical Y",
+    ),
+    Gate(
+        "Z",
+        "Gzpi D4 D5 D6",
+        "Z",
+        paper(FIG1, figures=FIG1_LOGICALS),
+        name="Logical Z",
+    ),
     Gate(
         "H",
         "Gh " + ALL_D,
         "H",
-        paper(FIG1),
+        paper(FIG1, figures=FIG1_LOGICALS),
         circuit_key="H Circuit",
         update_key="H Frame Update",
         name="Logical H",
@@ -140,8 +161,11 @@ ITEMS: tuple[Item, ...] = (
         "Gzmpi2 " + ALL_D,
         "S",
         paper(
-            FIG1 + ": logical S is S-dagger on every data qubit; frame update "
-            "PRX Fig 15 (sgate2pf), matched by the derivation"
+            FIG1
+            + ": logical S is S-dagger on every data qubit; frame update "
+            + PRX
+            + " Fig 15 (sgate2pf), matched by the derivation",
+            figures=FIG1_LOGICALS + ("fig15-sgate.png",),
         ),
         circuit_key="S Circuit",
         update_key="S Frame Update",
@@ -164,7 +188,7 @@ ITEMS: tuple[Item, ...] = (
         "I",
         "Gi " + ALL_D,
         "I",
-        ours("an explicit logical idle (S:206, 'a common subset')"),
+        ours("an explicit logical idle, so a program can idle the patch"),
         name="Logical I",
     ),
     # --- QEC ------------------------------------------------------------------
@@ -182,9 +206,10 @@ ITEMS: tuple[Item, ...] = (
         Imrz A0 A1 A2
         """,
         paper(
-            FIG10 + ", first flagged parallel circuit (S:324-352); auxes read "
-            "S1, S5, S6 (Fig 11, Fig 17)",
-            NOT_LEGIBLE,
+            FIG10 + ", first flagged parallel circuit; auxes read S1, S5, S6 "
+            "(Fig 11, Fig 17)",
+            PACKED,
+            figures=("fig10-flagged-1.png",),
         ),
         name="Flagged S1-S5-S6 Check",
     ),
@@ -202,10 +227,10 @@ ITEMS: tuple[Item, ...] = (
         Imrz A0 A1 A2
         """,
         paper(
-            FIG10
-            + ", second flagged parallel circuit (S:366-394); auxes read "
-            "S4, S2, S3 (Fig 17; the caption's {S1, S3, S4} is a typo)",
-            NOT_LEGIBLE,
+            FIG10 + ", second flagged parallel circuit; auxes read S4, S2, S3 "
+            "(Fig 17; the caption's {S1, S3, S4} is a typo)",
+            PACKED,
+            figures=("fig10-flagged-2.png",),
         ),
         name="Flagged S2-S3-S4 Check",
     ),
@@ -214,12 +239,11 @@ ITEMS: tuple[Item, ...] = (
             f"Unflagged S{i} Check",
             f"S{i}",
             A[(i - 1) % 3],
-            ours(
-                "the paper doesn't give the unflagged schedule ('Scheduling "
-                "less clear', S:408-409): one aux per check, data in support "
-                "order"
+            paper(
+                FIG10 + ", unflagged circuits: data in support order",
+                "the aux is ours: A0, A1, A2 for S1-S3 and again for S4-S6",
             ),
-            # The old module names S4-S6 "S1"-"S3" (S:451), kept verbatim.
+            # LoQS 1.3 names S4-S6 "S1"-"S3", kept verbatim.
             name=f"Unflagged S{(i - 1) % 3 + 1} Check",
         )
         for i in range(1, 7)
@@ -227,19 +251,30 @@ ITEMS: tuple[Item, ...] = (
     Parallel(
         "Unflagged Parallel S1-S2-S3 Check",
         ("Unflagged S1 Check", "Unflagged S2 Check", "Unflagged S3 Check"),
-        ours("the three X checks merged from layer 0 (S:456)"),
+        ours(
+            "the three X checks run in parallel, one aux each",
+            cite=FIG10 + ", unflagged circuits",
+            figures=("fig10-unflagged.png",),
+        ),
         name="Unflagged Parallel S1-S2-S3 Check",
     ),
     Parallel(
         "Unflagged Parallel S4-S5-S6 Check",
         ("Unflagged S4 Check", "Unflagged S5 Check", "Unflagged S6 Check"),
-        ours("the three Z checks merged from layer 0 (S:457)"),
+        ours(
+            "the three Z checks run in parallel, one aux each",
+            cite=FIG10 + ", unflagged circuits",
+            figures=("fig10-unflagged.png",),
+        ),
         name="Unflagged S4-S5-S6 Check",
     ),
     CustomApplyFn(
         "Flagged S1-S5-S6 Feed-Forward",
         _FF,
-        paper("PRX Sec II.A.2, Fig 10 caption, Fig 17 (first branch)"),
+        paper(
+            PRX + " Sec II.A.2, Fig 10 caption, Fig 17 (first branch)",
+            figures=("fig17-flagged.png",),
+        ),
         data=(("flag_qubits", A), ("first_check", True)),
         derived=(
             (
@@ -249,17 +284,25 @@ ITEMS: tuple[Item, ...] = (
         ),
         qubit_data=("flag_qubits", "syndrome_index"),
         scratch=("flagged_syndrome_diff",),
-        inserts=_UNFLAGGED
-        + (
-            "Flagged Parallel S2-S3-S4 Check",
-            "Flagged S2-S3-S4 Feed-Forward",
+        branches=(
+            (_CHANGED, _UNFLAGGED),
+            (
+                _UNCHANGED,
+                (
+                    "Flagged Parallel S2-S3-S4 Check",
+                    "Flagged S2-S3-S4 Feed-Forward",
+                ),
+            ),
         ),
         name="Flagged S1-S5-S6 Feed-Forward",
     ),
     CustomApplyFn(
         "Flagged S2-S3-S4 Feed-Forward",
         _FF,
-        paper("PRX Sec II.A.2, Fig 10 caption, Fig 17 (second branch)"),
+        paper(
+            PRX + " Sec II.A.2, Fig 10 caption, Fig 17 (second branch)",
+            figures=("fig17-flagged.png",),
+        ),
         data=(("flag_qubits", A), ("first_check", False)),
         derived=(
             (
@@ -269,13 +312,16 @@ ITEMS: tuple[Item, ...] = (
         ),
         qubit_data=("flag_qubits", "syndrome_index"),
         scratch=("flagged_syndrome_diff",),
-        inserts=_UNFLAGGED,
+        branches=((_CHANGED, _UNFLAGGED), (_UNCHANGED, ())),
         name="Flagged S2-S3-S4 Feed-Forward",
     ),
     CustomApplyFn(
         "QEC Decoder",
         f"{_CUSTOM}:qec_decoder",
-        paper("PRX Sec II.A.3, Tables I and II, Fig 17"),
+        paper(
+            PRX + " Sec II.A.3, Tables I and II, Fig 17, Fig 11",
+            figures=("fig17-decode.png", "fig11.png"),
+        ),
         derived=(
             ("X_qubits", "aux_order:Unflagged Parallel S1-S2-S3 Check"),
             ("Z_qubits", "aux_order:Unflagged Parallel S4-S5-S6 Check"),
@@ -297,20 +343,26 @@ ITEMS: tuple[Item, ...] = (
     Composite(
         "Adaptive QEC",
         ("Flagged Parallel S1-S5-S6 Check", "Flagged S1-S5-S6 Feed-Forward"),
-        paper("PRX Sec II.A.2, Fig 10"),
+        paper(PRX + " Sec II.A.2, Fig 3, Fig 10", figures=("fig3.png",)),
         name="Start of Adaptive QEC",
     ),
     # --- measure ----------------------------------------------------------------
     Circuit(
         "Raw Z Data Measure",
         "Imrz " + ALL_D,
-        ours("measure every data qubit in Z (S:490)"),
+        paper(
+            PRX + " Fig 10 final measurement, Fig 19 (meas_z_data)",
+            figures=("fig19-measure.png",),
+        ),
         name="Raw logical Z-basis measurement",
     ),
     Circuit(
         "Raw X Data Measure",
         "Gh " + ALL_D + "\nImrz " + ALL_D,
-        ours("measure every data qubit in X (S:493); unused by the X measure"),
+        ours(
+            "every data qubit measured in X, for a program to call; the X "
+            "measure uses the H Circuit and the Z readout instead"
+        ),
         name="Raw logical X-basis measurement",
     ),
     *(
@@ -318,10 +370,10 @@ ITEMS: tuple[Item, ...] = (
             f"FT {b} logical parity calculation",
             f"{_CUSTOM}:logical_parity",
             ours(
-                "PRX Sec II.A.4 with our choices: decode the diff against "
-                "latest_syndrome, then update the frame and infer again "
-                "(S:520-610)",
-                cite="PRX Sec II.A.4, Fig 19",
+                "decode the diff against latest_syndrome, then update the "
+                "frame and infer again",
+                cite=PRX + " Sec II.A.4, Fig 19",
+                figures=("fig19-body.png",),
             ),
             data=(("data_qubits", D), ("measurement_basis", b)),
             derived=(
@@ -337,16 +389,16 @@ ITEMS: tuple[Item, ...] = (
     Composite(
         "FT Logical Z Measure",
         ("Raw Z Data Measure", "FT Z logical parity calculation"),
-        paper("PRX Sec II.A.4"),
+        paper(PRX + " Sec II.A.4, Fig 19", figures=("fig19-body.png",)),
         name="FT logical Z measurement",
     ),
     Composite(
         "FT Logical X Measure",
         ("H Circuit", "Raw Z Data Measure", "FT X logical parity calculation"),
-        ours(
-            "PRX Sec II.A.4, with the bare H Circuit as the basis change "
-            "(S:663-671)",
-            cite="PRX Sec II.A.4",
+        paper(
+            PRX + " Sec II.A.4, Fig 18 (rotate_meas_basis): logical H, then "
+            "the Z readout",
+            figures=("fig18.png",),
         ),
         name="FT logical X measurement",
     ),
@@ -358,7 +410,8 @@ TABLES = (
         "data",
         rows=(((0, 1, 0),), ((0, 1, 1),), ((0, 0, 1),)),
         src=paper(
-            "PRX Table I (= Fig 21 decoder_2d), its +1/-1 rows as 0/1 bits"
+            PRX + " Table I (= Fig 21 decoder_2d), its +1/-1 rows as 0/1 bits",
+            figures=("table1.png", "fig21.png"),
         ),
     ),
     LookupTable(
@@ -369,7 +422,10 @@ TABLES = (
             ((1, 0, 0), (0, 0, 1)),
             ((0, 1, 1), (0, 0, 1)),
         ),
-        src=paper("PRX Table II (= Fig 22 decoder_flag_update), rows as bits"),
+        src=paper(
+            PRX + " Table II (= Fig 22 decoder_flag_update), rows as bits",
+            figures=("table2.png", "fig22.png"),
+        ),
     ),
 )
 
@@ -379,7 +435,11 @@ TWO_PATCH = (
         ("ctrl", "tgt"),
         "Gcnot " + " ".join(f"ctrl.{q} tgt.{q}" for q in D),
         "CX",
-        ours("the textbook transversal CNOT, uncited (M:53-118)"),
+        ours(
+            "the textbook transversal CNOT; the paper has no logical "
+            "two-qubit gate",
+            cite=PRX + " Sec I",
+        ),
         name="Transversal Logical CX",
     ),
 )
@@ -400,4 +460,9 @@ SPEC = CodeSpec(
     tables=TABLES,
     two_patch=TWO_PATCH,
     roles=ROLES,
+    figure_credit=(
+        "Paper figures adapted from " + PRX + ", Phys. Rev. X 11, 041058 "
+        "(2021), under CC BY 4.0: cropped, with our qubit labels added in "
+        "blue."
+    ),
 )

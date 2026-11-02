@@ -37,7 +37,9 @@ WRONG_SPECS = {
     ),
     "unknown-insert": (
         _with_item(
-            SPEC, "Flagged S2-S3-S4 Feed-Forward", inserts=("QEC decoder",)
+            SPEC,
+            "Flagged S2-S3-S4 Feed-Forward",
+            branches=(("always", ("QEC decoder",)),),
         ),
         SpecError,
     ),

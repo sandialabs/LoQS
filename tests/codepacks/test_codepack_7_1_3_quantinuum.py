@@ -1,4 +1,4 @@
-"""Tester for loqs.codepacks.codepack_7_1_3_quantinuum2021"""
+"""Tester for the Steane codepack and its deprecated wrapper functions"""
 
 import pytest
 
@@ -18,7 +18,10 @@ from loqs.backends import (
 )
 from loqs.backends.reps import QSimSuperopGateRep, StimCircuitGateRep
 from loqs.core import InstructionStack, QuantumProgram
+from loqs.codepacks import SteaneCodepack
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
+from loqs.codepacks.base import walk_qec_code_gate_names
+from loqs.codepacks.generator.gates import GATES
 from loqs.core.instructions import builders
 
 # The workflow tests' stacks and noiseless outcomes. The PyGSTi model cannot
@@ -55,9 +58,8 @@ class TestSteaneCodepack:
 
     @staticmethod
     def _create_program(circuit_backend, model_backend, state_backend):
-        code_steane = codepack_steane.create_qec_code(
-            circuit_backend=circuit_backend
-        )
+        codepack = SteaneCodepack(circuit_backend=circuit_backend)
+        code_steane = codepack.create_qec_code()
 
         # Define the physical qubit labels for our system here
         qubits = ["A0", "A1", "A2"] + [f"D{i+3}" for i in range(7)]
@@ -67,7 +69,7 @@ class TestSteaneCodepack:
         else:
             gaterep = StimCircuitGateRep
 
-        ideal_model = codepack_steane.create_ideal_model(
+        ideal_model = codepack.create_ideal_model(
             qubits, gaterep=gaterep, model_backend=model_backend
         )
 
@@ -249,8 +251,9 @@ class TestSteaneCodepack:
         self, measurement_basis, error_gate, data_qubit, num_qec_rounds
     ):
         circuit_backend = ListPhysicalCircuit
-        code = codepack_steane.create_qec_code(circuit_backend=circuit_backend)
-        model = codepack_steane.create_ideal_model(
+        codepack = SteaneCodepack(circuit_backend=circuit_backend)
+        code = codepack.create_qec_code()
+        model = codepack.create_ideal_model(
             self.qubits,
             gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
@@ -335,3 +338,44 @@ class TestSteaneCodepack:
                 "logical_measurement" in frame
                 for frame in results.shot_histories[shot]
             )
+
+
+class TestDeprecatedWrappers:
+    """The old functions warn and build what the class builds."""
+
+    QUBITS = [f"Q{i}" for i in range(10)]
+
+    def test_create_qec_code_passes_every_option(self):
+        options = dict(
+            ft_state_prep_max_repeats=7,
+            include_idles=True,
+            # Every gate one unit long, so no 2Q or MCM idle is padded
+            gate_durations={name: 1 for name in GATES},
+            idle_gates={1: "MyIdle1Q", 2: "Gi2Q", 3: "GiMCM"},
+            circuit_backend=ListPhysicalCircuit,
+        )
+        with pytest.warns(DeprecationWarning):
+            old = codepack_steane.create_qec_code(**options)
+        new = SteaneCodepack(**options).create_qec_code()
+        names = walk_qec_code_gate_names(new)
+        assert "MyIdle1Q" in names and "Gi2Q" not in names
+        assert walk_qec_code_gate_names(old) == names
+        assert old.instructions["FT Zero Prep"].data["max_repeats"] == 7
+        for code in (old, new):
+            circuit = code.instructions["H Circuit"].data["circuit"]
+            assert type(circuit) is ListPhysicalCircuit
+
+    @pytest.mark.parametrize(
+        "backend, evotype",
+        [(DictNoiseModel, None), (PyGSTiNoiseModel, "densitymx")],
+        ids=["dict", "pygsti"],
+    )
+    def test_create_ideal_model(self, backend, evotype):
+        with pytest.warns(DeprecationWarning):
+            model = codepack_steane.create_ideal_model(
+                self.QUBITS, model_backend=backend
+            )
+        names = {k[0] for k in model.gate_keys if k[0][0] == "G"}
+        assert {"Gi1Q", "Gi2Q", "GiMCM"} <= names
+        if evotype:
+            assert str(model.model.evotype) == evotype

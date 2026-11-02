@@ -33,6 +33,8 @@ Each shipped codepack should also have a validation declaration in `validation/d
 which states its stabilizers, logical operators and logical gate actions;
 `validation/README.md` ("Where a codepack lives") maps all of a codepack's files.
 
+A generated codepack, such as [](api:SteaneCodepack), is a spec plus a locked artifact:
+the spec is pure data with each fact's source, and a generator derives the bookkeeping tables from it.
 Each codepack lives in its own package, and not every codepack is exported from `loqs.codepacks`;
 import a class from its package, for example `from loqs.codepacks.trivial_counter import TrivialCounterCodepack`.
 
@@ -45,6 +47,7 @@ Examples
 """
 
 from loqs.codepacks.base import BaseCodepack
+from loqs.codepacks.steane import SteaneCodepack
 from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 
-__all__ = ["BaseCodepack", "TrivialCounterCodepack"]
+__all__ = ["BaseCodepack", "SteaneCodepack", "TrivialCounterCodepack"]

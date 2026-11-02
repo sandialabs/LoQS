@@ -47,6 +47,21 @@ A codepack migrated to the class API has five parts:
 | Declaration | `validation/declarations/<name>.py` | what the code claims: data qubits, stabilizers, logical operators, each logical gate's Clifford action, preps, measures, QEC keys, internal keys, sweeps and known failures |
 | Record | `validation/records/<name>.json` | a hash of the declaration's `files` and every case result of the last full run |
 
+A generated codepack (one built from a spec) has these parts instead:
+
+| Part | Path | Holds |
+|---|---|---|
+| Spec | `loqs/codepacks/<name>/spec.py` | the code's facts, circuits and declared gates, with each element's source |
+| Custom apply functions | `loqs/codepacks/<name>/custom_apply_fns.py` | the hand-written apply functions the spec names |
+| Artifact | `loqs/codepacks/<name>/_generated.py` | the tables derived from the spec; regenerated, never edited |
+| Class | `loqs/codepacks/<name>/__init__.py` | a `GeneratedCodepack` subclass setting `spec` and `artifact` |
+| Old entry points | `loqs/codepacks/codepack_<name>.py` | deprecated module-level wrappers that call the class |
+| Declaration | `validation/declarations/<name>.py` | as above |
+| Record | `validation/records/<name>.json` | as above; its `rendering` fingerprint covers the generator's output, so the generator's files need no record |
+
+`docs/codepacks/<name>.md` is the spec rendered as a document, regenerated
+with the artifact by `python -m loqs.codepacks.generator`.
+
 `QECCode` holds instructions and qubits only, so the declaration is the one
 place a codepack's stabilizers, logical operators and gate actions are
 written down. It stays outside the package so the harness checks the class
@@ -82,12 +97,25 @@ Never tune a declaration to make a check pass.
 ## Records and the stale-record test
 
 A record `validation/records/<name>.json` is written only when the codepack's
-whole case set ran and every case passed `judge`, and its files are unchanged
-since the run started (editing one mid-run refuses the record). It stores the
-digest of each of the codepack's files and its declaration module. The
-default-suite test `tests/codepacks/test_validation_records.py` fails when any
-digest no longer matches, or when a file under `loqs/codepacks/` is in no
-record, so changing a codepack or its declaration requires re-running the
-harness and committing the refreshed record. The harness's own digests are
-recorded but not enforced. CRLF line endings are normalized, so digests agree
-across platforms.
+whole case set ran and every case passed `judge`, and its files and rendering
+are unchanged since the run started (editing a file mid-run, or a change to
+what the codepack renders, refuses the record). It stores:
+
+- `files`: the digest of each of the codepack's files and its declaration
+  module.
+- `rendering`: a fingerprint of what the declaration's configs and declared
+  multipatch ops build, on the List backend: each code's instructions, data
+  and apply-function source (docstrings and comments excluded, same-module
+  helpers and the globals a function names included). It replaces the
+  generator modules' file hashes, so files under `loqs/codepacks/generator/`
+  need no record.
+- `bugs`: each known bug a case lists, with its summary stored once; the
+  `cases` map names the bug ids per case and check.
+
+The default-suite test `tests/codepacks/test_validation_records.py` fails when
+any digest or the fingerprint no longer matches (the fingerprint test skips
+without Stim and pyGSTi), or when a file under `loqs/codepacks/` other than
+the generator's is in no record, so changing a codepack or its declaration
+requires re-running the harness and committing the refreshed record. The
+harness's own digests are recorded but not enforced. CRLF line endings are
+normalized, so digests agree across platforms.

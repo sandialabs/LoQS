@@ -21,6 +21,10 @@ nav:
       - FT Tests: notebooks/fttests.md
       - Time-Dependent Model: notebooks/timedepmodel.md
       - Multi-Qubit Instruments: notebooks/multiqubitinstruments.md
+  - Codepacks:
+      - codepacks/index.md
+      - Reading a codepack spec: markdown/codepack-specs.md
+      - codepacks/steane.md
   - Reference:
       - Dev Guide: markdown/devguide.md
       - API Documentation: /reference
@@ -41,9 +45,14 @@ markdown_extensions:
   - toc:
       permalink: true
   - attr_list
+  - md_in_html
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight
   - pymdownx.arithmatex:
       generic: true

@@ -87,22 +87,12 @@ FULL = [
 
 class TestIdealModel:
 
-    @pytest.mark.parametrize(
-        "backend, evotype",
-        [
-            (DictNoiseModel, None),
-            ("pygsti", "statevec"),
-            ("pygsti", "densitymx"),
-        ],
-        ids=["dict", "pygsti", "pygsti-densitymx"],
-    )
-    def test_ideal_model_covers_walked_names(self, backend, evotype):
-        # The statevec case uses the default evotype
-        kwargs = {"evotype": evotype} if evotype == "densitymx" else {}
-        if evotype:
+    @pytest.mark.parametrize("backend", [DictNoiseModel, "pygsti"])
+    def test_ideal_model_covers_walked_names(self, backend):
+        if backend == "pygsti":
             pytest.importorskip("pygsti")
             from loqs.backends import PyGSTiNoiseModel as backend
-        model = _Pack(FULL).create_ideal_model(QUBITS, backend, **kwargs)
+        model = _Pack(FULL).create_ideal_model(QUBITS, backend)
         # pyGSTi adds its own "{auto_global_idle}" key
         names = {k[0] for k in model.gate_keys if k[0][0] == "G"}
         assert names == {
@@ -114,7 +104,7 @@ class TestIdealModel:
         # A two-qubit gate is on every ordered pair, not just the walked one
         cnots = {tuple(k[1]) for k in model.gate_keys if k[0] == "Gcnot"}
         assert ("B", "A") in cnots
-        if evotype is None:
+        if backend is DictNoiseModel:
             imrz = model.inst_dict
             assert set(imrz) == {("Imrz", (q,)) for q in QUBITS}
             assert all(
@@ -122,9 +112,17 @@ class TestIdealModel:
             )
         else:
             inner = model.model
-            assert str(inner.evotype) == evotype
             assert not inner.prep_blks["layers"]
             assert not inner.povm_blks["layers"]
+
+    @pytest.mark.parametrize(
+        "n, evotype", [(31, "densitymx"), (32, "statevec")]
+    )
+    def test_pygsti_evotype_by_register_size(self, n, evotype):
+        pytest.importorskip("pygsti")
+        qubits = [f"Q{i}" for i in range(n)]
+        model = _Pack(FULL).create_ideal_model(qubits)
+        assert str(model.model.evotype) == evotype
 
     @pytest.mark.parametrize(
         "name, pygsti_name",
@@ -158,19 +156,10 @@ class TestIdealModel:
             ([("Imx", ("A",))], {}),
             ([("Gbar", ("A",))], {}),
             (FULL, {"instrep": object}),
-            (FULL, {"evotype": "densitymx"}),
         ],
-        ids=[
-            "other-instrument",
-            "unknown-gate",
-            "pygsti-instrep",
-            "densitymx-over-31",
-        ],
+        ids=["other-instrument", "unknown-gate", "pygsti-instrep"],
     )
     def test_refuses(self, ops, kwargs):
         pytest.importorskip("pygsti")
-        qubits = (
-            [f"Q{i}" for i in range(32)] if "evotype" in kwargs else QUBITS
-        )
         with pytest.raises(ValueError):
-            _Pack(ops).create_ideal_model(qubits, **kwargs)
+            _Pack(ops).create_ideal_model(QUBITS, **kwargs)
