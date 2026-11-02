@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 CLASSES = ("static", "truth", "tracking", "independence", "ft")
-CHECKS = ("outcome", "O1", "O2", "O3", "O4")
+CHECKS = ("outcome", "data-qubits", "O1", "O2", "O3", "O4")
 
 
 @dataclass(frozen=True)

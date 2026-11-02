@@ -10,7 +10,11 @@ import tempfile
 
 from loqs.backends import PyGSTiNoiseModel
 from loqs.core import QECCode
-from loqs.codepacks.base import walk_qec_code_gate_names
+from loqs.codepacks.base import (
+    walk_qec_code_circuits,
+    walk_qec_code_gate_names,
+)
+from loqs.backends.circuit import ListPhysicalCircuit
 
 from validation import engine
 from validation.engine import Op
@@ -40,6 +44,13 @@ def completeness(case, decl):
         failing["outcome"] = (
             f"undeclared keys {sorted(set(code.instructions) - declared)}, "
             f"declared but not built {sorted(declared - set(code.instructions))}"
+        )
+    if decl.data_qubits and tuple(decl.data_qubits) != tuple(
+        code.template_data_qubits
+    ):
+        failing["data-qubits"] = (
+            f"code data qubits {list(code.template_data_qubits)}, "
+            f"declared {list(decl.data_qubits)}"
         )
     named = set(decl.internal)
     for op in decl.ops:
@@ -181,8 +192,28 @@ def serialization(case, decl):
     return failing
 
 
+def idle_padding(case, decl):
+    """Every layer of every circuit leaf has an op on every qubit."""
+    config = _config(decl, case)
+    code = engine.build_code(decl, config, config.backends[0])
+    offenders = []
+    for circuit in walk_qec_code_circuits(code):
+        layers = ListPhysicalCircuit(circuit).circuit
+        qubits = list(circuit.qubit_labels)
+        for i, layer in enumerate(layers):
+            touched = {q for _, op_qubits in layer for q in op_qubits}
+            missing = [q for q in qubits if q not in touched]
+            if missing:
+                offenders.append(f"layer {i} {layer} leaves {missing} idle")
+    failing = {}
+    if offenders:
+        failing["outcome"] = "; ".join(offenders)
+    return failing
+
+
 FAMILIES = {
     "completeness": completeness,
+    "idle-padding": idle_padding,
     "model-coverage": model_coverage,
     "labels": labels,
     "serialization": serialization,

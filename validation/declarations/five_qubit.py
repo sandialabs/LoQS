@@ -142,6 +142,7 @@ def _known_failures():
     or measure the case exercises, not isolated per bug.
     """
     kf = {
+        "five_qubit.idles.static.idle-padding.all:outcome": "five-13",
         # Static: the unflagged decoder's closure and hardcoded `A0`, and
         # the 7-qubit assert and missing pyGSTi instrument.
         f"{_CP}.static.serialization.*:outcome": "five-11",

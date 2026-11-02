@@ -2952,6 +2952,9 @@
     "five_qubit.default.truth.truth.Non-FT_Minus_Prep-none-Non-FT_Logical_Z_Measure-Flagged_QEC": "pass",
     "five_qubit.default.truth.truth.Non-FT_Minus_Prep-none-Non-FT_Logical_Z_Measure-Unflagged_QEC": "pass",
     "five_qubit.default.truth.truth.Non-FT_Minus_Prep-none-Non-FT_Logical_Z_Measure-noqec": "pass",
+    "five_qubit.idles.static.idle-padding.all": [
+      "outcome:five-13"
+    ],
     "five_qubit.idles.static.labels.default": "pass",
     "five_qubit.idles.static.labels.offset": [
       "outcome:five-8"
@@ -3892,7 +3895,7 @@
       "passed": 0
     },
     "static": {
-      "known": 15,
+      "known": 16,
       "passed": 6
     },
     "tracking": {
@@ -3905,20 +3908,20 @@
     }
   },
   "codepack": "five_qubit",
-  "command": "python -m pytest validation -k five -n auto --timeout 1800 --write-records -q -p no:cacheprovider",
-  "commit": "fb719dc4040285b4703a6878c00f23da07da57dc",
-  "date": "2026-10-23T19:24:38+00:00",
+  "command": "python -m pytest validation -k five -n 4 --timeout 1800 --write-records -q -p no:cacheprovider",
+  "commit": "ce1ee55b163abcd4d50424e59dcf0e9778bf063e",
+  "date": "2026-11-01T08:35:27+00:00",
   "dirty": true,
   "files": {
     "loqs/codepacks/codepack_5_1_3_quantinuum2022.py": "ca098a4177dcc3b9af10886cd3e624860b6260bdf9f6ba6950c559425f80414b",
-    "validation/declarations/five_qubit.py": "f93b842882723e3e629aa914e0db346590b93e3cc4f23273d3ceb6fdc7241b5a"
+    "validation/declarations/five_qubit.py": "ed6065e1dbe7989f30099fcdf1ca2325bcdd2a8d57fa4808219e658f6d22f22e"
   },
   "harness": {
     "validation/__init__.py": "3583a22e094fc5516aba2fa7aaf5294e1951cf9257311166a995a12567d65f9c",
-    "validation/bugs.py": "ae1dc0a9274a5cd51289646c3ac59c648c856f6c28439b2be56564c348d2e64c",
-    "validation/cases.py": "134fae8f794bbfd4bd3148e5d0292925723bf55b67a90b2cf891841dbfaecc77",
+    "validation/bugs.py": "10e6f4305964b62de65be5396abe884e879866e02d33286dd007cd0a1d11c3c0",
+    "validation/cases.py": "d12906718ed645d0f6ec5e67044a8aa7ec4277475a98c0b6a91974af24cdc8a5",
     "validation/conftest.py": "fbbbd0bcb8f4340bb490e05fce19181f70b843a4eaadbb86abe044ffe7bb341c",
-    "validation/declaration.py": "a0080679872f6da65d5989dcd77b11129c6d9942657b35823e860795edd01f59",
+    "validation/declaration.py": "9a7bea432c1884a7204a14f39352cf90cf3912706b7f2358823ca5ee51b64b78",
     "validation/engine.py": "d6af9a23e93fe3b11518082626e6bac8845205212d48d2eab558c15697db895e",
     "validation/logical.py": "c1fea1ffc5ffd5f7de2c0515b0f9ba013f38e2def34185dfa22fb4b8e5a28586",
     "validation/mutations.py": "532f30456d52ab8525942364833ea7fd307a88690d9ccf6b484dc15ba1d72642",
@@ -3927,7 +3930,7 @@
     "validation/test_fault_tolerance.py": "d7cdb270e317ac3f6390ed08984ac3ccdac07985d5ecf7f18ddb3833e2196fff",
     "validation/test_harness.py": "4f4fa85aca0794ee3c96753495486bf28880951e83dcf21e54a9543ea6302129",
     "validation/test_patch_independence.py": "1c701983f56321d2588e914d216e2bef6d21a16c083dfb20fe9db1afc695049d",
-    "validation/test_static.py": "93dc49c2ecbfa1074977df16e60518c584df28f57c90e943151e7d2f516c30cb",
+    "validation/test_static.py": "bff9e9afbb6036826f7dafc2cd76602e191d1a83135fccd4def99ad77e8d41e9",
     "validation/test_tracking.py": "15adfa9b272fff3efa8c8e00b330db480151238dfcbfa334fae060b70c820fef",
     "validation/test_truth_tables.py": "a60be6ac962d15ea45ef286821ba77c8b733d9956f3d393ecea64c935278b646"
   },
@@ -6379,6 +6382,9 @@
     "five_qubit.default.truth.truth.Non-FT_Minus_Prep-Z+K-FT_Logical_Z_Measure-noqec:outcome": {
       "five-12": "`FT Logical Z Measure` is a composite of the `H` and `FT Logical X Measure` instruction objects (`:1000-1006`) and gives random outcomes on a certain Z state: prep, H, FT Z measure gives 0/1 50/50 where 1 is certain. The same stack with the nested measure given as a label gives 1 in 100 of 100 shots, so the composite's pulled-up kwargs (`loqs/core/instructions/builders.py:210-236`) are the likely cause (not isolated further). Class: truth. Severity: B. Fix: stage 5."
     },
+    "five_qubit.idles.static.idle-padding.all:outcome": {
+      "five-13": "Under `include_idles` the 5-qubit repeat-until-success reset is not padded (`codepack_5_1_3_quantinuum2022.py:160-166`), the same bug as `steane-5`: the auxiliary qubits get no idle during each prep attempt's reset. Class: static (`idle-padding`). Severity: M. Fix: stage 10."
+    },
     "five_qubit.idles.static.labels.offset:outcome": {
       "five-8": "`create_ideal_model` asserts 7 qubits (`:629`) and its pyGSTi model lacks `Imrz` and an evotype (`:677`), so two-patch runs, the offset label set and the pyGSTi `model-coverage` fail. Class: static, independence. Severity: M. Fix: stage 5."
     },
@@ -6657,5 +6663,5 @@
     "python": "3.13.15",
     "stim": "1.16.0"
   },
-  "runtime_s": 328.0
+  "runtime_s": 319.0
 }

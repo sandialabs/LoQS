@@ -52,37 +52,21 @@
     "steane.default.ft.ft.meas-Z-FT_Zero_Prep-own-none-tracked": "pass",
     "steane.default.ft.ft.prep-own+H-FT_Logical_X_Measure-none-clean": "pass",
     "steane.default.ft.ft.prep-own+none-FT_Logical_Z_Measure-none-clean": "pass",
-    "steane.default.independence.independence.errL0-FT_Zero_Prep+H+H-FT_Zero_Prep+X-blocks": [
-      "O4:steane-2"
-    ],
+    "steane.default.independence.independence.errL0-FT_Zero_Prep+H+H-FT_Zero_Prep+X-blocks": "pass",
     "steane.default.independence.independence.errL0-FT_Zero_Prep+H+H-FT_Zero_Prep+X-interleaved": "pass",
-    "steane.default.independence.independence.errL0-FT_Zero_Prep+H+X-FT_Zero_Prep+H-blocks": [
-      "O4:steane-2"
-    ],
+    "steane.default.independence.independence.errL0-FT_Zero_Prep+H+X-FT_Zero_Prep+H-blocks": "pass",
     "steane.default.independence.independence.errL0-FT_Zero_Prep+H+X-FT_Zero_Prep+H-interleaved": "pass",
-    "steane.default.independence.independence.errL0-FT_Zero_Prep+H-FT_Zero_Prep+H+X-blocks": [
-      "O4:steane-2"
-    ],
+    "steane.default.independence.independence.errL0-FT_Zero_Prep+H-FT_Zero_Prep+H+X-blocks": "pass",
     "steane.default.independence.independence.errL0-FT_Zero_Prep+H-FT_Zero_Prep+H+X-interleaved": "pass",
-    "steane.default.independence.independence.errL0-FT_Zero_Prep+X-FT_Zero_Prep+H+H-blocks": [
-      "O4:steane-2"
-    ],
+    "steane.default.independence.independence.errL0-FT_Zero_Prep+X-FT_Zero_Prep+H+H-blocks": "pass",
     "steane.default.independence.independence.errL0-FT_Zero_Prep+X-FT_Zero_Prep+H+H-interleaved": "pass",
-    "steane.default.independence.independence.errL1-FT_Zero_Prep+H+H-FT_Zero_Prep+X-blocks": [
-      "O4:steane-2"
-    ],
+    "steane.default.independence.independence.errL1-FT_Zero_Prep+H+H-FT_Zero_Prep+X-blocks": "pass",
     "steane.default.independence.independence.errL1-FT_Zero_Prep+H+H-FT_Zero_Prep+X-interleaved": "pass",
-    "steane.default.independence.independence.errL1-FT_Zero_Prep+H+X-FT_Zero_Prep+H-blocks": [
-      "O4:steane-2"
-    ],
+    "steane.default.independence.independence.errL1-FT_Zero_Prep+H+X-FT_Zero_Prep+H-blocks": "pass",
     "steane.default.independence.independence.errL1-FT_Zero_Prep+H+X-FT_Zero_Prep+H-interleaved": "pass",
-    "steane.default.independence.independence.errL1-FT_Zero_Prep+H-FT_Zero_Prep+H+X-blocks": [
-      "O4:steane-2"
-    ],
+    "steane.default.independence.independence.errL1-FT_Zero_Prep+H-FT_Zero_Prep+H+X-blocks": "pass",
     "steane.default.independence.independence.errL1-FT_Zero_Prep+H-FT_Zero_Prep+H+X-interleaved": "pass",
-    "steane.default.independence.independence.errL1-FT_Zero_Prep+X-FT_Zero_Prep+H+H-blocks": [
-      "O4:steane-2"
-    ],
+    "steane.default.independence.independence.errL1-FT_Zero_Prep+X-FT_Zero_Prep+H+H-blocks": "pass",
     "steane.default.independence.independence.errL1-FT_Zero_Prep+X-FT_Zero_Prep+H+H-interleaved": "pass",
     "steane.default.static.labels.default": "pass",
     "steane.default.static.labels.offset": "pass",
@@ -90,394 +74,150 @@
     "steane.default.static.labels.renamed": "pass",
     "steane.default.static.model-coverage.qsim-dict-p1": "pass",
     "steane.default.static.model-coverage.qsim-dict-p2": "pass",
-    "steane.default.static.model-coverage.qsim-pygsti-p1": [
-      "outcome:steane-3"
-    ],
-    "steane.default.static.model-coverage.qsim-pygsti-p2": [
-      "outcome:steane-3"
-    ],
+    "steane.default.static.model-coverage.qsim-pygsti-p1": "pass",
+    "steane.default.static.model-coverage.qsim-pygsti-p2": "pass",
     "steane.default.static.model-coverage.stim-dict-p1": "pass",
     "steane.default.static.model-coverage.stim-dict-p2": "pass",
     "steane.default.static.serialization.hdf5": "pass",
     "steane.default.static.serialization.json": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-H-H-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-H-H-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-H-H-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-H-I-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-H-I-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-H-I-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-H-X-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-H-X-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-H-X-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-H-Y-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-H-Y-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-H-Y-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-H-Z-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-H-Z-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-H-Z-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-none-H-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-none-H-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-none-H-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-none-I-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-none-I-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-none-I-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-none-S-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-none-S-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-none-S-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-none-Sdag-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-none-Sdag-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-none-Sdag-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-none-X-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-none-X-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-none-X-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-none-Y-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-none-Y-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-none-Y-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.FT_Zero_Prep-none-Z-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.FT_Zero_Prep-none-Z-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.FT_Zero_Prep-none-Z-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-H-H-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-H-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-H-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-H-I-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-I-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-I-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-H-X-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-X-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-X-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-H-Y-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-Y-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-Y-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-H-Z-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-Z-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-Z-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-none-H-egq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-H-eqgq-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-H-eqgq-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-none-I-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-I-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-I-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-none-S-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-S-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-S-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Sdag-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Sdag-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Sdag-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-none-X-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-X-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-X-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Y-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Y-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Y-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
     "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Z-egq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Z-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.idle.FT_Zero_Prep-H-Adaptive_QEC+Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.idle.FT_Zero_Prep-H-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.idle.FT_Zero_Prep-none-Adaptive_QEC+Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.idle.FT_Zero_Prep-none-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.idle.Non-FT_Zero_Prep-H-Adaptive_QEC+Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.idle.Non-FT_Zero_Prep-H-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.idle.Non-FT_Zero_Prep-none-Adaptive_QEC+Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.idle.Non-FT_Zero_Prep-none-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-post": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-pre": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-H": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-S": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-Sdag": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-H": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-S": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-Sdag": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-twice": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-then-L0-H": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-then-L1-H": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-twice": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-post": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-pre": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-H": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-S": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-Sdag": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-H": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-S": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-Sdag": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-twice": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-post": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-pre": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-H": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-S": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-Sdag": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-H": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-S": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-Sdag": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-twice": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0": [
-      "O3:steane-1",
-      "O4:steane-2",
-      "outcome:steane-1"
-    ],
-    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-noread-0": [
-      "O3:steane-1",
-      "O4:steane-2",
-      "outcome:steane-1"
-    ],
-    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0": [
-      "O3:steane-1",
-      "O4:steane-2",
-      "outcome:steane-1"
-    ],
-    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-noread-0": [
-      "O3:steane-1",
-      "O4:steane-2",
-      "outcome:steane-1"
-    ],
-    "steane.default.tracking.reuse.Non-FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0": [
-      "O3:steane-1",
-      "O4:steane-2",
-      "outcome:steane-1"
-    ],
-    "steane.default.tracking.reuse.Non-FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0": [
-      "O3:steane-1",
-      "O4:steane-2",
-      "outcome:steane-1"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-H-WS-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-H-WSdag-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-I-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-I-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-I-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-S-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-S-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-S-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-X-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-X-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-X-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Y-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Y-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Y-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Z-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Z-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-Z-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-none-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-none-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.FT_Zero_Prep-none-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-H-WS-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-H-WSdag-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WH-Adaptive_QEC-FT_Logical_Z_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WS-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
-    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WSdag-Adaptive_QEC-FT_Logical_X_Measure": [
-      "O4:steane-2"
-    ],
+    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Z-eqgq-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.idle.FT_Zero_Prep-H-Adaptive_QEC+Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.idle.FT_Zero_Prep-H-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.idle.FT_Zero_Prep-none-Adaptive_QEC+Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.idle.FT_Zero_Prep-none-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.idle.Non-FT_Zero_Prep-H-Adaptive_QEC+Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.idle.Non-FT_Zero_Prep-H-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.idle.Non-FT_Zero_Prep-none-Adaptive_QEC+Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.idle.Non-FT_Zero_Prep-none-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-post": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-pre": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-H": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-S": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-Sdag": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-H": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-S": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-Sdag": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-twice": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-then-L0-H": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-then-L1-H": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-twice": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-post": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-pre": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-H": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-S": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-Sdag": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-H": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-S": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-Sdag": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-twice": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-post": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-pre": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-H": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-S": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-Sdag": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-H": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-S": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-Sdag": "pass",
+    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-twice": "pass",
+    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0": "pass",
+    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-noread-0": "pass",
+    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0": "pass",
+    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-noread-0": "pass",
+    "steane.default.tracking.reuse.Non-FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0": "pass",
+    "steane.default.tracking.reuse.Non-FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-H-WS-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-H-WSdag-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-I-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-I-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-I-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-S-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-S-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-S-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-X-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-X-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-X-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Y-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Y-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Y-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Z-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Z-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-Z-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-none-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-none-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.FT_Zero_Prep-none-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-H-WS-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-H-WSdag-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WH-Adaptive_QEC-FT_Logical_Z_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WS-Adaptive_QEC-FT_Logical_X_Measure": "pass",
+    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WSdag-Adaptive_QEC-FT_Logical_X_Measure": "pass",
     "steane.default.truth.agreement.qsim-dict-FT_Zero_Prep-H-FT_Logical_X_Measure-Adaptive_QEC": "pass",
     "steane.default.truth.agreement.qsim-dict-FT_Zero_Prep-H-FT_Logical_X_Measure-noqec": "pass",
     "steane.default.truth.agreement.qsim-dict-FT_Zero_Prep-H-FT_Logical_Z_Measure-Adaptive_QEC": "pass",
@@ -1145,6 +885,7 @@
     "steane.default.truth.truth.Non-FT_Zero_Prep-none-FT_Logical_X_Measure-noqec": "pass",
     "steane.default.truth.truth.Non-FT_Zero_Prep-none-FT_Logical_Z_Measure-Adaptive_QEC": "pass",
     "steane.default.truth.truth.Non-FT_Zero_Prep-none-FT_Logical_Z_Measure-noqec": "pass",
+    "steane.idles.static.idle-padding.all": "pass",
     "steane.idles.static.labels.default": "pass",
     "steane.idles.static.labels.offset": "pass",
     "steane.idles.static.labels.permuted": "pass",
@@ -1683,16 +1424,16 @@
       "passed": 50
     },
     "independence": {
-      "known": 8,
-      "passed": 8
+      "known": 0,
+      "passed": 16
     },
     "static": {
-      "known": 2,
-      "passed": 19
+      "known": 0,
+      "passed": 22
     },
     "tracking": {
-      "known": 114,
-      "passed": 24
+      "known": 0,
+      "passed": 138
     },
     "truth": {
       "known": 0,
@@ -1700,21 +1441,34 @@
     }
   },
   "codepack": "steane",
-  "command": "python -m pytest validation -n auto --timeout 1800 --write-records -q -p no:cacheprovider",
-  "commit": "fb719dc4040285b4703a6878c00f23da07da57dc",
-  "date": "2026-10-23T19:12:12+00:00",
+  "command": "python -m pytest validation -k steane -n 4 --timeout 1800 --write-records -q -p no:cacheprovider",
+  "commit": "ce1ee55b163abcd4d50424e59dcf0e9778bf063e",
+  "date": "2026-11-02T02:32:10+00:00",
   "dirty": true,
   "files": {
+    "loqs/codepacks/base.py": "bb8d72ece3daab7e54bc0ed561f379812d300ff6e27c40dbc5f6c176634b7e20",
     "loqs/codepacks/codepack_7_1_3_multipatch.py": "1798b7638ae7ae53ef070e1f9420a2721bf0fc3bbf2f6cc9464a6fd651d02eff",
     "loqs/codepacks/codepack_7_1_3_quantinuum2021.py": "e107f38734a4adf9a039dd807b71f2006c2f66268b888c30b477636ff8f307d1",
-    "validation/declarations/steane.py": "30eb205c0c6d0b37148cde6309fca18bf0d446dc0ba0c9f9b9ec6b20238cd816"
+    "loqs/codepacks/generator/__init__.py": "e7c21e0810c10f1128cb8422b88635b191991a5577888f00f796063df12f5217",
+    "loqs/codepacks/generator/__main__.py": "220ba4012e3291380fd36339b15d6335706f5dee498d33e32faef07a486be4fd",
+    "loqs/codepacks/generator/codepack.py": "c5208ec106461ea4d00bcf27160c5def31086bedf042f8d03e55920ef8bac3cf",
+    "loqs/codepacks/generator/derive.py": "a0294d867f6b69ddddf49daa8ba68f48066db0c28fd1443a19a54ff3b933ce74",
+    "loqs/codepacks/generator/gates.py": "3130c74f7ea1d893214eaada78708614e8e2456cf77c96fffdbf73c3b313c5b6",
+    "loqs/codepacks/generator/generate.py": "b7a71712ead4cb6a0acb94b8519e62ab62cc11e69166ac8998104659a4b27796",
+    "loqs/codepacks/generator/render.py": "24b16d938b463c3ae6c54c65c125e2c7f1f357607d3f6d20080da564c5569269",
+    "loqs/codepacks/generator/schema.py": "c4d0674767e6db2a5dcde572e74e1e106e0a5d81a5cd9de56a1a644545255a71",
+    "loqs/codepacks/steane/__init__.py": "9dc5f3d48da850aa24599d72b83683ff558e767e1a349fc2060455f8df32979e",
+    "loqs/codepacks/steane/_generated.py": "db74a4c07b1856552da8e128ad86c73939e6ebdbb99e5c16fccdcfc1007967a9",
+    "loqs/codepacks/steane/custom_apply_fns.py": "47c2465f9b739ca33ccbaef32485f425063cb531fbbb83c33c52b58f069e9120",
+    "loqs/codepacks/steane/spec.py": "a47e6c43a9c199f55d0e350f429a2affe260d12be88555f85a318dacbc21c966",
+    "validation/declarations/steane.py": "3e9baf1eba30b400202a3f234df51122209323194bd61933e7860cc84a64ea72"
   },
   "harness": {
     "validation/__init__.py": "3583a22e094fc5516aba2fa7aaf5294e1951cf9257311166a995a12567d65f9c",
-    "validation/bugs.py": "961aae14f8193f9c2e07962a47c800b1214e68bb255b4aee971230b571bb3f82",
-    "validation/cases.py": "134fae8f794bbfd4bd3148e5d0292925723bf55b67a90b2cf891841dbfaecc77",
+    "validation/bugs.py": "10e6f4305964b62de65be5396abe884e879866e02d33286dd007cd0a1d11c3c0",
+    "validation/cases.py": "d12906718ed645d0f6ec5e67044a8aa7ec4277475a98c0b6a91974af24cdc8a5",
     "validation/conftest.py": "fbbbd0bcb8f4340bb490e05fce19181f70b843a4eaadbb86abe044ffe7bb341c",
-    "validation/declaration.py": "a0080679872f6da65d5989dcd77b11129c6d9942657b35823e860795edd01f59",
+    "validation/declaration.py": "9a7bea432c1884a7204a14f39352cf90cf3912706b7f2358823ca5ee51b64b78",
     "validation/engine.py": "d6af9a23e93fe3b11518082626e6bac8845205212d48d2eab558c15697db895e",
     "validation/logical.py": "c1fea1ffc5ffd5f7de2c0515b0f9ba013f38e2def34185dfa22fb4b8e5a28586",
     "validation/mutations.py": "532f30456d52ab8525942364833ea7fd307a88690d9ccf6b484dc15ba1d72642",
@@ -1723,420 +1477,11 @@
     "validation/test_fault_tolerance.py": "d7cdb270e317ac3f6390ed08984ac3ccdac07985d5ecf7f18ddb3833e2196fff",
     "validation/test_harness.py": "4f4fa85aca0794ee3c96753495486bf28880951e83dcf21e54a9543ea6302129",
     "validation/test_patch_independence.py": "1c701983f56321d2588e914d216e2bef6d21a16c083dfb20fe9db1afc695049d",
-    "validation/test_static.py": "93dc49c2ecbfa1074977df16e60518c584df28f57c90e943151e7d2f516c30cb",
+    "validation/test_static.py": "bff9e9afbb6036826f7dafc2cd76602e191d1a83135fccd4def99ad77e8d41e9",
     "validation/test_tracking.py": "15adfa9b272fff3efa8c8e00b330db480151238dfcbfa334fae060b70c820fef",
     "validation/test_truth_tables.py": "a60be6ac962d15ea45ef286821ba77c8b733d9956f3d393ecea64c935278b646"
   },
-  "known_failures": {
-    "steane.default.independence.independence.errL0-FT_Zero_Prep+H+H-FT_Zero_Prep+X-blocks:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.independence.independence.errL0-FT_Zero_Prep+H+X-FT_Zero_Prep+H-blocks:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.independence.independence.errL0-FT_Zero_Prep+H-FT_Zero_Prep+H+X-blocks:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.independence.independence.errL0-FT_Zero_Prep+X-FT_Zero_Prep+H+H-blocks:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.independence.independence.errL1-FT_Zero_Prep+H+H-FT_Zero_Prep+X-blocks:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.independence.independence.errL1-FT_Zero_Prep+H+X-FT_Zero_Prep+H-blocks:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.independence.independence.errL1-FT_Zero_Prep+H-FT_Zero_Prep+H+X-blocks:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.independence.independence.errL1-FT_Zero_Prep+X-FT_Zero_Prep+H+H-blocks:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.static.model-coverage.qsim-pygsti-p1:outcome": {
-      "steane-3": "The Steane pyGSTi ideal model lacks the `Imrz` instrument and has no `evotype`, so it is `densitymx`: `create_ideal_model(qubits, model_backend=PyGSTiNoiseModel)` has no `Imrz`, and a two-patch register (20 qubits) tries to allocate a dense 8 TiB operator (`codepack_7_1_3_quantinuum2021.py:1041-1053`). Class: static (`model-coverage`). Severity: M. Fix: stage 4."
-    },
-    "steane.default.static.model-coverage.qsim-pygsti-p2:outcome": {
-      "steane-3": "The Steane pyGSTi ideal model lacks the `Imrz` instrument and has no `evotype`, so it is `densitymx`: `create_ideal_model(qubits, model_backend=PyGSTiNoiseModel)` has no `Imrz`, and a two-patch register (20 qubits) tries to allocate a dense 8 TiB operator (`codepack_7_1_3_quantinuum2021.py:1041-1053`). Class: static (`model-coverage`). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-H-H-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-H-I-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-H-X-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-H-Y-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-H-Z-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-none-H-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-none-I-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-none-S-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-none-Sdag-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-none-X-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-none-Y-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.FT_Zero_Prep-none-Z-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-H-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-I-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-X-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-Y-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-H-Z-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-H-eqgq-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-I-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-S-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Sdag-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-X-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Y-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.gate.Non-FT_Zero_Prep-none-Z-eqgq-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.idle.FT_Zero_Prep-H-Adaptive_QEC+Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.idle.FT_Zero_Prep-H-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.idle.FT_Zero_Prep-none-Adaptive_QEC+Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.idle.FT_Zero_Prep-none-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.idle.Non-FT_Zero_Prep-H-Adaptive_QEC+Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.idle.Non-FT_Zero_Prep-H-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.idle.Non-FT_Zero_Prep-none-Adaptive_QEC+Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.idle.Non-FT_Zero_Prep-none-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-post:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-pre:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-H:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-S:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L0-Sdag:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-H:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-S:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-then-L1-Sdag:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep+H-Adaptive_QEC-twice:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-then-L0-H:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-then-L1-H:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep+H-FT_Zero_Prep-Adaptive_QEC-twice:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-post:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-pre:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-H:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-S:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L0-Sdag:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-H:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-S:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-then-L1-Sdag:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep+H-Adaptive_QEC-twice:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-post:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-pre:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-H:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-S:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L0-Sdag:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-H:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-S:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-then-L1-Sdag:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.mp-track.transversal-cx-FT_Zero_Prep-FT_Zero_Prep-Adaptive_QEC-twice:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0:O3": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0:outcome": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-noread-0:O3": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-noread-0:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-H-Adaptive_QEC-noread-0:outcome": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0:O3": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0:outcome": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-noread-0:O3": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-noread-0:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.FT_Zero_Prep-none-Adaptive_QEC-noread-0:outcome": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.Non-FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0:O3": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.Non-FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.Non-FT_Zero_Prep-H-Adaptive_QEC-meas-FT_Logical_X_Measure-0:outcome": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.Non-FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0:O3": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.Non-FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.reuse.Non-FT_Zero_Prep-none-Adaptive_QEC-meas-FT_Logical_Z_Measure-0:outcome": {
-      "steane-1": "A Steane re-prep keeps the previous run's `logical_pauli_frame` and `latest_syndrome`: prep, X on D0, QEC, X on D1, QEC, `FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain (`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only the physical state). Class: tracking (`reuse`, `outcome` and O3). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-H-WS-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-H-WSdag-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-I-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-I-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-I-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-S-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-S-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-S-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Sdag-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-X-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-X-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-X-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Y-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Y-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Y-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Z-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Z-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-Z-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-none-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-none-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.FT_Zero_Prep-none-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-H-WS-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-H-WSdag-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-I-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-S-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Sdag-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-X-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Y-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-Z-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WH-Adaptive_QEC-FT_Logical_Z_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WS-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    },
-    "steane.default.tracking.word.Non-FT_Zero_Prep-none-WSdag-Adaptive_QEC-FT_Logical_X_Measure:O4": {
-      "steane-2": "Steane's H and S frame updates, feed-forward and decoder assign the updated patch into the incoming `PatchLayout` (`patches[patch_label] = new_patch`, `:262,301,804,944`), so an earlier frame's `patches` shows the later tracking data: after prep, X on D0, QEC the history frame of the prep re-reads syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and `independence` block schedules). Severity: M. Fix: stage 4."
-    }
-  },
+  "known_failures": {},
   "machine": {
     "cpus": 4,
     "platform": "Linux-7.0.12-201.fc44.aarch64-aarch64-with-glibc2.39",
@@ -2144,5 +1489,5 @@
     "python": "3.13.15",
     "stim": "1.16.0"
   },
-  "runtime_s": 4145.1
+  "runtime_s": 538.9
 }

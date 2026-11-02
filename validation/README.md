@@ -25,6 +25,16 @@ python -m pytest validation -m "not big" -n auto --timeout 1800
 
 Select with `-k`; case ids are `<codepack>.<config>.<class>.<family>.<detail>`.
 
+The static class has these families:
+
+- `completeness`: built keys equal declared keys, every public multipatch
+  builder is declared, and the `data-qubits` check that the declaration's
+  `data_qubits` equal the code's `template_data_qubits` when it names any.
+- `model-coverage`, `labels` and `serialization`: the ideal model covers the
+  walked gates, labels can be renamed, and the code survives a round trip.
+- `idle-padding`: under `include_idles`, every layer of every circuit leaf
+  has an op on each of the circuit's qubits.
+
 ## Where a codepack lives
 
 A codepack migrated to the class API has five parts:
@@ -57,9 +67,9 @@ against facts the class doesn't supply.
 
 ## Triaging a failure
 
-A case passes only when the set of checks it fails (`outcome`, `O1` to `O4`)
-equals the set its declaration lists in `known_failures`. Each failure is one
-of:
+A case passes only when the set of checks it fails (`outcome`,
+`data-qubits`, `O1` to `O4`) equals the set its declaration lists in
+`known_failures`. Each failure is one of:
 
 - A confirmed bug: add an entry to `bugs.py` (`KNOWN_BUGS`) with a minimal
   reproducer, and a `known_failures` key `<case-id pattern>:<check>` naming it.

@@ -18,22 +18,22 @@
     "truth": "not declared"
   },
   "codepack": "trivial_counter",
-  "command": "python -m pytest validation -k trivial_counter -q -p no:cacheprovider --timeout 600 --write-records",
-  "commit": "2bf5284308a3d408289ecd9d406856198087f160",
-  "date": "2026-10-31T21:23:22+00:00",
+  "command": "python -m pytest validation -k trivial_counter --timeout 600 --write-records -q -p no:cacheprovider",
+  "commit": "ce1ee55b163abcd4d50424e59dcf0e9778bf063e",
+  "date": "2026-11-01T08:36:01+00:00",
   "dirty": true,
   "files": {
-    "loqs/codepacks/base.py": "edaddaea91f3e9ecb8f5a2b1bcecbcc06770ca62789f478603b504414a165980",
+    "loqs/codepacks/base.py": "bb8d72ece3daab7e54bc0ed561f379812d300ff6e27c40dbc5f6c176634b7e20",
     "loqs/codepacks/codepack_trivial_counter.py": "046175fffb96e33ea0ce0201ee2ff4ae3bc9e71949308e4d111ebae35731fb06",
     "loqs/codepacks/trivial_counter/__init__.py": "35bbae947f9daf740729d6ec79db94347fc9d862d18ea0d8a2772f028c11edce",
     "validation/declarations/trivial_counter.py": "b53198aa815820a46182bd00d091fcf842ac37eb31a8566ae54a98578e45277a"
   },
   "harness": {
     "validation/__init__.py": "3583a22e094fc5516aba2fa7aaf5294e1951cf9257311166a995a12567d65f9c",
-    "validation/bugs.py": "ae1dc0a9274a5cd51289646c3ac59c648c856f6c28439b2be56564c348d2e64c",
-    "validation/cases.py": "134fae8f794bbfd4bd3148e5d0292925723bf55b67a90b2cf891841dbfaecc77",
+    "validation/bugs.py": "10e6f4305964b62de65be5396abe884e879866e02d33286dd007cd0a1d11c3c0",
+    "validation/cases.py": "d12906718ed645d0f6ec5e67044a8aa7ec4277475a98c0b6a91974af24cdc8a5",
     "validation/conftest.py": "fbbbd0bcb8f4340bb490e05fce19181f70b843a4eaadbb86abe044ffe7bb341c",
-    "validation/declaration.py": "a0080679872f6da65d5989dcd77b11129c6d9942657b35823e860795edd01f59",
+    "validation/declaration.py": "9a7bea432c1884a7204a14f39352cf90cf3912706b7f2358823ca5ee51b64b78",
     "validation/engine.py": "d6af9a23e93fe3b11518082626e6bac8845205212d48d2eab558c15697db895e",
     "validation/logical.py": "c1fea1ffc5ffd5f7de2c0515b0f9ba013f38e2def34185dfa22fb4b8e5a28586",
     "validation/mutations.py": "532f30456d52ab8525942364833ea7fd307a88690d9ccf6b484dc15ba1d72642",
@@ -42,7 +42,7 @@
     "validation/test_fault_tolerance.py": "d7cdb270e317ac3f6390ed08984ac3ccdac07985d5ecf7f18ddb3833e2196fff",
     "validation/test_harness.py": "4f4fa85aca0794ee3c96753495486bf28880951e83dcf21e54a9543ea6302129",
     "validation/test_patch_independence.py": "1c701983f56321d2588e914d216e2bef6d21a16c083dfb20fe9db1afc695049d",
-    "validation/test_static.py": "66091ea244dbcf5e1037ed796f891f5abc6e0be2a5e6d2e610f3ba7b37ed27d5",
+    "validation/test_static.py": "bff9e9afbb6036826f7dafc2cd76602e191d1a83135fccd4def99ad77e8d41e9",
     "validation/test_tracking.py": "15adfa9b272fff3efa8c8e00b330db480151238dfcbfa334fae060b70c820fef",
     "validation/test_truth_tables.py": "a60be6ac962d15ea45ef286821ba77c8b733d9956f3d393ecea64c935278b646"
   },
@@ -54,5 +54,5 @@
     "python": "3.13.15",
     "stim": "1.16.0"
   },
-  "runtime_s": 0.5
+  "runtime_s": 0.7
 }

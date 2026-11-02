@@ -1213,7 +1213,10 @@ def build_repeat_until_success_instruction(
 
     This is a special case feed-forward type of instruction.
     It first applies the underlying instruction (presumed to be a physical
-    circuit instruction, although this is not actively checked),
+    circuit instruction, although this is not actively checked), on the
+    patch of the repeat-until-success instruction: each body label that
+    names no `patch_label` or `patch_labels` of its own gets the
+    repeat-until-success instruction's `patch_label`,
     and then compares the measurement outcomes to a set of target outcomes.
     If the outcomes do not match, this places itself on top of the stack.
 
@@ -1308,7 +1311,16 @@ def build_repeat_until_success_instruction(
             )
 
         # Build InstructionLabels for each raw instruction spec.
-        new_labels = list(InstructionStack(instructions))
+        # A body label that names no patch of its own runs on this patch.
+        new_labels = []
+        for body_label in InstructionStack(instructions):
+            if "patch_label" not in body_label and (
+                "patch_labels" not in body_label
+            ):
+                body_label = InstructionLabel(
+                    **{**body_label, "patch_label": patch_label}
+                )
+            new_labels.append(body_label)
 
         # Create a new RUS label with updated count
         rus_label = InstructionLabel(

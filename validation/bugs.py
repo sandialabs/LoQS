@@ -7,7 +7,7 @@ KNOWN_BUGS: dict[str, str] = {
         "`FT Zero Prep`, `FT Logical Z Measure` reads 1 where 0 is certain "
         "(`codepack_7_1_3_quantinuum2021.py:150,193`; the preps reset only "
         "the physical state). Class: tracking (`reuse`, `outcome` and O3). "
-        "Severity: M. Fix: stage 4."
+        "Severity: M. Fixed in stage 8, by generation."
     ),
     "steane-2": (
         "Steane's H and S frame updates, feed-forward and decoder assign "
@@ -17,15 +17,32 @@ KNOWN_BUGS: dict[str, str] = {
         "prep, X on D0, QEC the history frame of the prep re-reads "
         "syndrome (0,0,0,0,1,0) where it held (0,0,0,0,0,0). Class: "
         "tracking (O4: `idle`, `gate`, `word`, `reuse`, `mp-track`, and "
-        "`independence` block schedules). Severity: M. Fix: stage 4."
+        "`independence` block schedules). Severity: M. Fixed in stage 8, by "
+        "generation."
     ),
     "steane-3": (
-        "The Steane pyGSTi ideal model lacks the `Imrz` instrument and has "
-        "no `evotype`, so it is `densitymx`: `create_ideal_model(qubits, "
-        "model_backend=PyGSTiNoiseModel)` has no `Imrz`, and a two-patch "
-        "register (20 qubits) tries to allocate a dense 8 TiB operator "
-        "(`codepack_7_1_3_quantinuum2021.py:1041-1053`). Class: static "
-        "(`model-coverage`). Severity: M. Fix: stage 4."
+        "The Steane pyGSTi ideal model has no `evotype`, so it is "
+        "`densitymx` (`codepack_7_1_3_quantinuum2021.py:1041-1053`), and "
+        "pyGSTi builds its state prep and POVM dense over the whole "
+        "register: a two-patch register (20 qubits) tries to allocate an "
+        "8 TiB state. The missing `Imrz` instrument was a false alarm: "
+        "`PyGSTiNoiseModel` serves `Imrz` as a Z projection. Class: static "
+        "(`model-coverage`). Severity: M. Fixed in stage 3 by the shared "
+        "`create_ideal_model`; shown in stage 8."
+    ),
+    "steane-4": (
+        "Steane's `template_data_qubits` counts the auxiliary qubit `A2` "
+        "as a data qubit (`qubits[2:]`, `codepack_7_1_3_quantinuum2021.py:"
+        "94`), so it lists eight data qubits where the code has seven. "
+        "Class: static (`completeness`, `data-qubits`). Severity: M. Fixed "
+        "in stage 8, by generation."
+    ),
+    "steane-5": (
+        "Under `include_idles` the repeat-until-success reset is not "
+        "padded (`codepack_7_1_3_quantinuum2021.py:159-164`): it is `Imrz` "
+        "on the data qubits alone, so the auxiliary qubits get no idle "
+        "during each prep attempt's reset. Class: static (`idle-padding`). "
+        "Severity: M. Fixed in stage 8, by generation."
     ),
     "five-1": (
         "The 5-qubit H's `raw_syndrome` remap is wrong: Z on D0, Unflagged "
@@ -110,6 +127,13 @@ KNOWN_BUGS: dict[str, str] = {
         "(`loqs/core/instructions/builders.py:210-236`) are the likely "
         "cause (not isolated further). Class: truth. Severity: B. Fix: "
         "stage 5."
+    ),
+    "five-13": (
+        "Under `include_idles` the 5-qubit repeat-until-success reset is "
+        "not padded (`codepack_5_1_3_quantinuum2022.py:160-166`), the "
+        "same bug as `steane-5`: the auxiliary qubits get no idle during "
+        "each prep attempt's reset. Class: static (`idle-padding`). "
+        "Severity: M. Fix: stage 10."
     ),
     "surface-1": (
         "The surface code's logical H is the transversal H and a software "

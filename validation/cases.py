@@ -40,6 +40,10 @@ def _static_cases(decl: CodepackDeclaration) -> list[Case]:
         if "static" not in config.classes:
             continue
         big = config.big
+        if config.options.get("include_idles"):
+            cases.append(
+                _case(decl, config.name, "static", "idle-padding", "all", big)
+            )
         for backend in config.backends:
             for n in (1, 2):
                 cases.append(

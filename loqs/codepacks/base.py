@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model.basemodel import BaseNoiseModel
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.reps import (
@@ -53,16 +54,15 @@ _STANDARD_GATE_NAMES = {
 """pyGSTi-style gate names, mapped to keys of `STANDARD_GATE_UNITARIES`."""
 
 
-def walk_qec_code_gate_names(code: QECCode) -> set[str]:
-    """Recursively walk QEC code instructions and collect gate names.
+def walk_qec_code_circuits(code: QECCode) -> list[BasePhysicalCircuit]:
+    """Recursively walk QEC code instructions and collect circuit leaves.
 
-    Walks through every Instruction in the code, resolving composite
-    instructions down to physical-circuit leaves and collecting the union of
-    all gate/instrument op names actually reachable. Returns an undifferentiated
-    flat set mixing gate names (e.g. "Gxpi") with instrument names (e.g. "Imrz").
+    Walks through every Instruction in the code, resolving composite and
+    repeat-until-success instructions (by object or key) down to
+    physical-circuit leaves. Returns each reachable circuit once.
     """
     visited: set[int] = set()
-    gate_names: set[str] = set()
+    circuits: list[BasePhysicalCircuit] = []
 
     def _walk(inst: Instruction) -> None:
         inst_id = id(inst)
@@ -89,13 +89,25 @@ def walk_qec_code_gate_names(code: QECCode) -> set[str]:
                         _walk(resolved)
         elif "circuit" in data:
             # Circuit leaf instruction
-            circuit = data["circuit"]
-            gate_names.update(circuit.used_gate_names)
+            circuits.append(data["circuit"])
 
     # Walk all top-level instructions
     for inst in code.instructions.values():
         _walk(inst)
 
+    return circuits
+
+
+def walk_qec_code_gate_names(code: QECCode) -> set[str]:
+    """Recursively walk QEC code instructions and collect gate names.
+
+    The union of the `used_gate_names` of every circuit leaf from
+    [](api:walk_qec_code_circuits). Returns an undifferentiated flat set
+    mixing gate names (e.g. "Gxpi") with instrument names (e.g. "Imrz").
+    """
+    gate_names: set[str] = set()
+    for circuit in walk_qec_code_circuits(code):
+        gate_names.update(circuit.used_gate_names)
     return gate_names
 
 

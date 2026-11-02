@@ -13,8 +13,7 @@ from loqs.backends import (
     STIMQuantumState,
 )
 from loqs.backends.reps import QSimSuperopGateRep, StimCircuitGateRep
-from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
-from loqs.codepacks import codepack_7_1_3_quantinuum2021 as module
+from loqs.codepacks.steane import SteaneCodepack
 
 from validation import logical
 from validation.declaration import (
@@ -67,13 +66,15 @@ _COMPONENT = "component of {}, checked through it"
 
 
 def build_code(config, backend):
-    return module.create_qec_code(
+    return SteaneCodepack(
         circuit_backend=backend.circuit_backend, **config.options
-    )
+    ).create_qec_code()
 
 
 def build_model(config, qubits, backend):
-    return module.create_ideal_model(
+    return SteaneCodepack(
+        circuit_backend=backend.circuit_backend, **config.options
+    ).create_ideal_model(
         qubits,
         model_backend=backend.model_backend,
         gaterep=backend.gate_rep,
@@ -81,12 +82,12 @@ def build_model(config, qubits, backend):
 
 
 def tracked(patch):
-    """Stored syndrome and logical frame (`codepack_7_1_3_quantinuum2021.py`).
+    """Stored syndrome and logical frame (`loqs/codepacks/steane/spec.py`).
 
-    `latest_syndrome` is `[S1..S3 (X-type), S4..S6 (Z-type)]` (`:895`,
-    `:905-906`). `logical_pauli_frame` is `[Z_bit, X_bit]`: index 0 is
-    corrected from the X-type checks (`:920`), index 1 from the Z-type
-    ones (`:921`), so the Pauli is `(x, z) = (frame[1], frame[0])`.
+    `latest_syndrome` is `[S1..S3 (X-type), S4..S6 (Z-type)]` (the spec's
+    check circuits and syndrome order). `logical_pauli_frame` is
+    `[Z_bit, X_bit]`: index 0 is corrected from the X-type checks, index 1
+    from the Z-type ones, so the Pauli is `(x, z) = (frame[1], frame[0])`.
     """
     z_bit, x_bit = patch.data.get("logical_pauli_frame", [0, 0])
     return Tracked(
@@ -95,14 +96,16 @@ def tracked(patch):
     )
 
 
+def _build_cx_composite(config, geometry):
+    cp = SteaneCodepack(
+        circuit_backend=config.backends[0].circuit_backend, **config.options
+    )
+    return cp.build_two_patch("Transversal CX", geometry)
+
+
 def build_cx(config, geometry):
     """The transversal CX entry, on the config's circuit backend."""
-    inst = multipatch.build_transversal_cx_instruction(
-        geometry,
-        circuit_backend=config.backends[0].circuit_backend,
-        include_idles=config.options.get("include_idles", False),
-    )
-    return [(inst, None)]
+    return [(_build_cx_composite(config, geometry), None)]
 
 
 def a0_flag_fired(history) -> bool:
@@ -115,22 +118,8 @@ def a0_flag_fired(history) -> bool:
 
 def build_cx_sweep(config, geometry):
     """The CX's physical circuit, then its frame bookkeeping."""
-    backend = config.backends[0].circuit_backend
-    idles = config.options.get("include_idles", False)
-    return [
-        (
-            multipatch.build_transversal_cx_circuit_instruction(
-                geometry, circuit_backend=backend, include_idles=idles
-            ),
-            None,
-        ),
-        (
-            multipatch.build_cx_bookkeeping_instruction(
-                geometry.label("ctrl"), geometry.label("tgt")
-            ),
-            None,
-        ),
-    ]
+    composite = _build_cx_composite(config, geometry)
+    return [(part, None) for part in composite.data["instructions"]]
 
 
 def _sweeps():
@@ -191,7 +180,7 @@ def _sweeps():
             Sweep(
                 name,
                 build_cx_sweep,
-                "Transversal CX physical circuit",
+                "Transversal Logical CX (physical circuit)",
                 post_twoq=twoq,
                 script=(logical.Gate("CX", ("ctrl", "tgt")),),
                 roles=("ctrl", "tgt"),
@@ -237,6 +226,19 @@ _INTERNAL.update(
 DECLARATION = CodepackDeclaration(
     name="steane",
     files=(
+        "loqs/codepacks/base.py",
+        "loqs/codepacks/generator/__init__.py",
+        "loqs/codepacks/generator/__main__.py",
+        "loqs/codepacks/generator/codepack.py",
+        "loqs/codepacks/generator/derive.py",
+        "loqs/codepacks/generator/gates.py",
+        "loqs/codepacks/generator/generate.py",
+        "loqs/codepacks/generator/render.py",
+        "loqs/codepacks/generator/schema.py",
+        "loqs/codepacks/steane/__init__.py",
+        "loqs/codepacks/steane/_generated.py",
+        "loqs/codepacks/steane/custom_apply_fns.py",
+        "loqs/codepacks/steane/spec.py",
         "loqs/codepacks/codepack_7_1_3_quantinuum2021.py",
         "loqs/codepacks/codepack_7_1_3_multipatch.py",
     ),
@@ -256,11 +258,10 @@ DECLARATION = CodepackDeclaration(
     ),
     build_code=build_code,
     build_model=build_model,
-    # Template data qubits D0..D6; the code's own `template_data_qubits`
-    # also lists A2 (`:94`), so the operators below name D0..D6 explicitly.
+    # Template data qubits D0..D6, as in `loqs/codepacks/steane/spec.py`.
     data_qubits=tuple(f"D{i}" for i in range(7)),
-    # Plaquettes of `mappings` (`:419-423`): {0,1,2,3}, {1,2,4,5}, {2,3,5,6};
-    # S1-S3 are X-type and S4-S6 Z-type on them (`:550`, `:905-906`).
+    # Plaquettes {0,1,2,3}, {1,2,4,5}, {2,3,5,6}; S1-S3 are X-type and
+    # S4-S6 Z-type on them (`loqs/codepacks/steane/spec.py`).
     stabilizers=(
         "XXXXIII",
         "IXXIXXI",
@@ -269,12 +270,13 @@ DECLARATION = CodepackDeclaration(
         "IZZIZZI",
         "IIZZIZZ",
     ),
-    # The logical Paulis act on the bottom row D4-D6 (`:218`, `:547`).
+    # The logical Paulis act on the bottom row D4-D6
+    # (`loqs/codepacks/steane/spec.py`).
     logical_x="IIIIXXX",
     logical_z="IIIIZZZ",
     preps=(
-        # A bare circuit with no reset (`:150-156`); the FT prep resets the
-        # data qubits first (`:158-163`, `:193-195`).
+        # A bare circuit with no reset; the FT prep resets the data qubits
+        # first (`loqs/codepacks/steane/spec.py`).
         Prep("Non-FT Zero Prep", "+Z", fresh_only=True),
         Prep("FT Zero Prep", "+Z"),
     ),
@@ -282,8 +284,8 @@ DECLARATION = CodepackDeclaration(
         Measure("FT Logical Z Measure", "Z", True),
         Measure("FT Logical X Measure", "X", True),
     ),
-    # Logical S is physical S-dagger on every data qubit and the reverse
-    # (`:213-214`), so key `S` acts as the stim `S` (X -> Y) on the logical.
+    # Logical S is physical S-dagger on each data qubit and the reverse
+    # (`steane/spec.py`), so key `S` acts as the stim `S` (X -> Y).
     gates=(
         Gate("I", "I"),
         Gate("X", "X"),
@@ -299,7 +301,7 @@ DECLARATION = CodepackDeclaration(
     decoder="eager",
     multipatch_modules=("loqs.codepacks.codepack_7_1_3_multipatch",),
     # One physical `Gcnot` per data pair, control to target; the logical
-    # action is a CX (module docstring, `build_transversal_cx_*`).
+    # action is a CX (`loqs/codepacks/steane/spec.py`).
     ops=(
         MultipatchOp(
             "transversal-cx",
@@ -330,22 +332,5 @@ DECLARATION = CodepackDeclaration(
             ("outcome", "O1", "O2", "O3"),
         )
         for g in ("S", "Sdag")
-    },
-    known_failures={
-        "steane.default.static.model-coverage.qsim-pygsti-p*:outcome": (
-            "steane-3"
-        ),
-        # Every case of these families fails O4 in the baseline run; the
-        # `egq` gate cases (one QEC round) pass it, so they stay undeclared.
-        "steane.default.tracking.idle.*:O4": "steane-2",
-        "steane.default.tracking.gate.*-eqgq-*:O4": "steane-2",
-        "steane.default.tracking.word.*:O4": "steane-2",
-        "steane.default.tracking.reuse.*:O4": "steane-2",
-        # Every `mp-track` case fails O4 in the baseline run; `independence`
-        # only the block schedules (the interleaved ones pass it).
-        "steane.default.tracking.mp-track.*:O4": "steane-2",
-        "steane.default.independence.independence.*-blocks:O4": "steane-2",
-        "steane.default.tracking.reuse.*:O3": "steane-1",
-        "steane.default.tracking.reuse.*:outcome": "steane-1",
     },
 )
