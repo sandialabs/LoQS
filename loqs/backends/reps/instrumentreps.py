@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -303,9 +303,10 @@ class StimCircuitInstrumentRep(StimCircuitPayloadMixin, InstrumentRep):
 
     This is the same as [](api:StimCircuitGateRep), except that it should
     only be a measurement gate, i.e. one of {M, MX, MY, MZ, MR, MRX, MRY,
-    MRZ, R, RX, RY, RZ, MXX, MYY, MZZ}. These are analogous to the
-    following [](api:ZBasisProjectionInstrumentRep) specifications, except
-    in all bases instead of just Z:
+    MRZ, R, RX, RY, RZ, MXX, MYY, MZZ}. [](api:STIMQuantumState) refuses
+    MXX, MYY and MZZ, since it can't record their outcomes. These are
+    analogous to the following [](api:ZBasisProjectionInstrumentRep)
+    specifications, except in all bases instead of just Z:
 
     - The first four (i.e., start with "M") are like `(None, True)`, i.e.,
       don't reset but record this outcome.

@@ -1,4 +1,4 @@
-# LoQS v1.2
+# LoQS v1.3
 
 [![tests](https://github.com/sandialabs/LoQS/actions/workflows/loqs.yml/badge.svg)](https://github.com/sandialabs/LoQS/actions/workflows/loqs.yml)
 [![coverage](https://coveralls.io/repos/github/sandialabs/LoQS/badge.svg?branch=main)](https://coveralls.io/github/sandialabs/LoQS)

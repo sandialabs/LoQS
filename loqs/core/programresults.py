@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -546,8 +546,8 @@ class ProgramResults(Displayable):
             shots are appended to the canonical `results.h5`. With an id,
             they go to that writer's own payload file, which
             `consolidate_checkpoints()` later merges into `results.h5`.
-            An id can be reused after its writer was killed (not on
-            Windows), but not while that writer is alive.
+            An id can be reused after its writer was killed, but not
+            while that writer is alive.
 
         Returns
         -------

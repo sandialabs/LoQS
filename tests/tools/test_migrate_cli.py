@@ -61,6 +61,13 @@ def flagged_file(tmp_path):
 
 
 @pytest.fixture
+def legacy_file(tmp_path):
+    path = tmp_path / "sample.py"
+    path.write_text(LEGACY_SOURCE, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
 def iz_file(tmp_path):
     path = tmp_path / "sample.py"
     path.write_text(IZ_SOURCE, encoding="utf-8")
@@ -78,12 +85,14 @@ class TestMainAsLibraryCall:
     """Exercises `main()` directly (in-process), for fast, precise
     exit-code/side-effect assertions."""
 
-    def test_dry_run_never_writes_and_reports_nonzero(self, flagged_file):
-        before = flagged_file.read_text(encoding="utf-8")
-        backup_file = flagged_file.with_name(flagged_file.name + ".bak")
-        code = main(["--dry-run", str(flagged_file)])
-        assert code == 1  # the positional splat call
-        assert flagged_file.read_text(encoding="utf-8") == before
+    def test_dry_run_never_writes_and_exits_one_on_pending_rewrite(
+        self, legacy_file
+    ):
+        before = legacy_file.read_text(encoding="utf-8")
+        backup_file = legacy_file.with_name(legacy_file.name + ".bak")
+        code = main(["--dry-run", str(legacy_file)])
+        assert code == 1  # would rewrite, nothing flagged
+        assert legacy_file.read_text(encoding="utf-8") == before
         assert not backup_file.exists()
 
     def test_writes_confident_rewrites(self, flagged_file):

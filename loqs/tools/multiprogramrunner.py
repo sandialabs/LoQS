@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -25,6 +25,7 @@ from typing import Any, ClassVar, Generic, TypeVar
 from tqdm import tqdm
 
 from loqs.core.historydatacollector import HistoryDataCollector
+from loqs.core.executors import _refuse_thread_executor
 from loqs.core.quantumprogram import QuantumProgram
 from loqs.internal import (
     pin_worker_threads,
@@ -461,6 +462,15 @@ class MultiProgramRunner(Serializable, Generic[T]):
         attributes from it; without checkpointing, the same assembly runs
         over an in-memory store holding each item's dispatch result.
         """
+        if (
+            (self.checkpoint or self.shot_checkpoint)
+            and self.parallel_strategy is not None
+            and self.parallel_strategy.is_chunked
+        ):
+            _refuse_thread_executor(
+                self.parallel_strategy._resolve_program_executor(),
+                "program_executor",
+            )
         stored = None
         store = self._item_store()
         if store is not None:

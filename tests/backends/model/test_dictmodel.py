@@ -48,12 +48,19 @@ requires_stim = pytest.mark.skipif(
 
 
 def test_copy_constructor():
-    gate_dict = {("X", ("Q0",)): np.eye(4)}
-    original = DictNoiseModel(gate_dict, {})
+    original = DictNoiseModel(
+        {("X", ("Q0",)): _UNITARY_1Q},
+        gatereps=[UnitaryGateRep],
+        instreps=[OutcomeOperationDictInstrumentRep],
+        gaterep_array_cast_rep=UnitaryGateRep,
+    )
     copy = DictNoiseModel.from_model(original)
     assert copy.gate_dict.keys() == original.gate_dict.keys()
-    assert copy is not original
     assert copy.gate_dict is not original.gate_dict
+    assert (copy.output_gate_reps, copy.output_instrument_reps) == (
+        original.output_gate_reps,
+        original.output_instrument_reps,
+    )
 
 
 class TestGateDispatch:
@@ -184,6 +191,7 @@ class TestGetReps:
         reps = model.get_reps(circuit, [QSimSuperopGateRep], [])
         assert len(reps) == 1
         assert reps[0].qubit_labels == ("Q0",)
+        assert reps[0] is model.gate_dict[("X", ("Q0",))]
 
     @pytest.mark.parametrize("kind", ["gate", "instrument"])
     def test_generic_name_only_fallback(self, kind):
@@ -214,7 +222,7 @@ class TestGetReps:
             circuit = STIMPhysicalCircuit("X 0", ["Q0"])
             gatereps = [StimCircuitGateRep]
             instreps = [ZBasisProjectionInstrumentRep]
-        with pytest.raises(AssertionError):
+        with pytest.raises(KeyError):
             model.get_reps(circuit, gatereps, instreps)
 
     def test_get_reps_does_not_reconstruct_already_correct_circuit_type(self):
@@ -267,11 +275,11 @@ class TestDictModelFixtureRoundTrip:
             decoded.inst_dict[("M", ("Q0",))], ZBasisProjectionInstrumentRep
         )
         # Legacy tags are decoded to real classes, not raw ints or enums.
-        assert decoded.output_gate_reps == [
+        assert decoded.output_gate_reps[:2] == [
             QSimSuperopGateRep,
             KrausGateRep,
         ]
-        assert decoded.output_instrument_reps == [
+        assert decoded.output_instrument_reps[:1] == [
             ZBasisProjectionInstrumentRep
         ]
 
@@ -387,17 +395,89 @@ class TestSTIMGetReps:
         assert len(reps) == 1
         assert reps[0].qubit_labels == ("!Q0",)
 
-    def test_generic_instrument_merging_multiqubit(self):
-        inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
+    def test_target_groups(self):
+        x = np.array([[0, 1], [1, 0]])
+        labels = ["Q0", "Q1", "Q2"]
+
+        # per-target-in-order: the exact key for Q1 sits in target order
+        exact = UnitaryGateRep(x, ("Q1",))
         model = DictNoiseModel(
-            {}, inst_dict, instreps=[ZBasisProjectionInstrumentRep]
+            {"X": UnitaryGateRep(x, ()), ("X", ("Q1",)): exact},
+            {},
+            gatereps=[UnitaryGateRep],
         )
-        circuit = STIMPhysicalCircuit("M 0 1 2", ["Q0", "Q1", "Q2"])
-        reps = self._get_reps(model, circuit)
-        assert len(reps) == 1
-        assert reps[0].qubit_labels == ("Q0", "Q1", "Q2")
-        assert reps[0].reset is None
-        assert reps[0].include_outcome is True
+        reps = model.get_reps(
+            STIMPhysicalCircuit("X 0 1 2", labels), [UnitaryGateRep], []
+        )
+        assert [r.qubit_labels for r in reps] == [("Q0",), ("Q1",), ("Q2",)]
+        assert reps[1] is exact
+
+        # probabilistic-per-target: one draw per target
+        model = DictNoiseModel(
+            {"X": ProbabilisticStimGateRep([("X 0", 0.5), ("I 0", 0.5)], ())},
+            {},
+            gatereps=[ProbabilisticStimGateRep],
+        )
+        reps = model.get_reps(
+            STIMPhysicalCircuit("X 0 1 2", labels),
+            [ProbabilisticStimGateRep],
+            [],
+        )
+        assert [type(r) for r in reps] == [ProbabilisticStimGateRep] * 3
+        assert [r.qubit_labels for r in reps] == [("Q0",), ("Q1",), ("Q2",)]
+
+        # overlap-splits-merge: noise lands after its own CX
+        template = StimCircuitGateRep("CX 0 1\nDEPOLARIZE2(0.1) 0 1", ())
+        model = DictNoiseModel(
+            {"CX": template}, {}, gatereps=[StimCircuitGateRep]
+        )
+        reps = self._get_reps(model, STIMPhysicalCircuit("CX 0 1 1 2", labels))
+        assert [r.qubit_labels for r in reps] == [("Q0", "Q1"), ("Q1", "Q2")]
+        assert all(r.circuit_str == template.circuit_str for r in reps)
+
+        # exact-flushes-merge: an override keeps its place in target order
+        override = StimCircuitInstrumentRep("X_ERROR(0.1) 0\nM 0", ("Q1",))
+        model = DictNoiseModel(
+            {},
+            {
+                "M": StimCircuitInstrumentRep("M 0", ()),
+                ("M", ("Q1",)): override,
+            },
+            instreps=[StimCircuitInstrumentRep],
+        )
+        reps = model.get_reps(
+            STIMPhysicalCircuit("M 0 1 2", labels),
+            [StimCircuitGateRep],
+            [StimCircuitInstrumentRep],
+        )
+        assert [r.qubit_labels for r in reps] == [("Q0",), ("Q1",), ("Q2",)]
+        assert reps[1] is override
+
+        # stale-string-key-refused: a stringified key for an int label
+        model = DictNoiseModel(
+            {
+                "X": UnitaryGateRep(x, ()),
+                ("X", ("0",)): UnitaryGateRep(x, ("0",)),
+            },
+            {},
+            gatereps=[UnitaryGateRep],
+        )
+        with pytest.raises(KeyError):
+            model.get_reps(
+                STIMPhysicalCircuit("X 0", [0]), [UnitaryGateRep], []
+            )
+        model = DictNoiseModel(
+            {},
+            {
+                "M": StimCircuitInstrumentRep("M 0", ()),
+                ("M", ("0",)): StimCircuitInstrumentRep("M 0", ("0",)),
+            },
+            instreps=[StimCircuitInstrumentRep],
+        )
+        with pytest.raises(KeyError):
+            model.get_reps(
+                STIMPhysicalCircuit("M 0", [0]), [], [StimCircuitInstrumentRep]
+            )
 
     def test_repeat_block_unrolling_through_get_reps(self):
         gate_dict = {"X": StimCircuitGateRep("X 0", ("Q0",))}
@@ -500,8 +580,42 @@ def test_legacy_stim_dict_noise_model_construction_warns():
     assert isinstance(model.gate_dict["H"], StimCircuitGateRep)
     assert isinstance(model.gate_dict["CX"], StimCircuitGateRep)
     assert isinstance(model.inst_dict["M"], StimCircuitInstrumentRep)
-    assert model.output_gate_reps == [
+    assert model.output_gate_reps[:2] == [
         StimCircuitGateRep,
         ProbabilisticStimGateRep,
     ]
-    assert model.output_instrument_reps == [StimCircuitInstrumentRep]
+    assert model.output_instrument_reps[:1] == [StimCircuitInstrumentRep]
+
+
+def test_get_reps_converts_to_requested_types():
+    from loqs.backends.reps import convert
+
+    # fallback: the unitary conversion fails, so the next type is tried
+    damping = convert(KrausGateRep(_KRAUS_SEQ, ("Q0",)), QSimSuperopGateRep)
+    model = DictNoiseModel({"X": damping}, {})
+    circuit = ListPhysicalCircuit([[("X", ("Q1",))]])
+    reps = model.get_reps(circuit, [UnitaryGateRep, KrausGateRep], [])
+    assert type(reps[0]) is KrausGateRep
+    assert reps[0].qubit_labels == ("Q1",)
+
+    # a STIM-text type is listed even when the model declares none
+    model = DictNoiseModel(
+        {"X": ProbabilisticStimGateRep([("X 0", 1.0)], ())},
+        {},
+        gatereps=[ProbabilisticStimGateRep],
+    )
+    assert StimCircuitGateRep in model.output_gate_reps
+
+
+def test_conversions_cached_per_entry():
+    model = DictNoiseModel(
+        {"X": UnitaryGateRep(np.eye(2), ())}, {}, gatereps=[UnitaryGateRep]
+    )
+    circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
+    first = model.get_reps(circuit, [QSimSuperopGateRep], [])[0]
+    assert model.get_reps(circuit, [QSimSuperopGateRep], [])[0] is first
+
+    model.gate_dict["X"] = UnitaryGateRep(np.array([[0, 1], [1, 0]]), ())
+    second = model.get_reps(circuit, [QSimSuperopGateRep], [])[0]
+    assert second is not first
+    assert not np.allclose(second.superop, first.superop)

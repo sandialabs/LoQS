@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -215,7 +215,8 @@ def propagate_state(
     the non-inplace version if `inplace=False`).
     It does also try to find compatible reptypes by
     searching for a match in output reps from `model`
-    and input reps from `state`.
+    and input reps from `state`. A model's output reps include the types
+    it can convert its own reps to.
 
     Parameters
     ----------

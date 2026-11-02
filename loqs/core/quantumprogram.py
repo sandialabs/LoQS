@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -26,7 +26,7 @@ from tqdm import tqdm
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, Frame
-from loqs.core.executors import SubmitExecutor
+from loqs.core.executors import SubmitExecutor, _refuse_thread_executor
 from loqs.core.history import (
     History,
     HistoryLike,
@@ -714,7 +714,9 @@ class QuantumProgram(Displayable):
             shots in serial. Each worker pins its own thread pools to
             one thread before running, avoiding BLAS/OpenMP
             oversubscription regardless of how many workers
-            `shot_executor` itself spawns.
+            `shot_executor` itself spawns. A `ThreadPoolExecutor` raises
+            `ValueError` with `checkpoint=True`, since threads share one
+            per-process progress ledger.
 
         verbose:
             Whether to write a progress bar (`True`, default) or not (`False`)
@@ -830,6 +832,8 @@ class QuantumProgram(Displayable):
         # State machine validation: explicit checkpoint/resume flags
         if resume and not checkpoint:
             raise ValueError("resume=True requires checkpoint=True")
+        if checkpoint:
+            _refuse_thread_executor(shot_executor, "shot_executor")
 
         checkpoint_enabled = checkpoint
 

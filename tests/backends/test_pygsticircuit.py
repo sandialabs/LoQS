@@ -83,6 +83,18 @@ def test_serialization_gatename_needing_pygsti_safe_alias(make_temp_path):
     _check(pc2, circ)
 
 
+def test_round_trip_equal_with_unsorted_parallel_layer(make_temp_path):
+    circ = PhysCirc([[("Gxpi2", "Q1")], [("Gcnot", "Q0", "Q1")]], ["Q0", "Q1"])
+    circ.merge_inplace(PhysCirc([("Gypi2", "Q0")], ["Q0", "Q1"]), 0)
+
+    with make_temp_path(suffix=".json") as tmp_path:
+        circ.write(tmp_path)
+        loaded = PhysCirc.read(tmp_path)
+
+    assert loaded == circ
+    assert hash(loaded) == hash(circ)
+
+
 def test_serialization_gatename_alias_collision_raises():
     # "GiMCM" and "Gimcm" both alias to the same pyGSTi-safe name --
     # serializing both in one circuit can't be reversed unambiguously.

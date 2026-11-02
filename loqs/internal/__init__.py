@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -30,6 +30,7 @@ from .serializable import (
 from .displayable import Displayable
 
 _worker_id_cache: tuple[int, str] | None = None
+_threads_pinned_pid: int | None = None
 
 
 def worker_id() -> str:
@@ -68,7 +69,18 @@ def pin_worker_threads() -> None:
     built via a decorator, since a decorator would return a closure that
     plain `pickle` (needed for `mpi4py.futures.MPIPoolExecutor`) can't
     resolve by dotted import path.
+
+    Only the first call in each process pins: `threadpool_limits` scans
+    every loaded shared library, which takes about a second with LoQS's
+    dependencies loaded, so a worker that reaches this once per batch
+    would pay that every batch. The flag is keyed on `os.getpid()`, like
+    `worker_id`, so a forked child pins again.
     """
+    global _threads_pinned_pid
+    pid = os.getpid()
+    if _threads_pinned_pid == pid:
+        return
+    _threads_pinned_pid = pid
     if threadpool_limits is not None:
         threadpool_limits(1)
     else:

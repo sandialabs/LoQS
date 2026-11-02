@@ -163,6 +163,24 @@ class TestSurf17Codepack:
             == expected
         )
 
+    @pytest.mark.parametrize("basis", ["Z", "X"])
+    def test_global_parity_runs_after_read_back(self, basis, tmp_path):
+        program = self._create_program(
+            PyGSTiPhysicalCircuit,
+            DictNoiseModel,
+            NumpyStatevectorQuantumState,
+            layout="surf10",
+            basis=basis,
+        )
+        program.write(tmp_path / "program.h5")
+        read_back = QuantumProgram.read(tmp_path / "program.h5")
+
+        outcomes = [
+            p.run().collect_shot_data("logical_measurement", -1)
+            for p in (program, read_back)
+        ]
+        assert outcomes[0] == outcomes[1]
+
     # One fixed fault per basis that reaches the global-measurement decoder's
     # correction. Its outcome depends on the schedule, so only runs are checked.
     @pytest.mark.parametrize(

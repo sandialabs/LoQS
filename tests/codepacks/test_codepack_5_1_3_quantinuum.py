@@ -594,6 +594,38 @@ class Test5QCodepack:
             ],
         )
 
+    def test_unflagged_decoder_runs_after_read_back(self, tmp_path):
+        ref_program = self._create_program(
+            PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState
+        )
+        stack = [
+            {
+                "instruction": "Init State",
+                "state": len(self.qubits),
+                "qubit_labels": self.qubits,
+            },
+            {
+                "instruction": "Init Patch 5Q",
+                "new_patch_label": "L0",
+                "qubits": self.qubits,
+            },
+            {
+                "instruction": "Non-FT Minus Prep",
+                "patch_label": "L0",
+                "error_injections": [(2, "Gzpi", 2)],
+            },
+            ("Unflagged QEC", "L0"),
+        ]
+        program = QuantumProgram.from_quantum_program(ref_program, stack)
+        program.write(tmp_path / "program.h5")
+        read_back = QuantumProgram.read(tmp_path / "program.h5")
+
+        decoded = [
+            p.run().collect_shot_data("decoded_error", -1)[0]
+            for p in (program, read_back)
+        ]
+        assert decoded == ["ZIIII", "ZIIII"]
+
     def test_h_syndrome_permutation(self):
         ref_program = self._create_program(
             PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState

@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -37,7 +37,7 @@ detection, without hardcoding which concrete package produced `x`.
 
 from __future__ import annotations
 
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -65,3 +65,19 @@ class MapArrayExecutor(Protocol):
 
     def map_array(self, fn, *iterables) -> list[Any]:
         pass
+
+
+def _refuse_thread_executor(executor: Any, argument: str) -> None:
+    """Raise `ValueError` if `executor` is a `ThreadPoolExecutor`.
+
+    Checkpointing needs process-based executors, because threads share one
+    per-process progress ledger. `None` and other executors pass.
+    """
+    if isinstance(executor, ThreadPoolExecutor):
+        raise ValueError(
+            f"{argument} is a ThreadPoolExecutor, which can't be used with "
+            "checkpointing: threads share one per-process progress ledger. "
+            "Use a process-based executor instead: loky, "
+            "concurrent.futures.ProcessPoolExecutor, submitit or "
+            "mpi4py.futures."
+        )

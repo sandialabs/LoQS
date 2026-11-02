@@ -14,6 +14,7 @@ per-file-ignores =
     tests/codepacks/test_codepack_5_1_3_quantinuum.py: E402
     tests/codepacks/test_codepack_7_1_3_multipatch.py: E402
     tests/codepacks/test_codepack_7_1_3_quantinuum.py: E402
+    tests/codepacks/test_codepack_serialization.py: E402
     tests/codepacks/test_codepack_surf17_multipatch.py: E402
     tests/codepacks/test_codepack_surf17_surgery.py: E402
     tests/codepacks/test_codepack_surf17_tomita2014.py: E402

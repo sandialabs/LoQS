@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -1269,10 +1269,10 @@ class HDF5Encoder(BaseEncoder):
                 imag = array_group["imag"]
                 assert isinstance(imag, h5py.Dataset)
 
-            decoded = real[()] + 1j * imag[()]
-            decoded = decoded.reshape(array_group.attrs["shape"])
-            decoded = decoded.astype(array_group.attrs["dtype"])
-            return decoded
+            # Assign through `.imag` so NaN, inf and -0.0 survive bit-exactly
+            decoded = np.asarray(real[()], dtype=array_group.attrs["dtype"])
+            decoded.imag = imag[()]
+            return decoded.reshape(array_group.attrs["shape"])
         else:
             # Dense real
             with HDF5Encoder.assert_decode(fatal=True):

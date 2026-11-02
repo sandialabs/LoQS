@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -798,6 +798,20 @@ _ALL_CONCRETE_REPS: tuple[type[OperationRep], ...] = (
 """Every concrete `GateRep`/`InstrumentRep` leaf class, used by `convert` to
 resolve a raw payload's starting class when it doesn't directly match any
 of the requested targets (see `convert`'s docstring)."""
+
+
+@functools.lru_cache(maxsize=None)
+def reachable_reps(
+    sources: tuple[type[OperationRep], ...],
+) -> tuple[type[OperationRep], ...]:
+    """`sources`, then every other concrete rep class `convert` can reach
+    from one of them, in `_ALL_CONCRETE_REPS` order."""
+    return sources + tuple(
+        cls
+        for cls in _ALL_CONCRETE_REPS
+        if cls not in sources
+        and any(_shortest_path(src, cls) is not None for src in sources)
+    )
 
 
 def _accepted_kwargs(func: Callable, kwargs: dict) -> dict:

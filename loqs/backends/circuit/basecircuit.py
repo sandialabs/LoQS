@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -57,6 +57,30 @@ class BasePhysicalCircuit(Displayable):
 
     def __repr__(self) -> str:
         return f"Physical {self.name} circuit: {repr(self.circuit)}"
+
+    def __eq__(self, other: object) -> bool:
+        """Compare class, qubit labels and backend circuit.
+
+        Qubit-label order counts. The backend circuit's own equality
+        decides the rest: pyGSTi's ignores gate order inside a
+        parallel layer.
+        """
+        if not isinstance(other, BasePhysicalCircuit):
+            return NotImplemented
+        return (
+            type(self) is type(other)
+            and list(self.qubit_labels) == list(other.qubit_labels)
+            and bool(self.circuit == other.circuit)
+        )
+
+    def __hash__(self) -> int:
+        """Hash by class only.
+
+        Circuits are edited in place, so a hash over their content
+        would change under a dict key, and pyGSTi's own hash would
+        freeze an editable circuit.
+        """
+        return hash(type(self))
 
     def __add__(self: T, other: T) -> T:
         # TODO: Should eventually be able to cast to derived class

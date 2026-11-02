@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.2                                                                           #
+# Logical Qubit Simulator (LoQS) v. 1.3                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -1812,6 +1812,7 @@ def _create_unflagged_QEC_instruction(
         patch_label: str,
         patches: PatchLayout,
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
+        lookup_table: dict[str, str],
     ) -> Frame:
         if isinstance(syndrome_outcomes, MeasurementOutcomes):
             syndrome_outcomes = [syndrome_outcomes]
@@ -1838,7 +1839,7 @@ def _create_unflagged_QEC_instruction(
 
         # Look up data error
         syndrome_str = "".join([str(s) for s in syndrome_diff])
-        data_error_str = unflagged_lookup_table[syndrome_str]
+        data_error_str = lookup_table[syndrome_str]
 
         # Update Pauli frame
         new_pauli_frame = patch.pauli_frame.update_from_pauli_str(
@@ -1863,6 +1864,7 @@ def _create_unflagged_QEC_instruction(
 
     instructions["Unflagged Decoder"] = Instruction(
         apply_fn=unflagged_decoder_apply_fn,
+        data={"lookup_table": unflagged_lookup_table},
         name="Unflagged decoder",
         param_priorities={"syndrome_outcomes": ["history[-4:]"]},
         param_aliases={"syndrome_outcomes": "measurement_outcomes"},

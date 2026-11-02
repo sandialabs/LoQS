@@ -1,6 +1,6 @@
 [project]
 name = "loqs"
-version = "1.2"
+version = "1.3"
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
@@ -62,7 +62,7 @@ mpi = [
 ]
 dev = [
     "pre-commit",
-    "black==26.3.1",
+    "black==26.10.1",
     "flake8>=7",
     "mypy>=1",
     "snakeviz"
@@ -119,7 +119,7 @@ exclude=["docs*", "tests*", "validation*"]
 [tool.black]
 line-length = 79 # Match PEP8
 include = '\.pyi?$'
-required-version = "26.3.1"
+required-version = "26.10.1"
 target-version = ["py311"]
 force-exclude = '''
 (/(

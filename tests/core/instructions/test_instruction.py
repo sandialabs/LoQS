@@ -8,7 +8,10 @@ import pytest
 from loqs.core import InstructionStack
 from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction, builders
-from loqs.core.instructions.instruction import DEFAULT_PRIORITIES
+from loqs.core.instructions.instruction import (
+    DEFAULT_PRIORITIES,
+    default_map_qubits,
+)
 
 
 class TestInstruction:
@@ -213,5 +216,36 @@ def test_source_unavailable_warns():
             {},
             name="test",
             serialized_apply_fn="def apply_fn():\n    pass\n",
+        )
+    assert len(caught) == 0
+
+
+@pytest.mark.parametrize("closure_param", ["apply_fn", "map_qubits_fn"])
+def test_closure_over_locals_warns(closure_param):
+    captured = 3
+
+    def closure(state=0, qubit_mapping=None, **kwargs):
+        return captured
+
+    def make(**kw):
+        return Instruction(
+            kw.get("apply_fn", _module_level_apply),
+            {},
+            map_qubits_fn=kw.get("map_qubits_fn", default_map_qubits),
+            name="test",
+            **{k: v for k, v in kw.items() if k.startswith("serialized_")},
+        )
+
+    with pytest.warns(UserWarning):
+        make(**{closure_param: closure})
+
+    # Given its source explicitly, the closure is not flagged
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        make(
+            **{
+                closure_param: closure,
+                f"serialized_{closure_param}": "def f(state=0):\n    pass\n",
+            }
         )
     assert len(caught) == 0
