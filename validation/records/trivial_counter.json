@@ -1,27 +1,24 @@
 {
-  "big_configs": [],
-  "bugs": {},
-  "cases": {
-    "trivial_counter.all.static.completeness.all": "pass",
-    "trivial_counter.default.static.model-coverage.dict-p1": "pass",
-    "trivial_counter.default.static.model-coverage.dict-p2": "pass",
-    "trivial_counter.default.static.serialization.hdf5": "pass",
-    "trivial_counter.default.static.serialization.json": "pass"
-  },
-  "classes": {
-    "ft": "not declared",
-    "independence": "not declared",
-    "static": {
-      "known": 0,
-      "passed": 5
-    },
-    "tracking": "not declared",
-    "truth": "not declared"
-  },
   "codepack": "trivial_counter",
+  "classes": {
+    "static": {
+      "cases": 5,
+      "passed": 5,
+      "known": 0,
+      "failed": 0,
+      "by_bug": {},
+      "seconds": 0.4
+    },
+    "truth": "not declared",
+    "tracking": "not declared",
+    "independence": "not declared",
+    "ft": "not declared"
+  },
+  "bugs": {},
+  "big_configs": [],
   "command": "python -m pytest validation -k trivial_counter -n 4 --timeout 1800 --write-records -q -p no:cacheprovider",
-  "commit": "86d81a751dd77c32eac59f3e33fc9bfc219bf126",
-  "date": "2026-11-02T17:11:24+00:00",
+  "commit": "3ee22394887a971ff843caa24f144f4ba8ff040a",
+  "date": "2026-11-02T19:10:25+00:00",
   "dirty": true,
   "files": {
     "loqs/codepacks/base.py": "a8f5fc43d75d4312119f401de632a7f691b586a4b27b23df7cb9485982da9465",
@@ -33,27 +30,23 @@
     "validation/__init__.py": "3583a22e094fc5516aba2fa7aaf5294e1951cf9257311166a995a12567d65f9c",
     "validation/bugs.py": "10e6f4305964b62de65be5396abe884e879866e02d33286dd007cd0a1d11c3c0",
     "validation/cases.py": "d12906718ed645d0f6ec5e67044a8aa7ec4277475a98c0b6a91974af24cdc8a5",
-    "validation/conftest.py": "aa17ec006b2ce3d39ec94daff4a838798cba8bcb896c1ddbd148cc353b3d943f",
+    "validation/conftest.py": "ca61f603f851acda849e2648e6af5877227b4ee3ac9fbee519be4480e202f387",
     "validation/declaration.py": "9a7bea432c1884a7204a14f39352cf90cf3912706b7f2358823ca5ee51b64b78",
-    "validation/engine.py": "d6af9a23e93fe3b11518082626e6bac8845205212d48d2eab558c15697db895e",
+    "validation/engine.py": "a436cb8d5d1aab712f4f38bf47e0c27aee0bb78b1cf3f72e3d37e6f7171e012c",
     "validation/logical.py": "c1fea1ffc5ffd5f7de2c0515b0f9ba013f38e2def34185dfa22fb4b8e5a28586",
-    "validation/mutations.py": "9769e08a1102b9cfb03f49fe39aef070ee621f433ade05a5a0dcebfcf0005435",
     "validation/oracle.py": "f52fbe49c6bec18abef2c3b0300f00a4d286f609cdcfe5eeddc9f2cfe82db4f3",
-    "validation/records.py": "e6ead7fbfb0c0233990274557ac2f9aecdae70aa8fbb2a08a4ae7a517c5e1084",
-    "validation/test_fault_tolerance.py": "d7cdb270e317ac3f6390ed08984ac3ccdac07985d5ecf7f18ddb3833e2196fff",
-    "validation/test_harness.py": "bd94fc36f87219f3c61d0950372d1184ecdcd3c44be080318a74e88dca5e25a4",
-    "validation/test_patch_independence.py": "1c701983f56321d2588e914d216e2bef6d21a16c083dfb20fe9db1afc695049d",
-    "validation/test_static.py": "b79fe645af3b0567f7982594efc02ec3a084c26634f7a043f2cb11b91a0d7529",
-    "validation/test_tracking.py": "15adfa9b272fff3efa8c8e00b330db480151238dfcbfa334fae060b70c820fef",
-    "validation/test_truth_tables.py": "a60be6ac962d15ea45ef286821ba77c8b733d9956f3d393ecea64c935278b646"
+    "validation/records.py": "3e17c7c58abaa131348e97ca2bd5078069202a1055fbaebf71b6469c4a9951a6",
+    "validation/test_harness.py": "8e557d173162ae5c624795f2c5a4cc012ad4e5646e9655015275dac080a78d9f",
+    "validation/test_programs.py": "5512c9e71cf5018b9758e549840505ba1fe3a177553ec1b98147fceb839ff4f2",
+    "validation/test_static.py": "b79fe645af3b0567f7982594efc02ec3a084c26634f7a043f2cb11b91a0d7529"
   },
   "machine": {
-    "cpus": 4,
     "platform": "Linux-7.0.12-201.fc44.aarch64-aarch64-with-glibc2.39",
-    "pygsti": "0.10.2.post1.dev142+g917233daa.develop.CLEAN",
+    "cpus": 4,
     "python": "3.13.15",
-    "stim": "1.16.0"
+    "stim": "1.16.0",
+    "pygsti": "0.10.2.post1.dev142+g917233daa.develop.CLEAN"
   },
   "rendering": "3ffc677ed9e5e13a4f646bec2127da1fe1df7b23f5d57c8fc8989aaea3353381",
-  "runtime_s": 27.5
+  "runtime_s": 27.3
 }

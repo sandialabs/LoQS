@@ -20,6 +20,8 @@ _ALL = {
 }  # codepack -> cases
 _BY_ID = {c.id: c for cases in _ALL.values() for c in cases}
 _REPORTS: dict[str, dict[str, str]] = {}
+_SECONDS: dict[str, dict[str, float]] = {}  # codepack -> case -> seconds
+_TALLIES: dict[str, dict[str, dict]] = {}  # codepack -> case -> ft tally
 _START = [time.time()]
 _START_FILES: dict[str, dict[str, str]] = {}  # codepack -> digests at start
 _START_RENDERING: dict[str, str] = {}  # codepack -> fingerprint at start
@@ -101,7 +103,14 @@ def pytest_runtest_logreport(report):
     cid = report.nodeid.rpartition("[")[2].rstrip("]")
     if cid not in _BY_ID:
         return
-    seen = _REPORTS.setdefault(_BY_ID[cid].codepack, {})
+    pack = _BY_ID[cid].codepack
+    seconds = _SECONDS.setdefault(pack, {})
+    seconds[cid] = seconds.get(cid, 0.0) + report.duration
+    if report.when == "call":
+        tally = dict(report.user_properties).get("ft")
+        if tally is not None:
+            _TALLIES.setdefault(pack, {})[cid] = tally
+    seen = _REPORTS.setdefault(pack, {})
     if report.failed:
         seen[cid] = "failed" if report.when == "call" else "errored"
     elif report.skipped:
@@ -129,8 +138,28 @@ def pytest_sessionfinish(session, exitstatus):
             meta,
             big,
             _START_RENDERING[name],
+            _SECONDS.get(name, {}),
+            _TALLIES.get(name, {}),
         )
         if isinstance(result, str):
             print(f"\nno record for {name}: {result}")
         else:
             print(f"\nwrote {records.write_record(name, result)}")
+
+
+def pytest_terminal_summary(terminalreporter):
+    if not _is_controller(terminalreporter.config):
+        return
+    for name, reported in _REPORTS.items():
+        declared = {
+            cid: declared_checks(DECLARATIONS[name], cid) for cid in reported
+        }
+        summary = records.class_summary(
+            declared,
+            reported,
+            _SECONDS.get(name, {}),
+            _TALLIES.get(name, {}),
+        )
+        terminalreporter.write_line("")
+        for line in records.verdict_lines(name, summary):
+            terminalreporter.write_line(line)

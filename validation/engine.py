@@ -502,12 +502,14 @@ def run_sweep(
     ops: Sequence[Op],
     *,
     seed: int = 0,
+    tally: dict | None = None,
 ) -> dict[str, str]:
     """Inject every fault of a word's one `sweep` step and judge each run.
 
     Each fault program runs for one shot and is judged by the word's
     logical script, unless the sweep's `discard` drops it. The `outcome`
-    check fails when failures exceed the sweep's `allowed`.
+    check fails when failures exceed the sweep's `allowed`. A given
+    `tally` gets `faults`, `discarded` and `uncorrected` after the loop.
     """
     code = build_code(decl, config, backend)
     roles = word_roles(ops)
@@ -553,6 +555,10 @@ def run_sweep(
         if problems:
             tag = program.name.partition(" + ")[2]
             failures.append(f"{tag} ({problems[0][:100]})")
+    if tally is not None:
+        tally["faults"] = len(programs)
+        tally["discarded"] = discarded
+        tally["uncorrected"] = len(failures)
     if discarded == len(programs):
         raise RuntimeError("the sweep discarded every fault")
     if len(failures) <= declared.allowed:
