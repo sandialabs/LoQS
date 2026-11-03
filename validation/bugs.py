@@ -115,7 +115,7 @@ KNOWN_BUGS: dict[str, str] = {
         "A serialized-then-read 5-qubit code raises `NameError: "
         "unflagged_lookup_table`: the Unflagged Decoder closes over a "
         "local (`:1807`, `:1841`). Class: static (`serialization`). "
-        "Severity: M. Fix: stage 5."
+        "Severity: M. Fixed upstream by #167 (merged in 86d81a7)."
     ),
     "five-12": (
         "`FT Logical Z Measure` is a composite of the `H` and `FT Logical "
@@ -190,7 +190,8 @@ KNOWN_BUGS: dict[str, str] = {
         "(`codepack_surf17_tomita2014.py:548-549`, used at `:820`, "
         "`:937`), which a JSON or HDF5 round trip drops. Every config "
         "and format (`surface.*.static.serialization.*`). Class: static "
-        "(`serialization`). Severity: M. Fix: stage 6."
+        "(`serialization`). Severity: M. Fixed upstream by #167 (merged in "
+        "86d81a7)."
     ),
     "surface-6": (
         "The `clean_diff` and `guarded_diff` readouts take round 0 as "

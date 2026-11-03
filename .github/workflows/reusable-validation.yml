@@ -1,0 +1,50 @@
+# Runs one codepack's validation (validation/README.md) and fails on a failed
+# case or a known failure left.
+
+name: Codepack validation
+
+on:
+  workflow_call:
+    inputs:
+      codepack:
+        description: Declaration name, as in validation/declarations/
+        required: true
+        type: string
+      self_tests:
+        description: Also run the harness self-tests
+        required: false
+        default: false
+        type: boolean
+      big:
+        description: Also run the cases over 32 qubits
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install loqs[all]
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install ".[all]"
+
+    # An empty true branch is falsy in Actions expressions, so the markers
+    # for a big run are spelled out.
+    - name: Validate ${{ inputs.codepack }}
+      run: >
+        python -m pytest
+        ${{ inputs.self_tests && 'validation/test_harness.py' || '' }}
+        validation/test_static.py validation/test_programs.py
+        -k "${{ inputs.self_tests && 'test_harness or ' || '' }}${{ inputs.codepack }}"
+        -m "${{ inputs.big && 'big or not big' || 'not big' }}"
+        -n auto --timeout 1800 --fail-on-known -p no:cacheprovider

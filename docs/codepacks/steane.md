@@ -2,6 +2,10 @@
 
 Generated from the spec `steane` of [](api:loqs.codepacks.steane.SteaneCodepack). Do not edit: regenerate with `python -m loqs.codepacks.generator loqs.codepacks.steane:SteaneCodepack`.
 
+[![steane validation](https://github.com/sandialabs/LoQS/actions/workflows/validation-steane.yml/badge.svg?branch={{ binder_branch }})](https://github.com/sandialabs/LoQS/actions/workflows/validation-steane.yml?query=branch%3A{{ binder_branch }})
+
+The badge shows whether this codepack's latest validation run in CI passed on the branch these docs were built from; a known bug left counts as failing.
+
 ## How to read this page
 
 - Each circuit figure is a Stim timeline diagram: time runs left to right, each spec layer is one column (or several columns under a bracket when its gates overlap on the page), and each line is named by its qubit. `Imrz`, the measure-and-reset, is drawn as `MR`.

@@ -102,15 +102,14 @@ pytest --doctest-modules loqs
 #### Codepack validation
 
 Shipped codepacks are checked by a separate harness in `validation/`, which
-`pytest` skips by default. Run it with
-`python -m pytest validation -n auto --timeout 1800 --write-records`; see
-`validation/README.md` for the quick run and for adding a declaration. A
-passing run writes one record per codepack under `validation/records/`. The
-default test suite fails when a file under `loqs/codepacks/` (or its
-declaration) changes after its record was written, so refresh and commit the
-record whenever you change a codepack. A change to
-`loqs/codepacks/base.py` stales every subclass's record, since the base
-builds their models.
+`pytest` skips by default. CI runs it per codepack, in
+`.github/workflows/validation-<name>.yml`, whenever the codepack, the
+generator or the harness changes, and every Monday on `main`; a job fails on
+a failed case or a known failure left. To run one locally, use the job's
+command:
+`python -m pytest validation/test_static.py validation/test_programs.py -k <codepack> -m "not big" -n auto --timeout 1800`.
+There is no record to refresh. See `validation/README.md` for the options and
+for adding a declaration.
 
 ### Coverage
 

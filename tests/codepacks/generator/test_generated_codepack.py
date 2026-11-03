@@ -109,6 +109,12 @@ def test_shipped_artifacts_current():
         paper = re.findall(rf"\]\(({cls.spec.name}/paper/[^)]+)\)", page)
         assert all((docs / "codepacks" / p).exists() for p in paper), cls
         assert f"({cls.spec.name}.md)" in index, cls
+        workflow = f"validation-{cls.spec.name}.yml"
+        assert (
+            f"actions/workflows/{workflow}/badge.svg?branch={{{{ binder_branch }}}}"
+            in page
+        ), cls
+        assert (docs.parent / ".github" / "workflows" / workflow).exists(), cls
 
 
 def test_cli_documents_only_shipped(monkeypatch, tmp_path):

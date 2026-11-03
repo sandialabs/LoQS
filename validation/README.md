@@ -7,23 +7,30 @@ default test suite (`pytest.ini` ignores it) and needs `pytest-timeout` and
 
 ## Running
 
-Everything (writes records for fully passing codepacks):
+One codepack, the command its CI job runs:
 
 ```bash
-python -m pytest validation -n auto --timeout 1800 --write-records
+python -m pytest validation/test_static.py validation/test_programs.py -k <codepack> -m "not big" -n auto --timeout 1800
 ```
 
-The full run (7,752 cases) takes about 55 to 70 minutes on 4 workers (`-n 4`,
-which `-n auto` gives on a 4-core machine) in an 8 GB container.
+`<codepack>` is the declaration's name (`steane`, `five_qubit`, `surface` or
+`trivial_counter`); `-k` selects by case id (see "Reading a case id" below).
+Cases not marked `big` run 32 qubits or fewer. As collected, Steane has 1,416
+of them, the 5-qubit code 2,190, Surface 3,541 and the trivial counter 5.
+Steane takes about 8 minutes on 4 workers (`-n 4`, which `-n auto` gives on a
+4-core machine), and Surface's program cases about 22 minutes.
 
-Quick run, leaving out the many-qubit (`big`) configs; it writes no record for
-a codepack that has `big` cases, because not every case ran:
-
-```bash
-python -m pytest validation -m "not big" -n auto --timeout 1800
-```
-
-Select with `-k` on a case id (see "Reading a case id" below).
+- `--fail-on-known` fails a run that passed only because cases failed as
+  declared (a known failure left), or skipped a case. Without it a run exits 0
+  when every case passes as declared, so a codepack with known bugs passes. CI
+  always sets it.
+- The harness's self-tests are `validation/test_harness.py`; add it to the
+  command above, with `test_harness or <codepack>` as the `-k` expression.
+- `big` cases are the surgery CNOT's, which run over 32 qubits on every layout
+  (138 as collected) and only on request: run them with `-m big`, or start the
+  Surface workflow by hand with its `big` input set. GitHub offers the manual
+  start only once the workflow file is on `main`, so before the merge run them
+  locally.
 
 Every run ends with a verdict table per codepack, one row per class that ran
 a case:
@@ -125,7 +132,7 @@ A codepack migrated to the class API has five parts:
 | Codepack | `loqs/codepacks/<name>/` | the subclass: options in `__init__`, the code in `create_qec_code()` |
 | Old entry points | `loqs/codepacks/codepack_<name>.py` | deprecated module-level wrappers that call the class |
 | Declaration | `validation/declarations/<name>.py` | what the code claims: data qubits, stabilizers, logical operators, each logical gate's Clifford action, preps, measures, QEC keys, internal keys, sweeps and known failures |
-| Record | `validation/records/<name>.json` | a hash of the declaration's `files`, the class summary and the known bugs of the last full run (not every case result) |
+| Workflow | `.github/workflows/validation-<name>.yml` | the trigger paths: the codepack's files, the generator, `validation/` and the workflow files |
 
 A generated codepack (one built from a spec) has these parts instead:
 
@@ -137,7 +144,7 @@ A generated codepack (one built from a spec) has these parts instead:
 | Class | `loqs/codepacks/<name>/__init__.py` | a `GeneratedCodepack` subclass setting `spec` and `artifact` |
 | Old entry points | `loqs/codepacks/codepack_<name>.py` | deprecated module-level wrappers that call the class |
 | Declaration | `validation/declarations/<name>.py` | as above |
-| Record | `validation/records/<name>.json` | as above (a class summary and known bugs, not every case result); its `rendering` fingerprint covers the generator's output, so the generator's files need no record |
+| Workflow | `.github/workflows/validation-<name>.yml` | as above; the generator's files are in every workflow's paths |
 
 `docs/codepacks/<name>.md` is the spec rendered as a document, regenerated
 with the artifact by `python -m loqs.codepacks.generator`.
@@ -157,7 +164,11 @@ against facts the class doesn't supply.
    stabilizers, logicals and gate actions from the codepack's documentation or
    paper, never from a run.
 2. Register it in `validation/declarations/__init__.py`.
-3. Run the harness. The `completeness` family fails until every shipped
+3. Add a caller workflow `.github/workflows/validation-<name>.yml`, copying
+   an existing one. The default-suite test
+   `tests/codepacks/test_validation_workflows.py` checks that it names the
+   codepack and its paths cover the declaration's `files`.
+4. Run the harness. The `completeness` family fails until every shipped
    instruction key and public multipatch `build_*` function is declared.
 
 ## Triaging a failure
@@ -174,41 +185,28 @@ A case passes only when the set of checks it fails (`outcome`,
 
 Never tune a declaration to make a check pass.
 
-## Records and the stale-record test
+## CI
 
-A record `validation/records/<name>.json` is written only when the codepack's
-whole case set ran and every case passed `judge`, and its files and rendering
-are unchanged since the run started (editing a file mid-run, or a change to
-what the codepack renders, refuses the record). It stores:
+Each codepack has a workflow, `.github/workflows/validation-<name>.yml`, that
+calls `reusable-validation.yml` with the codepack's name. The reusable job
+installs `loqs[all]` on Python 3.13 and runs the command under "Running" with
+`--fail-on-known`.
 
-- `files`: the digest of each of the codepack's files and its declaration
-  module.
-- `rendering`: a fingerprint of what the declaration's configs and declared
-  multipatch ops build, on the List backend: each code's instructions, data
-  and apply-function source (docstrings and comments excluded, same-module
-  helpers and the globals a function names included). It replaces the
-  generator modules' file hashes, so files under `loqs/codepacks/generator/`
-  need no record.
-- `classes`: for each class, a block with `cases`, `passed`, `known`,
-  `failed` (always 0 in a record), `by_bug` (cases declaring each bug id),
-  `seconds` (summed case durations, `null` if unrecorded), and for `ft`,
-  `faults` (`gadgets`, `distinct`, `runs`, `discarded`, `uncorrected`, or
-  `null`). A class with no case is `"not declared"`.
-- `bugs`: each known bug a case lists, with its summary stored once.
+- Triggers: a push to any branch or a pull request that changes the
+  codepack's files (the workflow's `paths`), the generator
+  (`loqs/codepacks/generator/`), `validation/` or the workflow files; every
+  Monday at 07:00 UTC on `main`; and a manual start. A change under `loqs/`
+  outside `loqs/codepacks/` triggers nothing, and the Monday run catches it.
+- The job fails on any failed case and on any known failure left, so a
+  codepack with a declared bug shows a failing badge until the bug is fixed
+  and its `known_failures` key removed.
+- Its verdict table is in the job's summary (the run's page on GitHub).
+- Each generated codepack's docs page shows its workflow's badge for the
+  branch the docs were built from.
+- The trivial counter's job also runs the self-tests, since the counter's
+  cases are few.
 
-There is no per-case list. A record exists only when every case passed as
-declared, so each case's result follows from the declaration (hashed in
-`files`) and the case generator (hashed in `harness`).
-
-To compare two records across a move (a codepack fix or refactor), results
-are identical when each class has the same `cases`, every bug the move
-doesn't fix keeps its `by_bug` count, the fixed bugs drop out of `by_bug`,
-and `passed` plus `known` is unchanged.
-
-The default-suite test `tests/codepacks/test_validation_records.py` fails when
-any digest or the fingerprint no longer matches (the fingerprint test skips
-without Stim and pyGSTi), or when a file under `loqs/codepacks/` other than
-the generator's is in no record, so changing a codepack or its declaration
-requires re-running the harness and committing the refreshed record. The
-harness's own digests are recorded but not enforced. CRLF line endings are
-normalized, so digests agree across platforms.
+To compare two runs across a move (a codepack fix or refactor), read each
+run's verdict tables. Results are identical when each class has the same
+`cases`, every bug the move doesn't fix keeps its count, the fixed bugs drop
+out, and `passed` plus `known` is unchanged.

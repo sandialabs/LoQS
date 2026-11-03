@@ -1,6 +1,5 @@
-"""Self-tests of the harness: record decision and judging."""
+"""Self-tests of the harness: judging, verdict counts, known-failure exit."""
 
-import importlib.util
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -21,58 +20,12 @@ from validation.cases import (
     judge,
     validate_declaration,
 )
-from validation.bugs import KNOWN_BUGS
 from validation.test_programs import RUNNERS, run_ft
 from validation.declarations import DECLARATIONS
 from validation.logical import Cond, Gate, Meas, Prep, check_shot
-from validation import records
-from validation.records import decide_record, file_digests, source_digest
+from validation import verdict
 
 DECL = DECLARATIONS["trivial_counter"]
-IDS = ["a.default.static.x.1", "a.default.static.x.2"]
-
-
-FILES = file_digests(DECL)
-
-
-def _decide(reports, ids=IDS, start_files=FILES, decl=DECL, **kwargs):
-    return decide_record(decl, ids, reports, start_files, **kwargs)
-
-
-def test_record_decision():
-    ok = {i: "passed" for i in IDS}
-    record = _decide(ok)
-    assert isinstance(record, dict)
-    assert "cases" not in record
-    assert record["classes"]["static"] == {
-        "cases": 2,
-        "passed": 2,
-        "known": 0,
-        "failed": 0,
-        "by_bug": {},
-        "seconds": None,
-    }
-    assert record["classes"]["ft"] == "not declared"
-    assert set(record["files"]) >= set(DECL.files)
-    # A missing case, or one that failed, errored or was skipped, refuses.
-    assert isinstance(_decide({IDS[0]: "passed"}), str)
-    for outcome in ("failed", "errored", "skipped"):
-        assert isinstance(_decide({**ok, IDS[1]: outcome}), str)
-    # A file edited during the run refuses.
-    edited = {**FILES, DECL.files[0]: "0" * 64}
-    assert isinstance(_decide(ok, start_files=edited), str)
-    # A rendering that differs from the session start's refuses.
-    assert isinstance(_decide(ok, start_rendering="0" * 64), str)
-    assert isinstance(_decide(ok, start_rendering=record["rendering"]), dict)
-    # A declared failure writes its bug's summary once, under `bugs`.
-    known = replace(DECL, known_failures={"a.default.*:O1": "steane-1"})
-    declared = _decide(ok, decl=known)
-    assert isinstance(declared, dict)
-    assert list(declared["bugs"]) == ["steane-1"]
-    assert declared["bugs"]["steane-1"] == KNOWN_BUGS["steane-1"]
-    assert "known_failures" not in declared
-    assert declared["classes"]["static"]["known"] == 2
-    assert declared["classes"]["static"]["by_bug"] == {"steane-1": 2}
 
 
 def test_class_summary():
@@ -106,7 +59,7 @@ def test_class_summary():
         f3: {"gadget": "g1", "faults": 7, "discarded": 0, "uncorrected": 0},
         f4: {"gadget": "g2"},
     }
-    out = records.class_summary(
+    out = verdict.class_summary(
         declared, outcomes, {s1: 1.04, s2: 2.0}, tallies
     )
     assert list(out) == ["static", "truth", "ft"]
@@ -127,13 +80,13 @@ def test_class_summary():
         "discarded": 1,
         "uncorrected": 0,
     }
-    bare = records.class_summary(declared, outcomes, {}, {})
+    bare = verdict.class_summary(declared, outcomes, {}, {})
     assert bare["ft"]["faults"] is None
-    clean = "\n".join(records.verdict_lines("a", out))
+    clean = "\n".join(verdict.verdict_lines("a", out))
     assert "all corrected" in clean
     dirty = {**tallies, f2: {**tallies[f2], "uncorrected": 2}}
-    bad = records.class_summary(declared, outcomes, {}, dirty)
-    assert "all corrected" not in "\n".join(records.verdict_lines("a", bad))
+    bad = verdict.class_summary(declared, outcomes, {}, dirty)
+    assert "all corrected" not in "\n".join(verdict.verdict_lines("a", bad))
 
 
 def test_report_status(monkeypatch):
@@ -482,55 +435,32 @@ def test_judge():
         judge({"O4"}, set())  # a fix that flips nothing
 
 
-_MODULE = """
-LIMIT = {limit}
-
-
-def helper(x):
-    {helper_doc}
-    return x + {helper_k}
-
-
-def apply(x):
-    {apply_doc}
-    # {comment}
-    return helper(x) * LIMIT + {apply_k}
-"""
-
-
-def _digest(tmp_path, name, **changes):
-    fields = dict(
-        limit=2,
-        helper_k=1,
-        apply_k=0,
-        helper_doc='"""Helper."""',
-        apply_doc='"""Apply."""',
-        comment="a comment",
+@pytest.mark.parametrize(
+    "case_id, outcome, flag, expected",
+    [
+        (
+            "five_qubit.default.static.labels.permuted",
+            "passed",
+            True,
+            "TESTS_FAILED",
+        ),
+        ("five_qubit.default.static.labels.permuted", "passed", False, "OK"),
+        ("steane.default.static.serialization.hdf5", "passed", True, "OK"),
+        (
+            "steane.default.static.serialization.hdf5",
+            "skipped",
+            True,
+            "TESTS_FAILED",
+        ),
+    ],
+)
+def test_fail_on_known(monkeypatch, case_id, outcome, flag, expected):
+    monkeypatch.setattr(
+        conftest, "_REPORTS", {case_id.split(".")[0]: {case_id: outcome}}
     )
-    fields.update(changes)
-    path = tmp_path / f"{name}.py"
-    path.write_text(_MODULE.format(**fields), encoding="utf-8")
-    # One module name for every variant: the digest names functions by it.
-    spec = importlib.util.spec_from_file_location("fp_module", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return source_digest(module.apply)
-
-
-def test_fingerprint_sees_behaviour_not_docs(tmp_path):
-    base = _digest(tmp_path, "m_base")
-    # Docstrings and comments don't move the digest.
-    assert base == _digest(
-        tmp_path,
-        "m_docs",
-        helper_doc='"""Other help."""',
-        apply_doc='"""Other."""',
-        comment="another comment",
+    session = SimpleNamespace(
+        config=SimpleNamespace(getoption=lambda name: flag),
+        exitstatus=0,
     )
-    # The body, a same-module helper and a module constant do.
-    for name, change in (
-        ("m_body", {"apply_k": 1}),
-        ("m_helper", {"helper_k": 2}),
-        ("m_const", {"limit": 3}),
-    ):
-        assert base != _digest(tmp_path, name, **change)
+    conftest.pytest_sessionfinish(session, 0)
+    assert session.exitstatus == getattr(pytest.ExitCode, expected)

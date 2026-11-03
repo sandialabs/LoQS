@@ -32,7 +32,6 @@ class Config:
     options: Mapping[str, Any] = field(default_factory=dict)
     classes: Sequence[str] = ("static",)
     backends: Sequence[Backend] = ()
-    big: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,9 +84,11 @@ class MultipatchOp:
     """A multipatch operation over named patch roles.
 
     Roles past the first two are patches the op prepares and measures
-    itself. `seams`: bare qubit groups (ancilla, seam) and their sizes;
-    `configs`: configs it runs on (empty: all); `needs_qec`: the op refuses
-    to run before a QEC round. A `Meas` key in `script` may name `{role}`.
+    itself. `big_layouts`: the layouts on which the op runs over 32 qubits,
+    so its cases there are marked `big`. `seams`: bare qubit groups
+    (auxiliary, seam) and their sizes; `configs`: configs it runs on
+    (empty: all); `needs_qec`: the op refuses to run before a QEC round. A
+    `Meas` key in `script` may name `{role}`.
     """
 
     name: str

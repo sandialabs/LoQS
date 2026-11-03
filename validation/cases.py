@@ -39,10 +39,9 @@ def _static_cases(decl: CodepackDeclaration) -> list[Case]:
     for config in decl.configs:
         if "static" not in config.classes:
             continue
-        big = config.big
         if config.options.get("include_idles"):
             cases.append(
-                _case(decl, config.name, "static", "idle-padding", "all", big)
+                _case(decl, config.name, "static", "idle-padding", "all")
             )
         for backend in config.backends:
             for n in (1, 2):
@@ -53,7 +52,6 @@ def _static_cases(decl: CodepackDeclaration) -> list[Case]:
                         "static",
                         "model-coverage",
                         f"{backend.name}-p{n}",
-                        big,
                         backend=backend.name,
                         patches=n,
                     )
@@ -67,7 +65,6 @@ def _static_cases(decl: CodepackDeclaration) -> list[Case]:
                         "static",
                         "labels",
                         kind,
-                        big,
                         kind=kind,
                     )
                 )
@@ -79,7 +76,6 @@ def _static_cases(decl: CodepackDeclaration) -> list[Case]:
                     "static",
                     "serialization",
                     fmt,
-                    big,
                     format=fmt,
                 )
             )
@@ -137,7 +133,6 @@ def _truth_cases(decl: CodepackDeclaration) -> list[Case]:
                                     "truth",
                                     family,
                                     detail,
-                                    config.big,
                                     backend=backend.name,
                                     prep=prep.key,
                                     word=word,
@@ -397,7 +392,6 @@ def _tracking_cases(decl: CodepackDeclaration) -> list[Case]:
                     "tracking",
                     family,
                     detail,
-                    config.big,
                     template=tuple(ops),
                     errors=errors,
                 )
@@ -431,7 +425,6 @@ def _agreement_error_cases(decl: CodepackDeclaration) -> list[Case]:
                                     "truth",
                                     "agreement",
                                     detail,
-                                    config.big,
                                     backend=backend.name,
                                     template=tuple(ops),
                                     placement=((0, pauli, "L0"),),
@@ -459,7 +452,7 @@ def _op_labels(op) -> tuple[str, ...]:
 
 def _op_big(decl, config, op) -> bool:
     layout = config.options.get("layout", decl.patch_type)
-    return config.big or layout in op.big_layouts
+    return layout in op.big_layouts
 
 
 def _readout_measures(decl, op):
@@ -751,7 +744,6 @@ def _independence_cases(decl: CodepackDeclaration) -> list[Case]:
                             "independence",
                             "independence",
                             detail,
-                            config.big,
                             template=tuple(ops),
                             errors=1,
                             error_roles=(ra,),
@@ -858,7 +850,6 @@ def _sweep_cases(decl, config, sweep) -> list[Case]:
                             "ft",
                             "ft",
                             detail,
-                            config.big,
                             ops=tuple(ops),
                         )
                     )

@@ -1,0 +1,35 @@
+# Runs the steane codepack's validation (validation/README.md).
+
+name: steane validation
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'loqs/codepacks/base.py'
+      - 'loqs/codepacks/steane/**'
+      - 'loqs/codepacks/codepack_7_1_3_quantinuum2021.py'
+      - 'loqs/codepacks/codepack_7_1_3_multipatch.py'
+      - 'loqs/codepacks/generator/**'
+      - 'validation/**'
+      - '.github/workflows/validation-steane.yml'
+      - '.github/workflows/reusable-validation.yml'
+  pull_request:
+    paths:
+      - 'loqs/codepacks/base.py'
+      - 'loqs/codepacks/steane/**'
+      - 'loqs/codepacks/codepack_7_1_3_quantinuum2021.py'
+      - 'loqs/codepacks/codepack_7_1_3_multipatch.py'
+      - 'loqs/codepacks/generator/**'
+      - 'validation/**'
+      - '.github/workflows/validation-steane.yml'
+      - '.github/workflows/reusable-validation.yml'
+  schedule:
+    - cron: '0 7 * * 1' # Mondays, 07:00 UTC (default branch only)
+  workflow_dispatch:
+
+jobs:
+  validate:
+    uses: ./.github/workflows/reusable-validation.yml
+    with:
+      codepack: steane

@@ -145,13 +145,11 @@ def _known_failures():
         "five_qubit.idles.static.idle-padding.all:outcome": "five-13",
         # Static: the unflagged decoder's closure and hardcoded `A0`, and
         # the 7-qubit assert and missing pyGSTi instrument.
-        f"{_CP}.static.serialization.*:outcome": "five-11",
         f"{_CP}.static.labels.permuted:outcome": "five-9",
         f"{_CP}.static.labels.renamed:outcome": "five-9",
         f"{_CP}.static.labels.offset:outcome": "five-8",
         f"{_CP}.static.model-coverage.*-p2:outcome": "five-8",
         f"{_CP}.static.model-coverage.qsim-pygsti-p1:outcome": "five-8",
-        "five_qubit.idles.static.serialization.*:outcome": "five-11",
         "five_qubit.idles.static.labels.permuted:outcome": "five-9",
         "five_qubit.idles.static.labels.renamed:outcome": "five-9",
         "five_qubit.idles.static.labels.offset:outcome": "five-8",

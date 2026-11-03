@@ -1,12 +1,12 @@
-"""Case parametrization, strict known failures and the record writer."""
+"""Case parametrization, strict known failures and the verdict table."""
 
 from __future__ import annotations
 
-import time
+import os
 
 import pytest
 
-from validation import records
+from validation import verdict
 from validation.cases import (
     declared_checks,
     generate,
@@ -22,24 +22,21 @@ _BY_ID = {c.id: c for cases in _ALL.values() for c in cases}
 _REPORTS: dict[str, dict[str, str]] = {}
 _SECONDS: dict[str, dict[str, float]] = {}  # codepack -> case -> seconds
 _TALLIES: dict[str, dict[str, dict]] = {}  # codepack -> case -> ft tally
-_START = [time.time()]
-_START_FILES: dict[str, dict[str, str]] = {}  # codepack -> digests at start
-_START_RENDERING: dict[str, str] = {}  # codepack -> fingerprint at start
 
 
 def pytest_addoption(parser):
     parser.addoption(
-        "--write-records",
+        "--fail-on-known",
         action="store_true",
         default=False,
-        help="write validation/records/<codepack>.json for fully passing "
-        "codepacks at session end",
+        help="fail the run when any case passed only as a declared known "
+        "failure, or was skipped",
     )
 
 
 def pytest_configure(config):
     config.addinivalue_line(
-        "markers", "big: case of a big (many-qubit) config"
+        "markers", "big: case over 32 qubits, run only on request"
     )
     problems = [
         f"{decl.name}: {p}"
@@ -91,14 +88,6 @@ def _is_controller(config) -> bool:
     return not hasattr(config, "workerinput")
 
 
-def pytest_sessionstart(session):
-    _START[0] = time.time()
-    if session.config.getoption("--write-records"):
-        for name, decl in DECLARATIONS.items():
-            _START_FILES[name] = records.file_digests(decl)
-            _START_RENDERING[name] = records.rendering_fingerprint(decl)
-
-
 def pytest_runtest_logreport(report):
     cid = report.nodeid.rpartition("[")[2].rstrip("]")
     if cid not in _BY_ID:
@@ -116,50 +105,62 @@ def pytest_runtest_logreport(report):
     elif report.skipped:
         seen[cid] = "skipped"
     elif report.when == "call" and cid not in seen:
-        seen[cid] = records.ACCEPTED
+        seen[cid] = verdict.ACCEPTED
 
 
-def pytest_sessionfinish(session, exitstatus):
-    config = session.config
-    if not config.getoption("--write-records") or not _is_controller(config):
-        return
-    meta = records.run_metadata()
-    meta["command"] = records.command_line(config.invocation_params.args)
-    meta["runtime_s"] = round(time.time() - _START[0], 1)
-    for name, decl in DECLARATIONS.items():
-        if name not in _REPORTS:
-            continue
-        big = [c.name for c in decl.configs if c.big]
-        result = records.decide_record(
-            decl,
-            [c.id for c in _ALL[name]],
-            _REPORTS[name],
-            _START_FILES[name],
-            meta,
-            big,
-            _START_RENDERING[name],
-            _SECONDS.get(name, {}),
-            _TALLIES.get(name, {}),
-        )
-        if isinstance(result, str):
-            print(f"\nno record for {name}: {result}")
-        else:
-            print(f"\nwrote {records.write_record(name, result)}")
-
-
-def pytest_terminal_summary(terminalreporter):
-    if not _is_controller(terminalreporter.config):
-        return
+def _summaries() -> dict[str, dict]:
+    """The verdict summary of each codepack that reported a case."""
+    out = {}
     for name, reported in _REPORTS.items():
         declared = {
             cid: declared_checks(DECLARATIONS[name], cid) for cid in reported
         }
-        summary = records.class_summary(
+        out[name] = verdict.class_summary(
             declared,
             reported,
             _SECONDS.get(name, {}),
             _TALLIES.get(name, {}),
         )
+    return out
+
+
+def _known_left(summary: dict) -> bool:
+    return any(b["known"] or b["failed"] for b in summary.values())
+
+
+def pytest_sessionfinish(session, exitstatus):
+    config = session.config
+    if not config.getoption("--fail-on-known") or not _is_controller(config):
+        return
+    # A skipped case counts as failed in the table, so it fails here too.
+    if session.exitstatus == pytest.ExitCode.OK and any(
+        _known_left(s) for s in _summaries().values()
+    ):
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_terminal_summary(terminalreporter):
+    config = terminalreporter.config
+    if not _is_controller(config):
+        return
+    summaries = _summaries()
+    for name, summary in summaries.items():
         terminalreporter.write_line("")
-        for line in records.verdict_lines(name, summary):
+        for line in verdict.verdict_lines(name, summary):
             terminalreporter.write_line(line)
+    if not config.getoption("--fail-on-known"):
+        return
+    left = [n for n, s in summaries.items() if _known_left(s)]
+    if left:
+        terminalreporter.write_line("")
+        terminalreporter.write_line(
+            f"known failures left in {', '.join(left)}: they fail the run "
+            "under --fail-on-known"
+        )
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path:
+        with open(path, "a", encoding="utf-8") as fh:
+            for name, summary in summaries.items():
+                fh.write("```\n")
+                fh.write("\n".join(verdict.verdict_lines(name, summary)))
+                fh.write("\n```\n\n")

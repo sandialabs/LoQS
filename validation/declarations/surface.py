@@ -141,8 +141,6 @@ def _known_failures():
     exercises, not isolated per bug.
     """
     kf = {
-        # Static: the serialized code's measure closes over a local.
-        "surface.*.static.serialization.*:outcome": "surface-5",
         # Every QEC round's history frame re-reads later data.
         "surface.*.truth.truth.*-QEC:O4": "surface-3",
         "surface.*.tracking.*:O4": "surface-3",
@@ -291,8 +289,8 @@ _GUARDED = {
     "reference_round_mode_X": "guarded_diff",
     "reference_round_mode_Z": "guarded_diff",
 }
-_SMALL = ("surf10", "surf17")
-_BIG17 = ("surf17",)
+# Two-patch ops run on `surf10` only, as `surf17` takes 34 qubits or more;
+# the surgery CNOT, with no form at 32 or fewer, runs on every layout.
 _ALL_LAYOUTS = ("surf10", "surf13", "surf17")
 
 
@@ -314,9 +312,8 @@ def _ops():
                 _parity(_SURGERY_ZZ if kind == "ZZ" else _SURGERY_XX, kind[0]),
             ),
             readout_kwargs=_GUARDED,
-            big_layouts=_BIG17,
             seams={"main": 3},
-            configs=_SMALL,
+            configs=("surf10",),
             needs_qec=mode == "ft",
         )
         for kind in ("ZZ", "XX")
@@ -329,8 +326,7 @@ def _ops():
             _cnot,
             ("build_transversal_cnot_instruction",),
             script=(logical.Gate("CX", ("ctrl", "tgt")),),
-            big_layouts=_BIG17,
-            configs=_SMALL,
+            configs=("surf10",),
         ),
         MultipatchOp(
             "joint-zz",
@@ -338,9 +334,8 @@ def _ops():
             _joint(multipatch.build_joint_parity_zz_instruction),
             ("build_joint_parity_zz_instruction",),
             script=(_parity(_JOINT_ZZ, "Z"),),
-            big_layouts=_BIG17,
             seams={"main": 1},
-            configs=_SMALL,
+            configs=("surf10",),
         ),
         MultipatchOp(
             "joint-xx",
@@ -348,9 +343,8 @@ def _ops():
             _joint(multipatch.build_joint_parity_xx_instruction),
             ("build_joint_parity_xx_instruction",),
             script=(_parity(_JOINT_XX, "X"),),
-            big_layouts=_BIG17,
             seams={"main": 1},
-            configs=_SMALL,
+            configs=("surf10",),
         ),
         *surgeries,
         MultipatchOp(
@@ -363,9 +357,8 @@ def _ops():
                 logical.Cond("b", "X", (_SURGERY_ZZ,)),
             ),
             readout_kwargs=_GUARDED,
-            big_layouts=_BIG17,
             seams={"main": 3},
-            configs=_SMALL,
+            configs=("surf10",),
             needs_qec=True,
         ),
         MultipatchOp(
@@ -409,13 +402,6 @@ _CONFIGS = (
         options={"layout": "surf17"},
         classes=_NO_PAIR,
         backends=(STIM,),
-    ),
-    Config(
-        "surf17-pair",
-        options={"layout": "surf17"},
-        classes=("independence",),
-        backends=(STIM,),
-        big=True,
     ),
     Config(
         "surf13",

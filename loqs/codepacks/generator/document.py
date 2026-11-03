@@ -85,6 +85,7 @@ def _stim_text(
     return "\n".join(lines), labels
 
 
+_REPO_URL = "https://github.com/sandialabs/LoQS"
 FIGURE_SCALE = 0.5
 
 
@@ -402,6 +403,17 @@ def document(
         "regenerate with `python -m loqs.codepacks.generator "
         f"{cls.__module__}:{cls.__name__}`."
     )
+    workflow = f"{_REPO_URL}/actions/workflows/validation-{spec.name}.yml"
+    out += [
+        "",
+        f"[![{spec.name} validation]({workflow}/badge.svg"
+        f"?branch={{{{ binder_branch }}}})]({workflow}"
+        "?query=branch%3A{{ binder_branch }})",
+        "",
+        "The badge shows whether this codepack's latest validation run in CI "
+        "passed on the branch these docs were built from; a known bug left "
+        "counts as failing.",
+    ]
 
     out += [
         "",
