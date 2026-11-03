@@ -169,7 +169,8 @@ def on_page_markdown(markdown: str, page, config, files) -> str:
     markdown = _convert_note_admonitions(markdown)
 
     markdown = markdown.replace(
-        "{{ binder_branch }}", docs_branch(config["config_dir"])
+        "{{ binder_branch }}",
+        docs_branch(str(Path(config["config_file_path"]).parent)),
     )
 
     inv_path = Path(config["docs_dir"]) / "_api_inventory.json"

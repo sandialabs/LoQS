@@ -14,15 +14,6 @@ on:
       - 'validation/**'
       - '.github/workflows/validation-trivial_counter.yml'
       - '.github/workflows/reusable-validation.yml'
-  pull_request:
-    paths:
-      - 'loqs/codepacks/base.py'
-      - 'loqs/codepacks/trivial_counter/**'
-      - 'loqs/codepacks/codepack_trivial_counter.py'
-      - 'loqs/codepacks/generator/**'
-      - 'validation/**'
-      - '.github/workflows/validation-trivial_counter.yml'
-      - '.github/workflows/reusable-validation.yml'
   schedule:
     - cron: '0 7 * * 1' # Mondays, 07:00 UTC (default branch only)
   workflow_dispatch:

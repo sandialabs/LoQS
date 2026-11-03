@@ -192,11 +192,12 @@ calls `reusable-validation.yml` with the codepack's name. The reusable job
 installs `loqs[all]` on Python 3.13 and runs the command under "Running" with
 `--fail-on-known`.
 
-- Triggers: a push to any branch or a pull request that changes the
-  codepack's files (the workflow's `paths`), the generator
-  (`loqs/codepacks/generator/`), `validation/` or the workflow files; every
-  Monday at 07:00 UTC on `main`; and a manual start. A change under `loqs/`
-  outside `loqs/codepacks/` triggers nothing, and the Monday run catches it.
+- Triggers: a push to any branch that changes the codepack's files (the
+  workflow's `paths`), the generator (`loqs/codepacks/generator/`),
+  `validation/` or the workflow files; every Monday at 07:00 UTC on `main`;
+  and a manual start. A change under `loqs/` outside `loqs/codepacks/`
+  triggers nothing, and the Monday run catches it. A pull request shows the
+  push run of its head commit; one from a fork runs no validation.
 - The job fails on any failed case and on any known failure left, so a
   codepack with a declared bug shows a failing badge until the bug is fixed
   and its `known_failures` key removed.

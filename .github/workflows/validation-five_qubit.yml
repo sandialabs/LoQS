@@ -11,13 +11,6 @@ on:
       - 'validation/**'
       - '.github/workflows/validation-five_qubit.yml'
       - '.github/workflows/reusable-validation.yml'
-  pull_request:
-    paths:
-      - 'loqs/codepacks/codepack_5_1_3_quantinuum2022.py'
-      - 'loqs/codepacks/generator/**'
-      - 'validation/**'
-      - '.github/workflows/validation-five_qubit.yml'
-      - '.github/workflows/reusable-validation.yml'
   schedule:
     - cron: '0 7 * * 1' # Mondays, 07:00 UTC (default branch only)
   workflow_dispatch:

@@ -29,10 +29,10 @@ def _covers(patterns, rel: str) -> bool:
     )
 
 
-def _caller_paths(name: str) -> tuple[list[str], list[str]]:
+def _caller_paths(name: str) -> list[str]:
     data = _load(WORKFLOWS / f"validation-{name}.yml")
     triggers: Any = data.get("on", data.get(True))
-    return triggers["push"]["paths"], triggers["pull_request"]["paths"]
+    return triggers["push"]["paths"]
 
 
 @pytest.mark.parametrize("name", sorted(DECLARATIONS))
@@ -45,8 +45,7 @@ def test_caller_covers_codepack(name):
     assert job["with"]["codepack"] == name
     assert job["with"].get("self_tests", False) == (name == "trivial_counter")
 
-    push, pull = _caller_paths(name)
-    assert push == pull
+    push = _caller_paths(name)
     needed = set(DECLARATIONS[name].files)
     needed.add(f"validation/declarations/{name}.py")
     needed.add(f".github/workflows/{caller}")
@@ -59,7 +58,7 @@ def test_every_codepack_file_is_covered():
     """A codepack file under loqs/codepacks that no caller's paths cover."""
     covered = set()
     for name in DECLARATIONS:
-        covered |= set(_caller_paths(name)[0])
+        covered |= set(_caller_paths(name))
     shipped = {
         p.relative_to(ROOT).as_posix()
         for p in (ROOT / "loqs" / "codepacks").rglob("*.py")
