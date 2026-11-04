@@ -57,7 +57,7 @@ def shipped_codepacks() -> list[type[GeneratedCodepack]]:
         if info.ispkg:
             importlib.import_module(f"loqs.codepacks.{info.name}")
 
-    def walk(cls: type) -> Iterator[type]:
+    def walk(cls: type[Any]) -> Iterator[type[Any]]:
         for sub in cls.__subclasses__():
             yield sub
             yield from walk(sub)
