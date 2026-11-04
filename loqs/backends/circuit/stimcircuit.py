@@ -555,6 +555,22 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def qubit_labels(self) -> list[QubitTypes]:
         return self._qubit_labels
 
+    @property
+    def used_gate_names(self) -> list[str]:
+        """Return the sorted list of gate names used in this circuit."""
+        names: set[str] = set()
+
+        def _collect_from_circuit(circuit: _Circuit) -> None:
+            for instruction in circuit:
+                if isinstance(instruction, _CircuitRepeatBlock):
+                    _collect_from_circuit(instruction.body_copy())
+                else:
+                    if instruction.name in self._stim_gates:
+                        names.add(instruction.name)
+
+        _collect_from_circuit(self._circuit)
+        return sorted(names)
+
     def copy(self) -> STIMPhysicalCircuit:
         return STIMPhysicalCircuit(self)
 

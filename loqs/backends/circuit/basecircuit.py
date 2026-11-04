@@ -212,6 +212,22 @@ class BasePhysicalCircuit(Displayable):
         """
         pass
 
+    @property
+    def used_gate_names(self) -> list[str]:
+        """Get the sorted list of op names (gates, instruments) used in this circuit.
+
+        Returns a sorted list of all gate/instrument op names that literally
+        appear in this circuit representation.
+
+        Raises
+        ------
+        NotImplementedError
+            If the subclass does not override this method.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement used_gate_names"
+        )
+
     # Instance methods
     def append(self: T, circuit: BasePhysicalCircuit) -> T:
         """Append another circuit to a copy of this circuit.

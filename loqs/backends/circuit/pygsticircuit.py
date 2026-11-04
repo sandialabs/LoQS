@@ -143,6 +143,17 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     def qubit_labels(self) -> list:
         return list(self.circuit.line_labels)
 
+    @property
+    def used_gate_names(self) -> list[str]:
+        """Return the sorted list of gate names used in this circuit."""
+        names = {
+            comp.name
+            for lidx in range(self._circuit.depth)
+            for comp in self._circuit._layer_components(lidx)
+            if comp.name
+        }
+        return sorted(names)
+
     def copy(self) -> PyGSTiPhysicalCircuit:
         return PyGSTiPhysicalCircuit(self.circuit, self.qubit_labels)
 

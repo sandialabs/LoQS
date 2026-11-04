@@ -252,6 +252,16 @@ def test_repeat_block_indices_and_reindexing():
     assert reindexed[1].repeat_count == 3
 
 
+def test_used_gate_names_skips_noise_and_annotations():
+    # A REPEAT body is searched without unrolling; noise channels and TICK
+    # are not gates
+    circ = STIMPhysicalCircuit(
+        "H 0\nTICK\nREPEAT 2 {\nCX 0 1\nTICK\n}\nX_ERROR(0.1) 0\nM 0 1",
+        ["Q0", "Q1"],
+    )
+    assert circ.used_gate_names == ["CX", "H", "M"]
+
+
 def test_parsed_lines():
     circuit = STIMPhysicalCircuit(
         "X 0 1\nCX 0 1 1 2\nMZZ 0 1 2 3\nX_ERROR(0.1) 2 0\nTICK\n"

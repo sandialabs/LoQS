@@ -1,0 +1,32 @@
+<svg width="80" height="272" viewBox="0 0 160 544"  version="1.1" xmlns="http://www.w3.org/2000/svg">
+<g id="qubit_lines">
+<path id="qubit_line:0" d="M64,64 L128,64 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="64">D0</text>
+<path id="qubit_line:1" d="M64,128 L128,128 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="128">D1</text>
+<path id="qubit_line:2" d="M64,192 L128,192 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="192">D2</text>
+<path id="qubit_line:3" d="M64,256 L128,256 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="256">D3</text>
+<path id="qubit_line:4" d="M64,320 L128,320 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="320">D4</text>
+<path id="qubit_line:5" d="M64,384 L128,384 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="384">D5</text>
+<path id="qubit_line:6" d="M64,448 L128,448 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="448">D6</text>
+</g>
+<rect x="80" y="48" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="64">S</text>
+<rect x="80" y="112" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="128">S</text>
+<rect x="80" y="176" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="192">S</text>
+<rect x="80" y="240" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="256">S</text>
+<rect x="80" y="304" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="320">S</text>
+<rect x="80" y="368" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="384">S</text>
+<rect x="80" y="432" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="448">S</text>
+</svg>

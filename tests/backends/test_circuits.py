@@ -147,6 +147,17 @@ def test_invalid_input_raises(adapter):
         adapter.cls(None)
 
 
+def test_used_gate_names(adapter):
+    a = adapter
+    layers = [
+        [(a.v["h"], _q("Q0"))],
+        [(a.v["cnot"], _q("Q0", "Q1"))],
+        [(a.v["h"], _q("Q1")), (a.v["x"], _q("Q0"))],
+    ]
+    circ = a.make(layers, ["Q0", "Q1"])
+    assert circ.used_gate_names == sorted({a.v["h"], a.v["x"], a.v["cnot"]})
+
+
 def test_append_and_add(layer_adapter):
     a = layer_adapter
     first = [[(a.v["h"], _q("Q0"))]]

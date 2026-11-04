@@ -1,0 +1,16 @@
+<svg width="80" height="144" viewBox="0 0 160 288"  version="1.1" xmlns="http://www.w3.org/2000/svg">
+<g id="qubit_lines">
+<path id="qubit_line:0" d="M64,64 L128,64 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="64">D4</text>
+<path id="qubit_line:1" d="M64,128 L128,128 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="128">D5</text>
+<path id="qubit_line:2" d="M64,192 L128,192 " stroke="black"/>
+<text dominant-baseline="central" text-anchor="end" font-family="monospace" font-size="12" x="64" y="192">D6</text>
+</g>
+<rect x="80" y="48" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="64">Y</text>
+<rect x="80" y="112" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="128">Y</text>
+<rect x="80" y="176" width="32" height="32" stroke="black" fill="white"/>
+<text dominant-baseline="central" text-anchor="middle" font-family="monospace" font-size="30" x="96" y="192">Y</text>
+</svg>

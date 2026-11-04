@@ -1,0 +1,22 @@
+# Runs the five_qubit codepack's validation (validation/README.md).
+
+name: five_qubit validation
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'loqs/codepacks/codepack_5_1_3_quantinuum2022.py'
+      - 'loqs/codepacks/generator/**'
+      - 'validation/**'
+      - '.github/workflows/validation-five_qubit.yml'
+      - '.github/workflows/reusable-validation.yml'
+  schedule:
+    - cron: '0 7 * * 1' # Mondays, 07:00 UTC (default branch only)
+  workflow_dispatch:
+
+jobs:
+  validate:
+    uses: ./.github/workflows/reusable-validation.yml
+    with:
+      codepack: five_qubit

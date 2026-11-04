@@ -58,16 +58,18 @@ Let's start with the "higher level" modification first: It is possible to overri
 For example, consider we have the following QuantumProgram:
 
 ```{code-cell} ipython3
-from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
+from loqs.codepacks import SteaneCodepack
 from loqs.core import Frame, History, InstructionStack, PatchLayout, QuantumProgram
 from loqs.backends import NumpyStatevectorQuantumState, PyGSTiNoiseModel
 
 # Let's define qubits for a single Quantinuum-style Steane patch: 7 data qubits, 3 aux qubits
 qubits = ["A0", "A1", "A2"] + [f"D{i}" for i in range(7)]
 
-ideal_model = codepack_Steane.create_ideal_model(qubits=qubits)
+steane = SteaneCodepack()
 
-steane_code = codepack_Steane.create_qec_code()
+ideal_model = steane.create_ideal_model(qubits=qubits)
+
+steane_code = steane.create_qec_code()
 
 init_state = NumpyStatevectorQuantumState(10, qubit_labels=qubits)
 init_patches = PatchLayout({"L0": steane_code.create_patch(qubits=qubits)})

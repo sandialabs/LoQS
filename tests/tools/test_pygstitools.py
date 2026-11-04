@@ -13,8 +13,8 @@ from pygsti.protocols import ExperimentDesign
 from loqs.backends import DictNoiseModel, STIMQuantumState, StimCircuitGateRep
 from loqs.core import PatchGeometry
 from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
-from loqs.codepacks import codepack_7_1_3_quantinuum2021 as steane_codepack
-from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.codepacks import SteaneCodepack
+from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.pygstitools import EdesignRunner
 
@@ -53,8 +53,10 @@ class _TrivialCounterSetup:
             ("Gxpi2", "Q0"): [("Increment", "L0")],
             "Mdefault": [],
         }
-        trivial_code = trivial_codepack.create_qec_code()
-        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+        trivial_code = TrivialCounterCodepack().create_qec_code()
+        ideal_model = TrivialCounterCodepack().create_ideal_model(
+            ["Q0"], model_backend=DictNoiseModel
+        )
         self.program_kwargs = dict(
             default_noise_model=ideal_model,
             patch_types={"Trivial": trivial_code},
@@ -150,6 +152,7 @@ class TestPipelineWithMultiplePatches:
         circ = Circuit([], line_labels=phys_qubits)
         edesign = ExperimentDesign([circ])
 
+        steane_codepack = SteaneCodepack()
         code = steane_codepack.create_qec_code()
         noise_model = steane_codepack.create_ideal_model(
             all_qubits,
@@ -249,7 +252,6 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """An interrupted run with a transversal CX resumes through
         `read(path).run()` without `force_resume`: the decoded CX equals
         the stored one and its nested functions find their module helpers."""
-        from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
 
         def steane_qubits(suffix):
             base = ["A0", "A1", "A2"] + [f"D{i}" for i in range(7)]
@@ -261,7 +263,8 @@ class TestSimulateDatasetForEdesignCheckpointing:
         geometry = PatchGeometry(
             patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout="7_1_3"
         )
-        cx = multipatch.build_transversal_cx_instruction(geometry)
+        steane_codepack = SteaneCodepack()
+        cx = steane_codepack.build_two_patch("Transversal CX", geometry)
 
         phys_qubits = ["Q0", "Q1"]
         pspec = QubitProcessorSpec(

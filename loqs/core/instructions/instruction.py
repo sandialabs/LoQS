@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from functools import lru_cache
 import inspect as ins
 import textwrap
 from typing import (
@@ -67,6 +68,19 @@ def default_map_qubits(qubit_mapping: Mapping[str | int, str | int], **kwargs):
     """A default map qubit function that does not change kwargs."""
     # Assume nothing needs to be mapped in kwargs
     return kwargs
+
+
+@lru_cache(maxsize=1024)
+def _source_unavailable(func: Callable) -> bool:
+    """Whether `func`'s source can't be read now, or isn't on disk."""
+    import os
+
+    try:
+        ins.getsource(func)
+        srcfile = ins.getsourcefile(func)
+        return srcfile is not None and not os.path.exists(srcfile)
+    except (OSError, TypeError):
+        return True
 
 
 DEFAULT_PRIORITIES = [
@@ -225,15 +239,12 @@ class Instruction(Displayable):
         (`co_freevars`): their values aren't serialized, so the decoded
         function raises `NameError`.
         """
-        import inspect
-        import os
-
+        # Instructions are copied and remapped often with the same
+        # functions, and inspecting source costs file reads each time.
         try:
-            inspect.getsource(func)
-            srcfile = inspect.getsourcefile(func)
-            unavailable = srcfile is not None and not os.path.exists(srcfile)
-        except (OSError, TypeError):
-            unavailable = True
+            unavailable = _source_unavailable(func)
+        except TypeError:  # unhashable callable
+            unavailable = _source_unavailable.__wrapped__(func)
 
         if unavailable:
             warnings.warn(

@@ -443,3 +443,25 @@ class TestPhysicalCircuitInstructionSTIM:
         assert outcomes["0"] == [1]
         assert outcomes["1"] == [0]
         assert outcomes["2"] == [0]
+
+
+def test_repeat_until_success_body_runs_on_its_patch():
+    inner = builders.build_composite_instruction([], name="inner")
+    rus = builders.build_repeat_until_success_instruction(
+        instructions=["Plain", {"instruction": inner, "patch_label": "L9"}],
+        rus_key="rus",
+        name="RUS",
+    )
+    stack = InstructionStack([])
+    frame = rus.apply(
+        observed=False,
+        expected=True,
+        rus_key="rus",
+        patch_label="L0",
+        repeat_count=0,
+        instructions=rus.data["instructions"],
+        max_repeats=5,
+        stack=stack,
+    )
+    labels = list(frame["stack"])
+    assert [label["patch_label"] for label in labels] == ["L0", "L9", "L0"]

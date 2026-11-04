@@ -43,13 +43,19 @@ Where most pyGSTi examples start with a modelpack, we'll start with a codepack. 
 I'm going to use the Steane code here, but feel free to go through and try this with the 5Q code later for extra credit.
 
 ```{code-cell} ipython3
-from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
+from loqs.codepacks import SteaneCodepack
 ```
 
 ```{code-cell} ipython3
-# We can print the module's docstring to get more information on the codepack
+# We can print the class's docstring to get more information on the codepack
 # This is the same as what is in the documentation (with less nice formatting)
-print(codepack_Steane.__doc__)
+print(SteaneCodepack.__doc__)
+```
+
+A codepack is a class, and its options (the circuit backend, whether to pad idles and so on) are arguments of its constructor. The Steane codepack is generated from a spec, which is rendered as a document with a figure of every circuit: see [the Steane codepack](../codepacks/steane.md).
+
+```{code-cell} ipython3
+steane = SteaneCodepack()
 ```
 
 Codepacks offer two things: a QECCode and an ideal physical noise model. Let's extract those here.
@@ -74,15 +80,15 @@ qubits = ["A0", "A1", "A2"] + [f"D{i}" for i in range(7)]
 # This is because loqs.backends handles missing backends by doing lazy imports
 from loqs.backends import PyGSTiNoiseModel
 
-ideal_model = codepack_Steane.create_ideal_model(qubits=qubits, model_backend=PyGSTiNoiseModel)
+ideal_model = steane.create_ideal_model(qubits=qubits, model_backend=PyGSTiNoiseModel)
 ```
 
-The QECCode creation function also has several options. For the purposes of this tutorial, we'll just explicitly set the circuit backend as a reminder that it's there.
+The class also has several options. For the purposes of this tutorial, we'll just explicitly set the circuit backend as a reminder that it's there.
 
 ```{code-cell} ipython3
 from loqs.backends import PyGSTiPhysicalCircuit
 
-steane_code = codepack_Steane.create_qec_code(circuit_backend=PyGSTiPhysicalCircuit)
+steane_code = SteaneCodepack(circuit_backend=PyGSTiPhysicalCircuit).create_qec_code()
 ```
 
 Before we get too far, let's see what Instructions are available to us:

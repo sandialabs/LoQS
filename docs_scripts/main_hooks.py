@@ -130,6 +130,31 @@ def on_nav(nav, config, files):
     return nav
 
 
+def docs_branch(config_dir: str) -> str:
+    """
+    Return the branch the docs are built from.
+
+    On a Read the Docs branch build that is `READTHEDOCS_GIT_IDENTIFIER`. Otherwise it is the
+    checked-out Git branch, or `main` on a detached `HEAD` (Read the Docs tag and pull-request builds) or a Git error.
+    """
+    import os
+    import subprocess
+
+    if os.environ.get("READTHEDOCS_VERSION_TYPE") == "branch":
+        identifier = os.environ.get("READTHEDOCS_GIT_IDENTIFIER")
+        if identifier:
+            return identifier
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            text=True,
+            cwd=config_dir,
+        ).strip()
+    except Exception:
+        return "main"
+    return "main" if branch == "HEAD" else branch
+
+
 def on_page_markdown(markdown: str, page, config, files) -> str:
     """
     Rewrite `[text](api:Target)` into `/reference/...` URLs, resolve Binder branch placeholders, and normalize code-cell fences.
@@ -138,25 +163,15 @@ def on_page_markdown(markdown: str, page, config, files) -> str:
     - Converts MyST-style ````{note}` fences to MkDocs Material `!!!` admonition syntax.
     - Rewrites author-facing `api:` links to `/reference/...` URLs using the generated API inventory.
     - Hard build failure on unresolved or ambiguous targets.
-    - Dynamically resolves the currently checked-out Git branch name and replaces `{{ binder_branch }}` in every page's markdown.
+    - Replaces `{{ binder_branch }}` in every page's markdown with the docs branch: Read the Docs' branch on a branch build, else the checked-out Git branch (see `docs_branch`).
     """
     markdown = _convert_code_cell_fences(markdown)
     markdown = _convert_note_admonitions(markdown)
 
-    import subprocess
-
-    try:
-        branch = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            text=True,
-            cwd=config["config_dir"],
-        ).strip()
-        if branch == "HEAD":
-            branch = "main"
-    except Exception:
-        branch = "main"
-
-    markdown = markdown.replace("{{ binder_branch }}", branch)
+    markdown = markdown.replace(
+        "{{ binder_branch }}",
+        docs_branch(str(Path(config["config_file_path"]).parent)),
+    )
 
     inv_path = Path(config["docs_dir"]) / "_api_inventory.json"
     if not inv_path.exists():

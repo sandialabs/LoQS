@@ -8,9 +8,9 @@ pytest.importorskip("pymatching")
 from loqs.core.instructions import Instruction
 from loqs.codepacks import (
     codepack_5_1_3_quantinuum2022,
-    codepack_7_1_3_quantinuum2021,
     codepack_surf17_tomita2014,
     codepack_trivial_counter,
+    SteaneCodepack,
 )
 
 
@@ -31,7 +31,7 @@ def _functions(obj):
     "module",
     [
         codepack_5_1_3_quantinuum2022,
-        codepack_7_1_3_quantinuum2021,
+        SteaneCodepack(),
         codepack_trivial_counter,
         codepack_surf17_tomita2014,
     ],

@@ -107,11 +107,14 @@ field-by-field details and validation rules.
 ## Build a program
 
 ```{code-cell} ipython3
-from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.backends import DictNoiseModel
+from loqs.codepacks.trivial_counter import TrivialCounterCodepack
 from loqs.core import QuantumProgram
 
-trivial_code = trivial_codepack.create_qec_code()
-ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+trivial_code = TrivialCounterCodepack().create_qec_code()
+ideal_model = TrivialCounterCodepack().create_ideal_model(
+    ["Q0"], model_backend=DictNoiseModel
+)
 
 # A trivial program: initialize a patch and a counter, then increment the
 # counter once. Every shot should report a final counter value of 1.

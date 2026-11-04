@@ -7,17 +7,24 @@ stim = pytest.importorskip("stim")
 
 from loqs.backends import (
     DictNoiseModel,
+    ListPhysicalCircuit,
     PyGSTiPhysicalCircuit,
     STIMQuantumState,
     StimCircuitGateRep,
 )
 from loqs.core import InstructionStack, PatchGeometry, QuantumProgram
+from loqs.core.recordables.patchlayout import PatchLayout
 from loqs.core.instructions import Instruction
 from loqs.core.instructions import builders
-from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
+from loqs.codepacks import SteaneCodepack
 from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
 
 NUM_SHOTS = 10
+
+
+def steane_cx(geometry):
+    """The class's transversal CX on `geometry`."""
+    return SteaneCodepack().build_two_patch("Transversal CX", geometry)
 
 
 def steane_qubits(suffix: str = "") -> list[str]:
@@ -34,7 +41,7 @@ def two_patch_cx_stack(prep_ctrl, prep_tgt, meas):
     geometry = PatchGeometry(
         patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout="7_1_3"
     )
-    cx = multipatch.build_transversal_cx_instruction(geometry)
+    cx = steane_cx(geometry)
     stack = [
         {
             "instruction": "Init State",
@@ -58,13 +65,13 @@ def make_program(stack, all_qubits, code=None):
     ----------
     code:
         A pre-built QECCode to use in place of a fresh
-        `codepack_steane.create_qec_code()`, e.g. one with an
+        `SteaneCodepack().create_qec_code()`, e.g. one with an
         `"Injected Data Error"` instruction added for fault-injection
         tests.
     """
     if code is None:
-        code = codepack_steane.create_qec_code()
-    model = codepack_steane.create_ideal_model(
+        code = SteaneCodepack().create_qec_code()
+    model = SteaneCodepack().create_ideal_model(
         all_qubits,
         gaterep=StimCircuitGateRep,
         model_backend=DictNoiseModel,
@@ -79,13 +86,13 @@ def make_program(stack, all_qubits, code=None):
 
 
 def code_with_injected_error(error_gate: str, data_qubit: str):
-    """A `codepack_steane` QECCode with an `"Injected Data Error"` instruction.
+    """A Steane QECCode with an `"Injected Data Error"` instruction.
 
     The instruction applies a single-qubit `error_gate` (e.g. `"Gxpi"`) to
     `data_qubit` (a template label, e.g. `"D6"`), to be invoked as
     `("Injected Data Error", <patch_label>)` in a program stack.
     """
-    code = codepack_steane.create_qec_code()
+    code = SteaneCodepack().create_qec_code()
     error_circ = PyGSTiPhysicalCircuit(
         [[(error_gate, data_qubit)]], qubit_labels=steane_qubits()
     )
@@ -97,8 +104,51 @@ def code_with_injected_error(error_gate: str, data_qubit: str):
     return code
 
 
+def run_cx_bookkeeping(frame_ctrl, frame_tgt, synd_ctrl, synd_tgt):
+    """Run the class's CX bookkeeping on two patches holding the given
+    logical frames and syndromes; return both patches' new
+    `(logical_pauli_frame, latest_syndrome)`."""
+    qubits = steane_qubits
+    geometry = PatchGeometry(
+        patches={
+            "ctrl": ("L0", qubits("_0")),
+            "tgt": ("L1", qubits("_1")),
+        },
+        layout="7_1_3",
+    )
+    codepack = SteaneCodepack(circuit_backend=ListPhysicalCircuit)
+    code = codepack.create_qec_code()
+    layout = PatchLayout(
+        {
+            "L0": code.create_patch(qubits("_0")),
+            "L1": code.create_patch(qubits("_1")),
+        }
+    )
+    for label, frame, synd in (
+        ("L0", frame_ctrl, synd_ctrl),
+        ("L1", frame_tgt, synd_tgt),
+    ):
+        layout[label].data = {
+            "logical_pauli_frame": list(frame),
+            "latest_syndrome": list(synd),
+        }
+    cx = codepack.build_two_patch("Transversal CX", geometry)
+    book = cx.data["instructions"][1]
+    new = book.apply_fn(patches=layout, **book.data)["patches"]
+    return tuple(
+        (
+            new[label].data["logical_pauli_frame"],
+            new[label].data["latest_syndrome"],
+        )
+        for label in ("L0", "L1")
+    )
+
+
+ZERO_SYND = [0, 0, 0, 0, 0, 0]
+
+
 class TestConjugateCxLogicalPauliFrames:
-    """`conjugate_cx_logical_pauli_frames` truth table (frame = [Z_bit, X_bit])."""
+    """The CX bookkeeping's logical-frame truth table (frame = [Z_bit, X_bit])."""
 
     TRUTH_TABLE = [
         # (frame_ctrl, frame_tgt, expected_ctrl, expected_tgt)
@@ -112,17 +162,15 @@ class TestConjugateCxLogicalPauliFrames:
 
     @pytest.mark.parametrize("fc,ft,exp_c,exp_t", TRUTH_TABLE)
     def test_truth_table(self, fc, ft, exp_c, exp_t):
-        orig_fc, orig_ft = list(fc), list(ft)
-        new_c, new_t = multipatch.conjugate_cx_logical_pauli_frames(fc, ft)
+        (new_c, _), (new_t, _) = run_cx_bookkeeping(
+            fc, ft, ZERO_SYND, ZERO_SYND
+        )
         assert new_c == exp_c
         assert new_t == exp_t
-        # Inputs are not mutated
-        assert fc == orig_fc
-        assert ft == orig_ft
 
 
 class TestConjugateCxLatestSyndromes:
-    """`conjugate_cx_latest_syndromes` truth table (syndrome = [S1..S6])."""
+    """The CX bookkeeping's syndrome truth table (syndrome = [S1..S6])."""
 
     TRUTH_TABLE = [
         # (syndrome_ctrl, syndrome_tgt, expected_ctrl, expected_tgt)
@@ -171,13 +219,9 @@ class TestConjugateCxLatestSyndromes:
 
     @pytest.mark.parametrize("sc,st,exp_c,exp_t", TRUTH_TABLE)
     def test_truth_table(self, sc, st, exp_c, exp_t):
-        orig_sc, orig_st = list(sc), list(st)
-        new_c, new_t = multipatch.conjugate_cx_latest_syndromes(sc, st)
+        (_, new_c), (_, new_t) = run_cx_bookkeeping([0, 0], [0, 0], sc, st)
         assert new_c == exp_c
         assert new_t == exp_t
-        # Inputs are not mutated
-        assert sc == orig_sc
-        assert st == orig_st
 
 
 class TestTransversalCx:
@@ -193,7 +237,7 @@ class TestTransversalCx:
                 patches={"ctrl": ("L0", first), "tgt": ("L1", second)},
                 layout="7_1_3",
             )
-            return multipatch.build_transversal_cx_instruction(geometry)
+            return steane_cx(geometry)
 
         cx = make_cx(q0, q1)
         path = tmp_path / "cx.h5"
@@ -234,7 +278,7 @@ class TestSyndromeCouplingAfterCx:
         geometry = PatchGeometry(
             patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout="7_1_3"
         )
-        cx = multipatch.build_transversal_cx_instruction(geometry)
+        cx = steane_cx(geometry)
         stack = [
             {
                 "instruction": "Init State",
@@ -276,3 +320,47 @@ class TestSyndromeCouplingAfterCx:
             "logical_measurement", "all", strip_none_entries=True
         )
         assert all(l0 == 0 and l1 == 0 for l0, l1 in per_shot)
+
+
+class TestDeprecatedMultipatchWrappers:
+    """The old CX builders warn and build the class's CX under `name`."""
+
+    def _geometry(self):
+        return PatchGeometry(
+            patches={
+                "ctrl": ("L0", steane_qubits("_0")),
+                "tgt": ("L1", steane_qubits("_1")),
+            },
+            layout="7_1_3",
+        )
+
+    def test_composite_and_parts_are_renamed(self):
+        geometry = self._geometry()
+        with pytest.warns(DeprecationWarning):
+            old = multipatch.build_transversal_cx_instruction(
+                geometry, circuit_backend=ListPhysicalCircuit, name="My CX"
+            )
+        new = SteaneCodepack(
+            circuit_backend=ListPhysicalCircuit
+        ).build_two_patch("Transversal CX", geometry)
+        assert old.name == "My CX"
+        names = [i.name for i in old.data["instructions"]]
+        assert names == ["My CX (physical circuit)", "My CX (bookkeeping)"]
+        for o, n in zip(old.data["instructions"], new.data["instructions"]):
+            assert o.data.keys() == n.data.keys()
+        circuit = old.data["instructions"][0].data["circuit"]
+        assert type(circuit) is ListPhysicalCircuit
+
+    def test_half_builders(self):
+        geometry = self._geometry()
+        with pytest.warns(DeprecationWarning):
+            circuit_inst = multipatch.build_transversal_cx_circuit_instruction(
+                geometry, name="Half"
+            )
+        with pytest.warns(DeprecationWarning):
+            book = multipatch.build_cx_bookkeeping_instruction(
+                "La", "Lb", name="Book"
+            )
+        assert circuit_inst.name == "Half"
+        assert book.name == "Book"
+        assert book.data["patch_labels"] == ["La", "Lb"]

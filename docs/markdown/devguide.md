@@ -99,6 +99,18 @@ Doctests can be run by invoking `pytest` on the source code instead:
 pytest --doctest-modules loqs
 ```
 
+#### Codepack validation
+
+Shipped codepacks are checked by a separate harness in `validation/`, which
+`pytest` skips by default. CI runs it per codepack, in
+`.github/workflows/validation-<name>.yml`, whenever the codepack, the
+generator or the harness changes, and every Monday on `main`; a job fails on
+a failed case or a known failure left. To run one locally, use the job's
+command:
+`python -m pytest validation/test_static.py validation/test_programs.py -k <codepack> -m "not big" -n auto --timeout 1800`.
+There is no record to refresh. See `validation/README.md` for the options and
+for adding a declaration.
+
 ### Coverage
 
 The `tox` pipeline also generates coverage reports by using the `pytest-cov`
