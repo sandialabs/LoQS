@@ -14,6 +14,7 @@ import h5py
 import numpy as np
 
 import loqs.core.programresults as programresults_module
+import loqs.internal.checkpointstore as checkpointstore_module
 import loqs.internal.swmrledger as swmrledger_module
 from loqs.core.programresults import ProgramResults
 from loqs.internal.checkpointstore import (
@@ -1525,3 +1526,187 @@ class TestResumeCheckpointing:
 
             assert indices == [0, 1, 2, 3, 4]
             assert not any(isinstance(value, History) for value in decoded)
+
+
+class _Marker(Serializable):
+    """A cached object a frame can hold, to select by value."""
+
+    _SERIALIZE_ATTRS = ["value"]
+    _CACHE_ON_SERIALIZE = True
+
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return isinstance(other, _Marker) and self.value == other.value
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def _selective_history(i: int, arrays: bool) -> History:
+    """A four-frame history: frame 0 holds a numpy array when `arrays`
+    (a real HDF5 group), the rest are plain, and one key is expired."""
+    history = History()
+    first = {"shot": i, "tag": "a"}
+    if arrays:
+        first["arr"] = np.arange(3) + i
+    history.append(Frame(first))
+    for j in range(1, 4):
+        data = {"shot": i, "j": j, "tag": "b" if j % 2 else "a"}
+        if j == 2:
+            data["sometimes"] = i
+        history.append(Frame(data))
+    history[3].expire("shot")
+    return history
+
+
+def _selective_reader(directory: Path, histories, worker_id):
+    """A checkpointed `ProgramResults` holding `histories` (keyed by shot)
+    and a fresh reader over it, plus an in-memory twin."""
+    writer = ProgramResults(lazy_loading=False)
+    twin = ProgramResults(lazy_loading=False)
+    for i, history in histories.items():
+        writer.add_shot(i, history)
+        twin.add_shot(i, History(history))
+    writer.checkpoint(checkpoint_dir=directory, worker_id=worker_id)
+    return ProgramResults(checkpoint_dir=directory), twin
+
+
+class TestSelectiveCollect:
+    @staticmethod
+    def _counting_full_reads():
+        """Patch `_Opened.read` (the full decode) to count its calls."""
+        return unittest.mock.patch.object(
+            checkpointstore_module._Opened,
+            "read",
+            autospec=True,
+            side_effect=checkpointstore_module._Opened.read,
+        )
+
+    @pytest.mark.parametrize("arrays", [True, False])
+    @pytest.mark.parametrize("worker_id", [None, "w0"])
+    def test_matches_full_decode(self, tmp_path, arrays, worker_id):
+        """A selective collect equals the in-memory one across selections,
+        for an array-holding and an array-free history, canonical and
+        payload files."""
+        histories = {i: _selective_history(i, arrays) for i in range(4)}
+        reader, twin = _selective_reader(tmp_path, histories, worker_id)
+        selections = [
+            dict(key="shot", indices=-1),
+            dict(key="shot", indices=[-1, 0]),
+            dict(key="shot", indices=slice(1, 3)),
+            dict(key="sometimes", indices="all", strip_none_entries=True),
+            dict(key="log", indices=0),
+            dict(key="j", indices="all", frame_filter={"tag": "b"}),
+            dict(key="shot", indices=0, frame_filter={"log": "N/A"}),
+            dict(key="sometimes", indices="all"),
+            dict(key="shot", indices="all"),
+        ]
+        if arrays:
+            selections.append(dict(key="arr", indices=0))
+        for selection in selections:
+            assert _same(
+                reader.collect_shot_data(**selection),
+                twin.collect_shot_data(**selection),
+            ), selection
+        for results in (reader, twin):
+            with pytest.raises(IndexError):
+                results.collect_shot_data("shot", 7)
+
+    def test_copy_and_reference_entries(self, tmp_path):
+        """Entries stored as `copy` stubs (in and out of key order) and as a
+        `reference` collect as the in-memory shots do, without decoding a
+        `History`."""
+        writer = ProgramResults(lazy_loading=False)
+        twin = ProgramResults(lazy_loading=False)
+        shared = _selective_history(0, False)
+        for i in (1, 2, 0):
+            writer.add_shot(i, _selective_history(i % 2, False))
+            twin.add_shot(i, _selective_history(i % 2, False))
+            writer.checkpoint(checkpoint_dir=tmp_path)
+        # The same object under two keys encodes as a `reference`.
+        writer.shot_histories[3] = writer.shot_histories[4] = shared
+        twin.shot_histories[3] = twin.shot_histories[4] = shared
+        writer._unwritten_shots.update({3, 4})
+        writer.checkpoint(checkpoint_dir=tmp_path)
+
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        real_decode = Serializable.decode
+        decoded = []
+
+        def spy(*args, **kwargs):
+            value = real_decode(*args, **kwargs)
+            decoded.append(value)
+            return value
+
+        with unittest.mock.patch.object(
+            Serializable, "decode", side_effect=spy
+        ):
+            data = reader.collect_shot_data("shot", [0, 1])
+        assert data == twin.collect_shot_data("shot", [0, 1])
+        assert not any(isinstance(v, History) for v in decoded)
+
+    def test_falls_back_on_references_and_unknown_layouts(self, tmp_path):
+        """Selecting a cached object (a frame's `"state"`) and a History
+        node of an older version both give the full-decode answer."""
+        writer = ProgramResults(lazy_loading=False)
+        twin = ProgramResults(lazy_loading=False)
+        for i in range(3):
+            for results in (writer, twin):
+                history = History()
+                history.append(Frame({"state": _Marker(i % 2), "shot": i}))
+                results.add_shot(i, history)
+        writer.checkpoint(checkpoint_dir=tmp_path)
+
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        with self._counting_full_reads() as reads:
+            assert reader.collect_shot_data(
+                "state", 0
+            ) == twin.collect_shot_data("state", 0)
+        assert reads.call_count > 0
+
+        h5_path = tmp_path / "results.h5"
+        with h5py.File(h5_path, "r+") as f:
+
+            def lower_version(name, obj):
+                if obj.attrs.get("class") == "History":
+                    obj.attrs["version"] = 1
+
+            f.visititems(lower_version)
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        with self._counting_full_reads() as reads:
+            assert reader.collect_shot_data("shot", 0) == [0, 1, 2]
+        assert reads.call_count == 3
+
+    def test_leaves_decode_cache_untouched(self, tmp_path):
+        """A selective collect of frame 0's `"state"` (a cache source in
+        every shot) takes the selective path and leaves the store's
+        canonical decode cache as it was."""
+        writer = ProgramResults(lazy_loading=False)
+        for i in range(3):
+            history = History()
+            history.append(Frame({"state": _Marker(i)}))
+            writer.add_shot(i, history)
+        writer.checkpoint(checkpoint_dir=tmp_path)
+
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        store = reader._shot_store()
+        store.get(1)  # builds the canonical decode cache
+        before = set(store._canonical_decode_cache)
+        with unittest.mock.patch.object(
+            checkpointstore_module._Opened,
+            "read",
+            side_effect=AssertionError("fell back to a full decode"),
+        ):
+            data = reader.collect_shot_data("state", 0)
+        assert [m.value for m in data] == [0, 1, 2]
+        assert set(store._canonical_decode_cache) == before
+
+
+def _same(a, b) -> bool:
+    """Equality that also holds for numpy values."""
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+        return bool(np.array_equal(a, b))
+    return a == b

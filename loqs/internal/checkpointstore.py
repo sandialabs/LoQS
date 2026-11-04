@@ -36,6 +36,12 @@ import h5py
 import numpy as np
 
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder, _get_version
+from loqs.internal.historyread import (
+    Unnavigable,
+    _Overlay,
+    _unwrap,
+    lazy_history,
+)
 from loqs.internal.serializable import ResolvingDecodeCache, Serializable
 from loqs.internal.streamingmerge import (
     _decode_group_entry,
@@ -604,6 +610,23 @@ class _ReadableStore(BaseCheckpointStore):
         strict: bool = True,
     ) -> Iterator[tuple[int, Any]]:
         streamed = self._streamed(attr)
+        return self._iter_entries(
+            streamed,
+            keys,
+            strict,
+            lambda opened, pos, transient: opened.read(
+                streamed, pos, transient, by_type=True
+            ),
+        )
+
+    def _iter_entries(
+        self,
+        streamed: StreamedAttr,
+        keys: Iterable[int] | None,
+        strict: bool,
+        read: Callable[[_Opened, int, list], Any],
+    ) -> Iterator[tuple[int, Any]]:
+        """Yield `(key, read(opened, pos, transient))` in ascending key order."""
         index = self._key_index(streamed, strict)
         if keys is None:
             wanted = sorted(index)
@@ -625,9 +648,7 @@ class _ReadableStore(BaseCheckpointStore):
                             opened = stack.enter_context(self._opened(source))
                             current = source
                         assert opened is not None
-                        value = opened.read(
-                            streamed, pos, transient, by_type=True
-                        )
+                        value = read(opened, pos, transient)
                     except CheckpointReadError:
                         if strict:
                             raise
@@ -641,6 +662,99 @@ class _ReadableStore(BaseCheckpointStore):
                     yield key, value
         finally:
             _drop_transient(transient)
+
+    def iter_collected(  # noqa: C901
+        self,
+        collect: Callable[[Any], Any],
+        *,
+        keys: Iterable[int] | None = None,
+        strict: bool = True,
+    ) -> Iterator[tuple[int, Any]]:
+        """Yield `(key, collect(history))` per primary entry, ascending.
+
+        `collect` only touches what `History.collect_data` does, so each
+        entry is read selectively (see `historyread`); an entry the read
+        can't navigate is fully decoded instead. `collect`'s own errors
+        reach the caller unchanged.
+        """
+        streamed = self.layout.primary
+        located: dict = {}
+
+        def locate_for(opened: _Opened, values_group: h5py.Group):
+            def locate(ref: int):
+                if "by_id" not in located or located["opened"] is not opened:
+                    located.clear()
+                    located["opened"] = opened
+                    by_id: dict[int, int] = {}
+                    aliases: dict[int, int] = {}
+                    for p in range(opened.count(streamed)):
+                        attrs = _unwrap(values_group[str(p)]).attrs
+                        if attrs.get("cache_type", "source") == "source":
+                            if "cache_id" in attrs:
+                                by_id[int(attrs["cache_id"])] = p
+                        elif attrs.get("cache_type") == "copy":
+                            aliases[int(attrs["source_cache_id"])] = int(
+                                attrs["reference_cache_id"]
+                            )
+                    located["by_id"] = by_id
+                    located["aliases"] = aliases
+                while ref in located["aliases"]:
+                    ref = located["aliases"][ref]
+                if ref not in located["by_id"]:
+                    raise Unnavigable(f"history {ref} is not an entry")
+                return values_group[str(located["by_id"][ref])]
+
+            return locate
+
+        def read(opened: _Opened, pos: int, transient: list):
+            sides = opened.sides(streamed)
+            assert sides is not None
+            values_group = sides[1]
+
+            def full() -> Any:
+                try:
+                    return opened.read(streamed, pos, transient, by_type=True)
+                except CheckpointReadError:
+                    raise
+                except Exception as exc:
+                    raise CheckpointReadError(
+                        opened.path, f"{type(exc).__name__}: {exc}"
+                    ) from exc
+
+            try:
+                if values_group.attrs.get("storage_format", "groups") != (
+                    "groups"
+                ):
+                    raise Unnavigable("dataset-format values")
+                return (
+                    lazy_history(
+                        values_group[str(pos)],
+                        _Overlay(opened.cache),
+                        locate_for(opened, values_group),
+                    ),
+                    full,
+                )
+            except Unnavigable:
+                return (
+                    opened.read(streamed, pos, transient, by_type=True),
+                    None,
+                )
+
+        for key, (history, full) in self._iter_entries(
+            streamed, keys, strict, read
+        ):
+            try:
+                value = collect(history)
+            except Unnavigable:
+                assert full is not None
+                try:
+                    decoded = full()
+                except CheckpointReadError:
+                    if strict:
+                        raise
+                    continue
+                value = collect(decoded)
+            yield key, value
 
 
 def _working_copy(encode_cache: dict | None) -> dict:

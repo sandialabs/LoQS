@@ -378,6 +378,69 @@ class TestSerializableNestedData:
         # obj4 is obj3
         assert decoded["obj4"] is decoded["obj3"]
 
+    def test_copy_cached_reference_shares_only_immutable_parts(
+        self, format_param, make_temp_path
+    ):
+        """Decoded "copy" entries of layouts and patches share no mutable
+        state with their source."""
+        from loqs.core import QECCode
+        from loqs.core.recordables.patchlayout import (
+            PatchLayout,
+            PatchRelation,
+        )
+
+        code = QECCode(
+            instructions={},
+            template_qubits=["q0"],
+            template_data_qubits=["q0"],
+        )
+
+        def make_layout():
+            layout = PatchLayout(
+                {
+                    "L0": code.create_patch(["Q0"]),
+                    "L1": code.create_patch(["Q1"]),
+                }
+            )
+            layout["L0"].data["x"] = [1]
+            layout.set_relation(
+                PatchRelation({"a": "L0", "b": "L1"}, {"m": [1]})
+            )
+            return layout
+
+        frame = Frame(
+            {
+                "l1": make_layout(),
+                "l2": make_layout(),
+                "p1": code.create_patch(["Q2"]),
+                "p2": code.create_patch(["Q2"]),
+            }
+        )
+        frame["p1"].data["y"] = [1]
+        frame["p2"].data["y"] = [1]
+
+        with make_temp_path(suffix=f".{format_param}") as temp_file:
+            frame.write(temp_file)
+            decoded = Frame.read(temp_file)
+
+        l1, l2 = decoded["l1"], decoded["l2"]
+        assert l1 is not l2
+        assert l1.patches is not l2.patches
+        assert l1.relations is not l2.relations
+        for label in ("L0", "L1"):
+            assert l1[label] is not l2[label]
+            assert l1[label].data is not l2[label].data
+        l2["L0"].data["x"].append(2)
+        assert l1["L0"].data["x"] == [1]
+        l2.get_relation("L0", "L1").data["m"].append(2)
+        assert l1.get_relation("L0", "L1").data["m"] == [1]
+
+        p1, p2 = decoded["p1"], decoded["p2"]
+        assert p1 is not p2
+        assert p1.data is not p2.data
+        p2.data["y"].append(2)
+        assert p1.data["y"] == [1]
+
     def test_copy_reconstruction_does_not_alias(
         self, format_param, make_temp_path
     ):

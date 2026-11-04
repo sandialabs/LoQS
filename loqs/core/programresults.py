@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+import heapq
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager
+from operator import itemgetter
 from typing import Any, ClassVar
 from pathlib import Path
 import h5py
@@ -38,10 +40,10 @@ from typing import TYPE_CHECKING, Iterable
 
 from loqs.internal.checkpointstore import (
     SHOT_LAYOUT,
-    BaseCheckpointStore,
     BatchReceipt,
     CheckpointStore,
     _NestedStore,
+    _ReadableStore,
 )
 from loqs.internal.streamingmerge import _normalize_decoded_int_keyed_dict
 
@@ -437,44 +439,34 @@ class ProgramResults(Displayable):
         list
             List of [](api:History.collect_data) outputs per shot
         """
-        data = [
-            h.collect_data(
+
+        def collect(history: History) -> Any:
+            return history.collect_data(
                 key,
                 indices,
                 strip_none_entries=strip_none_entries,
                 frame_filter=frame_filter,
             )
-            for h in self._iter_histories_in_order()
-        ]
+
+        # In-memory shots and stored ones (read selectively, not in memory)
+        # are each ascending by shot index, and merge on it.
+        pairs: Iterator[tuple[int, Any]] = (
+            (i, collect(self.shot_histories[i]))
+            for i in sorted(self.shot_histories)
+        )
+        reader = self._shot_reader()
+        if reader is not None:
+            stored = reader.iter_collected(
+                collect,
+                keys=[
+                    k for k in reader.keys() if k not in self.shot_histories
+                ],
+            )
+            pairs = heapq.merge(pairs, stored, key=itemgetter(0))
+        data = [value for _, value in pairs]
         return Counter(data) if return_counter else data
 
-    def _iter_histories_in_order(self) -> Iterator[History]:
-        """Yield every available shot's history in ascending shot order.
-
-        The reader (a nested view or the checkpoint directory's store) gives
-        the stored shots not in memory in one pass, one decoded value at a
-        time; without one only the shots in memory are yielded.
-        """
-        in_memory = sorted(self.shot_histories)
-        reader = self._shot_reader()
-        if reader is None:
-            yield from (self.shot_histories[i] for i in in_memory)
-            return
-
-        stored = reader.iter_items(
-            keys=[k for k in reader.keys() if k not in self.shot_histories]
-        )
-        pending = next(stored, None)
-        for idx in in_memory:
-            while pending is not None and pending[0] < idx:
-                yield pending[1]
-                pending = next(stored, None)
-            yield self.shot_histories[idx]
-        while pending is not None:
-            yield pending[1]
-            pending = next(stored, None)
-
-    def _shot_reader(self) -> BaseCheckpointStore | None:
+    def _shot_reader(self) -> _ReadableStore | None:
         """The store shots are read from: the nested view of a lazy proxy,
         else the shot store when a checkpoint directory is set, else
         `None`."""
