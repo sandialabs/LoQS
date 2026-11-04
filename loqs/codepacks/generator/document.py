@@ -562,7 +562,7 @@ def write_document(
     for old in folder.glob("*.svg"):
         old.unlink()
     for rel, (text, labels) in figures.items():
-        (root / rel).write_text(figure_svg(text, labels))
+        (root / rel).write_text(figure_svg(text, labels), encoding="utf-8")
     path = root / f"{cls.spec.name}.md"
-    path.write_text(page)
+    path.write_text(page, encoding="utf-8")
     return path

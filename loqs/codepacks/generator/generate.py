@@ -387,5 +387,5 @@ def write_artifact(cls: type[GeneratedCodepack]) -> Path:
     prefix = "GENERATED: dict[str, Any] = "
     body += prefix + _layout(generated, 0, len(prefix)) + "\n"
     path = folder / f"{name}.py"
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     return path

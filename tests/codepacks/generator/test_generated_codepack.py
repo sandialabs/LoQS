@@ -100,11 +100,11 @@ def test_shipped_artifacts_current():
         return
     from loqs.codepacks.generator.document import document
 
-    index = (docs / "codepacks" / "index.md").read_text()
+    index = (docs / "codepacks" / "index.md").read_text(encoding="utf-8")
     for cls in shipped:
         page, figures = document(cls, generate(cls.spec))
         committed = docs / "codepacks" / f"{cls.spec.name}.md"
-        assert committed.read_text() == page, cls
+        assert committed.read_text(encoding="utf-8") == page, cls
         assert all((docs / "codepacks" / p).exists() for p in figures), cls
         paper = re.findall(rf"\]\(({cls.spec.name}/paper/[^)]+)\)", page)
         assert all((docs / "codepacks" / p).exists() for p in paper), cls

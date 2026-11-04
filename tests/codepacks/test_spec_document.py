@@ -68,7 +68,9 @@ def test_spec_document(steane_page):
         assert f"({spec.name}/paper/{fig})" in page, fig
 
     # Paper cites name entries of the bibliography
-    bib = (Path(loqs.__file__).parents[1] / "docs/references.bib").read_text()
+    bib = (Path(loqs.__file__).parents[1] / "docs/references.bib").read_text(
+        encoding="utf-8"
+    )
     keys = set(re.findall(r"\[@([^\]]+)\]", page))
     assert keys
     for key in keys:
