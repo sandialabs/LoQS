@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 import h5py
 
-from loqs.core import Frame
+from loqs.core import Frame, History
 from loqs.core.instructions import Instruction
 from loqs.internal.serializable import (
     Serializable,
@@ -1035,6 +1035,10 @@ class _FreshAttrs(MockSerializable):
         return obj
 
 
+class _EqualAttrsSubclass(MockSerializable):
+    """A class whose instances have the same attributes as its parent's."""
+
+
 class TestEncodeHashing:
     """The per-encode hash memo and the raw-bytes array hash."""
 
@@ -1114,3 +1118,49 @@ class TestEncodeHashing:
 
         assert count(20, 8) < 2.5 * count(10, 8)
         assert count(10, 16) == count(10, 8)
+
+    @pytest.mark.parametrize(
+        "case", ["ints", "mixed", "strs", "seqs", "class"]
+    )
+    def test_colliding_values_keep_their_own_content(
+        self, case, format_param, make_temp_path
+    ):
+        if case == "class":
+            objs = [
+                MockSerializable(name="x", value=1),
+                _EqualAttrsSubclass(name="x", value=1),
+            ]
+            frame = Frame({str(i): o for i, o in enumerate(objs)})
+            with make_temp_path(suffix=f".{format_param}") as path:
+                frame.write(path)
+                decoded = Frame.read(path)
+            assert [type(decoded[str(i)]) for i in range(2)] == [
+                MockSerializable,
+                _EqualAttrsSubclass,
+            ]
+            return
+
+        values = {
+            "ints": (-1, -2),
+            "mixed": (1, True, 1.0, "1"),
+            "strs": (["as", "c"], ["a", "sc"]),
+            "seqs": (["x", 1], ("x", 1)),
+        }[case]
+        frame = Frame(
+            {str(i): History([Frame({"v": v})]) for i, v in enumerate(values)}
+        )
+        with make_temp_path(suffix=f".{format_param}") as path:
+            frame.write(path)
+            decoded = Frame.read(path)
+        for i, v in enumerate(values):
+            out = decoded[str(i)][0]["v"]
+            assert out == v and type(out) is type(v)
+
+    def test_cached_encode_ignoring_no_serialize_flags_raises(self):
+        with pytest.raises(ValueError):
+            Serializable.encode(
+                MockSerializable(name="x", value=1),
+                format="json",
+                encode_cache={},
+                ignore_no_serialize_flags=True,
+            )
