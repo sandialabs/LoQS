@@ -28,7 +28,10 @@ from loqs.internal.serializable import (
 from loqs.types import NDArray
 from loqs.internal import Serializable, SERIALIZATION_VERSION
 from loqs.internal.encoder import BaseEncoder
-from loqs.internal.encoder.baseencoder import copy_cached_reference
+from loqs.internal.encoder.baseencoder import (
+    NUMPY_SCALAR_TYPES,
+    copy_cached_reference,
+)
 from loqs.internal.versioning import VersionedDecoder
 
 # Per-shape version dispatch (see VersionedDecoder), each validating its
@@ -1384,6 +1387,8 @@ class HDF5Encoder(BaseEncoder):
 
         Serializes primitive Python types (int, float, bool, complex, None, str, bytes)
         to HDF5 format. Handles type preservation and special cases like None values.
+        Numpy scalars keep their dtype (the attribute stores it), and `complex`
+        values are tagged with `cast_to`.
 
         Parameters
         ----------
@@ -1402,7 +1407,11 @@ class HDF5Encoder(BaseEncoder):
 
         h5_group.attrs["encode_type"] = "primitive"
 
-        if isinstance(to_encode, bool):
+        if isinstance(to_encode, NUMPY_SCALAR_TYPES):
+            # No `cast_to`: the attribute keeps the numpy dtype. Checked
+            # first, since `np.float64` subclasses `float`.
+            pass
+        elif isinstance(to_encode, bool):
             # Checked before `int`, since `bool` is a subclass of `int`.
             h5_group.attrs["cast_to"] = "bool"
         elif isinstance(to_encode, int):

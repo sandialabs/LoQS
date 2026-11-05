@@ -1132,6 +1132,32 @@ class TestParentProgramFileWriting:
         loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
         assert loaded.shot_histories[0][0]["v"] == -2
 
+    def test_object_in_two_batches_reads_back_as_two_objects(self, tmp_path):
+        pytest.importorskip("quantumsim")
+        pytest.importorskip("stim")
+        from loqs.core.recordables.patchlayout import PatchRelation
+
+        program = _trivial_quantum_program("Object in two batches")
+        results = ProgramResults(
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=tmp_path,
+        )
+        rel = PatchRelation({"a": "L0"}, data={"x": 1})
+        for i in range(2):
+            results.add_shot(i, History([Frame({"rel": rel, "i": i})]))
+            results.checkpoint(tmp_path)
+        cache = results._checkpoint_encode_cache
+        assert not [e for v in cache.values() for e in v if e[0] is not None]
+
+        loaded = ProgramResults()
+        loaded.load_checkpoint(checkpoint_dir=tmp_path)
+        rel0 = loaded.get_shot_history(0)[0]["rel"]
+        rel1 = loaded.get_shot_history(1)[0]["rel"]
+        assert rel0.patch_labels == rel1.patch_labels
+        assert rel0.data == rel1.data
+        assert rel0 is not rel1
+
     def test_seeding_over_a_corrupt_parent_program_names_the_file(
         self, tmp_path
     ):

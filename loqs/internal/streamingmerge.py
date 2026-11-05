@@ -180,7 +180,9 @@ def merge_dict_attr(
     For dataset-format sides (homogeneous native scalar types), appending
     reuses `HDF5Encoder._encode_iterable_dataset` directly. If a new entry's
     key or value doesn't match the dataset's established native type, a
-    `TypeError` is raised.
+    `TypeError` is raised. A numeric or bool dataset side takes only values
+    of exactly `int`, `float` or `bool`, so a numpy scalar or a `bool` on an
+    `int` side is refused.
 
     Each entry is all or nothing: an entry that raises, on either side and
     for any reason, leaves nothing behind (neither side, nor its encode-cache
@@ -603,19 +605,19 @@ def _validate_item_for_dataset(
     dtype_kind = dtype.kind
 
     if dtype_kind in ("i", "u"):  # integer types (signed, unsigned)
-        if not isinstance(item, (int, np.integer)):
+        if item_type is not int:
             raise TypeError(
                 f"Cannot append {item_type.__name__} to dataset "
                 f"of integer dtype {dtype}"
             )
     elif dtype_kind == "f":  # floating point types
-        if not isinstance(item, (float, np.floating)):
+        if item_type is not float:
             raise TypeError(
                 f"Cannot append {item_type.__name__} to dataset "
                 f"of float dtype {dtype}"
             )
     elif dtype_kind == "b":  # boolean types
-        if not isinstance(item, (bool, np.bool_)):
+        if item_type is not bool:
             raise TypeError(
                 f"Cannot append {item_type.__name__} to dataset "
                 f"of bool dtype {dtype}"

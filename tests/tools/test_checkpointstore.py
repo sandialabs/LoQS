@@ -1608,3 +1608,36 @@ def test_failed_payload_decode_keeps_the_shared_objects(tmp_path, monkeypatch):
     items = list(reader.iter_items(strict=False))
     assert [k for k, _ in items] == [1]
     assert _digest(_program_ref(items[0][1])) == _digest(program)
+
+
+def test_consolidate_carries_no_object_ids_between_payloads(
+    tmp_path, monkeypatch
+):
+    from loqs.core.recordables.patchlayout import PatchRelation
+
+    program = build_tagged_program()
+    results = ProgramResults(
+        parent_program=program,
+        checkpoint_enabled=True,
+        checkpoint_dir=tmp_path,
+    )
+    for i in range(2):
+        rel = PatchRelation({"a": "L0"}, data={"x": i})
+        results.add_shot(i, History([Frame({"rel": rel, "i": i})]))
+        results.checkpoint(tmp_path, worker_id="w0")
+
+    seen: list[list[int]] = []
+    real = CheckpointStore._merge_payload
+
+    def spy(self, writer, path, work, shared):
+        seen.append(
+            [e[0] for v in work.values() for e in v if e[0] is not None]
+        )
+        return real(self, writer, path, work, shared)
+
+    monkeypatch.setattr(CheckpointStore, "_merge_payload", spy)
+    cache = results._checkpoint_encode_cache
+    results.consolidate_checkpoints(checkpoint_dir=tmp_path)
+
+    assert seen == [[], []]
+    assert not [e for v in cache.values() for e in v if e[0] is not None]

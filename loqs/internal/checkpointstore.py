@@ -570,15 +570,19 @@ class _ReadableStore(BaseCheckpointStore):
 
 
 def _working_copy(encode_cache: dict | None) -> dict:
-    """A copy of an encode cache that encoding can't change in place.
+    """A copy of an encode cache that encoding can't change in place, and
+    that carries no object IDs.
 
-    Encoding appends to the per-hash lists, so the lists are copied too.
+    An object ID only names its object while that object lives. A cache
+    that outlives the objects would take a new equal-content object at a
+    freed address for the old one and write a `reference` to it. With no
+    IDs left only a hash's first entry is ever read, so each hash keeps
+    just its source's entry and the copies' entries go too.
     """
     if encode_cache is None:
         return {}
     return {
-        key: list(value) if isinstance(value, list) else value
-        for key, value in encode_cache.items()
+        key: [(None, entries[0][1])] for key, entries in encode_cache.items()
     }
 
 
@@ -1348,7 +1352,7 @@ class CheckpointStore(_ReadableStore):
                     added[streamed.name] = [key for key, _ in pairs]
             writer.commit(added)
         if encode_cache is not None:
-            encode_cache.update(work)
+            encode_cache.update(_working_copy(work))
 
     def consolidate(
         self, *, encode_cache: dict | None = None
@@ -1378,6 +1382,8 @@ class CheckpointStore(_ReadableStore):
                     appended.update(
                         self._merge_payload(writer, path, work, shared)
                     )
+                    # No payload's object IDs reach the next payload.
+                    work = _working_copy(work)
             if encode_cache is not None:
                 encode_cache.update(work)
         self._remove_leftovers(payloads)

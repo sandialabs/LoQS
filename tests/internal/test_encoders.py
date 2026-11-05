@@ -1,5 +1,7 @@
 """Tests for the JSONEncoder and HDF5Encoder classes."""
 
+import json
+
 import numpy as np
 import scipy.sparse as sps
 import pytest
@@ -12,6 +14,8 @@ from loqs.internal.encoder.hdf5encoder import (
     _GZIP_MIN_BYTES,
     _encode_collapsed_children,
 )
+from loqs.core.frame import Frame
+from loqs.core.history import History
 from loqs.internal.serializable import Serializable
 from loqs.types import NDArray
 
@@ -98,12 +102,27 @@ class TestEncoderParameterized:
         assert decoded is MockSerializable
 
     @pytest.mark.parametrize(
-        "value", [42, 3.14, "hello", True, None, "Café & naïve", "🎉🎊🎈"]
+        "value",
+        [
+            42,
+            3.14,
+            "hello",
+            True,
+            None,
+            "Café & naïve",
+            "🎉🎊🎈",
+            pytest.param(np.int32(-3), id="int32"),
+            pytest.param(np.float32(1.25), id="float32"),
+            pytest.param(np.float64(1.5), id="float64"),
+            pytest.param(np.bool_(True), id="bool_"),
+            pytest.param(np.complex128(1 + 2j), id="complex128"),
+            pytest.param(1 + 2j, id="py_complex"),
+        ],
     )
     def test_primitive_round_trip(self, encoder_format, make_temp_path, value):
         if encoder_format == "json":
             decoded = JSONEncoder.decode_primitive(
-                JSONEncoder.encode_primitive(value)  # type: ignore
+                json.loads(json.dumps(JSONEncoder.encode_primitive(value)))  # type: ignore
             )
         else:
             with make_temp_path(suffix=".h5") as temp_file:
@@ -114,9 +133,47 @@ class TestEncoderParameterized:
                 with h5py.File(temp_file, "r") as h5_file:
                     decoded = HDF5Encoder.decode_primitive(h5_file["root"])  # type: ignore
 
+        assert type(decoded) is type(value)
         assert decoded == value
-        if value is True:
-            assert type(decoded) is bool
+
+    def test_scalar_types_round_trip_in_hdf5_frames(self, make_temp_path):
+        frame = Frame(
+            {
+                "values": [
+                    np.int32(-3),
+                    np.float32(1.25),
+                    np.complex128(1 + 2j),
+                    1 + 2j,
+                ],
+                "by_name": {"b": np.bool_(True)},
+                "py": [3, 1.5, True],
+            }
+        )
+        with make_temp_path(suffix=".h5") as temp_file:
+            History([frame]).write(temp_file)
+            data = History.read(temp_file)[0]
+
+        want = [np.int32(-3), np.float32(1.25), np.complex128(1 + 2j), 1 + 2j]
+        assert [type(v) for v in data["values"]] == [type(w) for w in want]
+        assert list(data["values"]) == want
+        assert type(data["by_name"]["b"]) is np.bool_
+        assert data["by_name"]["b"] == np.bool_(True)
+        assert [type(v) for v in data["py"]] == [int, float, bool]
+        assert list(data["py"]) == [3, 1.5, True]
+
+    def test_json_refuses_what_it_cannot_store(self):
+        with pytest.raises(TypeError):
+            Serializable.encode({np.float64(1.5): 1}, format="json")
+        with pytest.raises(ValueError):
+            JSONEncoder.encode_primitive(np.timedelta64(5, "ns"))
+
+    @pytest.mark.skipif(
+        np.finfo(np.longdouble).bits <= 64,
+        reason="longdouble is stored exactly as a float64 here",
+    )
+    def test_json_refuses_longdouble(self):
+        with pytest.raises(ValueError):
+            JSONEncoder.encode_primitive(np.longdouble(1) / 3)
 
 
 class TestComprehensiveArrayEncoding:

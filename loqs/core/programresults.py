@@ -241,7 +241,9 @@ class ProgramResults(Displayable):
         self._checkpoint_encode_cache: dict = {}
         """Persistent `Serializable.encode` cache shared across every `checkpoint()`
         call for this object's lifetime, so an object reused across shots is written
-        once and cheaply referenced afterward, instead of re-expanded every time."""
+        once and cheaply referenced afterward, instead of re-expanded every time.
+        Its entries carry no object IDs, so a live object reused across batches is
+        written as a `copy` per batch, and read back as one copy per shot."""
 
         self._shot_store_cache: CheckpointStore | None = None
         """The store `_shot_store()` hands out. Not serialized."""
