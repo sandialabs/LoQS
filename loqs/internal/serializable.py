@@ -280,6 +280,10 @@ class ResolvingDecodeCache(dict):
     _fallback : Callable[[], Mapping[int, Any]] | None
         A loader of objects whose sources live outside `_root`, consulted
         on a miss before `_root` is scanned.
+    _locate : Callable[[int], h5py.Group | None] | None
+        Maps a cache ID to an HDF5 subtree of `_root` that should hold its
+        source, or None. Searched before `_root`; on a miss `_root` is
+        scanned as usual. Mutable like `_root`; default None.
     """
 
     def __init__(self, root, format, fallback=None):
@@ -301,6 +305,7 @@ class ResolvingDecodeCache(dict):
         self._root = root
         self._format = format
         self._fallback = fallback
+        self._locate = None
 
     def resolve(self, cache_id):
         """Return the cached object, or locate and decode its source if missing.
@@ -330,8 +335,16 @@ class ResolvingDecodeCache(dict):
                 return self[cache_id]
 
         # Search for the source node
+        source_node = None
         if self._format == "hdf5":
-            source_node = self._find_source_node_hdf5(self._root, cache_id)
+            if self._locate is not None:
+                subtree = self._locate(cache_id)
+                if subtree is not None:
+                    source_node = self._find_source_node_hdf5(
+                        subtree, cache_id
+                    )
+            if source_node is None:
+                source_node = self._find_source_node_hdf5(self._root, cache_id)
         elif self._format == "json":
             source_node = self._find_source_node_json(self._root, cache_id)
         else:
@@ -414,12 +427,20 @@ class ResolvingDecodeCache(dict):
         `cache_type="source"` node (`cache_id`), or a `cache_type="copy"`
         node (`source_cache_id`, the new id the copy itself is resolvable
         under)."""
+        resolvable = ResolvingDecodeCache._resolvable_id(attrs)
+        return resolvable is not None and resolvable == target_cache_id
+
+    @staticmethod
+    def _resolvable_id(attrs):
+        """The cache ID a node can be resolved as, from HDF5 attrs or a
+        JSON dict: `cache_id` for a `source`, `source_cache_id` for a
+        `copy`, else None."""
         cache_type = attrs.get("cache_type")
         if cache_type == "source":
-            return attrs.get("cache_id") == target_cache_id
+            return attrs.get("cache_id")
         if cache_type == "copy":
-            return attrs.get("source_cache_id") == target_cache_id
-        return False
+            return attrs.get("source_cache_id")
+        return None
 
     def _find_source_in_collapsed_blob(self, blob_dataset, target_cache_id):
         """Search a collapsed blob for a cache_type="source" node.

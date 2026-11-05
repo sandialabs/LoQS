@@ -1646,6 +1646,24 @@ class TestSelectiveCollect:
         assert data == twin.collect_shot_data("shot", [0, 1])
         assert not any(isinstance(v, History) for v in decoded)
 
+    def test_stub_to_a_nested_history(self, tmp_path):
+        """A shot stored as a stub of a History that sits inside an earlier
+        entry, not as an entry itself, collects as the in-memory shot."""
+        writer = ProgramResults(lazy_loading=False)
+        twin = ProgramResults(lazy_loading=False)
+        inner = _selective_history(7, False)
+        for results in (writer, twin):
+            outer = _selective_history(0, False)
+            outer.append(Frame({"inner": inner}))
+            results.add_shot(0, outer)
+            results.add_shot(1, inner)
+        writer.checkpoint(checkpoint_dir=tmp_path)
+
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        assert reader.collect_shot_data("shot", 0) == twin.collect_shot_data(
+            "shot", 0
+        )
+
     def test_falls_back_on_references_and_unknown_layouts(self, tmp_path):
         """Selecting a cached object (a frame's `"state"`) and a History
         node of an older version both give the full-decode answer."""

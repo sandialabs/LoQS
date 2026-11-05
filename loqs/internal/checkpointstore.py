@@ -28,7 +28,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ContextManager
 
@@ -387,6 +387,60 @@ def _dataset_value(values_group: h5py.Group, pos: int) -> Any:
     return value
 
 
+def _minted_id(entry: Any) -> int | None:
+    """The cache ID `entry` (a values-group member) resolves as, or None
+    for a `reference` stub, a node without cache attrs, or an `Unnavigable`
+    wrapper."""
+    try:
+        resolvable = ResolvingDecodeCache._resolvable_id(_unwrap(entry).attrs)
+    except Unnavigable:
+        return None
+    return None if resolvable is None else int(resolvable)
+
+
+def _entry_holding(
+    values_group: h5py.Group, n: int, cache_id: int, memo: dict
+) -> int | None:
+    """The largest position in `0..n-1` whose minted ID is at most
+    `cache_id`, or None; a missing or non-minting position is never returned.
+
+    Cache IDs are minted in pre-order from one rising counter (carried
+    across appends), so entry `p`'s subtree holds no ID outside
+    `[minted(p), minted(p+1))`. The converse doesn't hold: an ID in that
+    range may sit between entries, in another attr's entry, or in a
+    `keep_entries` rewrite's snapshot, so the caller falls back to a wider
+    scan when the entry doesn't hold it. `memo` maps position to minted ID
+    so each position's attrs are read at most once.
+    """
+
+    def minted(p: int) -> int | None:
+        if p not in memo:
+            name = str(p)
+            memo[p] = (
+                _minted_id(values_group[name])
+                if name in values_group
+                else None
+            )
+        return memo[p]
+
+    best = None
+    lo, hi = 0, n - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        q = mid
+        while q >= lo and minted(q) is None:
+            q -= 1
+        found = minted(q) if q >= lo else None
+        if found is None:
+            lo = mid + 1
+        elif found <= cache_id:
+            best = q
+            lo = mid + 1
+        else:
+            hi = q - 1
+    return best
+
+
 @dataclass
 class _Opened:
     """An open store file, ready to read.
@@ -401,6 +455,7 @@ class _Opened:
     path: str
     canonical_names: bool
     require_primary: bool
+    minted: dict = field(default_factory=dict)
 
     def _name(self, streamed: StreamedAttr) -> str:
         return streamed.canonical if self.canonical_names else streamed.name
@@ -489,6 +544,18 @@ class _Opened:
         if values_group.attrs.get("storage_format", "groups") == "dataset":
             return _dataset_value(values_group, pos)
         before = len(self.cache)
+        memo = self.minted.setdefault(values_group.name, {})
+        count = self.count(streamed)
+
+        def locate(cache_id: int):
+            p = _entry_holding(values_group, count, cache_id, memo)
+            return None if p is None else values_group[str(p)]
+
+        # About half of a cold get is now re-parsing the found entry's
+        # `$collapsed` blob; keeping the last few parsed for one read halved
+        # it for about +5 MB in a measurement, and was left out on purpose.
+        previous = self.cache._locate
+        self.cache._locate = locate
         try:
             value = _decode_group_entry(values_group, pos, self.cache)
         except BaseException:
@@ -496,6 +563,8 @@ class _Opened:
             # The cache's fallback still supplies the shared objects.
             self.cache.clear()
             raise
+        finally:
+            self.cache._locate = previous
         if transient is not None:
             added = len(self.cache) - before
             for cache_id in itertools.islice(reversed(self.cache), added):
@@ -678,31 +747,20 @@ class _ReadableStore(BaseCheckpointStore):
         reach the caller unchanged.
         """
         streamed = self.layout.primary
-        located: dict = {}
 
         def locate_for(opened: _Opened, values_group: h5py.Group):
+            memo = opened.minted.setdefault(values_group.name, {})
+            count = opened.count(streamed)
+
             def locate(ref: int):
-                if "by_id" not in located or located["opened"] is not opened:
-                    located.clear()
-                    located["opened"] = opened
-                    by_id: dict[int, int] = {}
-                    aliases: dict[int, int] = {}
-                    for p in range(opened.count(streamed)):
-                        attrs = _unwrap(values_group[str(p)]).attrs
-                        if attrs.get("cache_type", "source") == "source":
-                            if "cache_id" in attrs:
-                                by_id[int(attrs["cache_id"])] = p
-                        elif attrs.get("cache_type") == "copy":
-                            aliases[int(attrs["source_cache_id"])] = int(
-                                attrs["reference_cache_id"]
-                            )
-                    located["by_id"] = by_id
-                    located["aliases"] = aliases
-                while ref in located["aliases"]:
-                    ref = located["aliases"][ref]
-                if ref not in located["by_id"]:
-                    raise Unnavigable(f"history {ref} is not an entry")
-                return values_group[str(located["by_id"][ref])]
+                while True:
+                    p = _entry_holding(values_group, count, ref, memo)
+                    if p is None or memo[p] != ref:
+                        raise Unnavigable(f"history {ref} is not an entry")
+                    attrs = _unwrap(values_group[str(p)]).attrs
+                    if attrs.get("cache_type") != "copy":
+                        return values_group[str(p)]
+                    ref = int(attrs["reference_cache_id"])
 
             return locate
 
