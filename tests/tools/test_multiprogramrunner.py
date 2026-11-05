@@ -1543,7 +1543,6 @@ def _make_synthetic_program_results(index, shot_count=5):
     from loqs.core import Frame
 
     pr = ProgramResults(
-        lazy_loading=False,
         name=f"Results_{index}",
         parent_program=f"program_{index}",  # Set parent_program for testing metadata restoration
     )
@@ -1572,11 +1571,23 @@ class TestKeepShotResults:
         # _program_results should remain empty
         assert len(runner._program_results) == 0
 
-    def test_keep_shot_results_lazy_loading(self, tmp_path):
-        """With lazy_loading=True, _program_results contains lazy handles
-        that can resolve shot content on demand, with the runner's
-        `num_shots` and `max_frame_limit` forwarded and the parent program
-        and name resolved from the nested source."""
+    @pytest.mark.parametrize(
+        "parallel, results_filename",
+        [(False, None), (False, "my_results.h5"), (True, None)],
+        ids=["serial", "serial_custom", "parallel_loky"],
+    )
+    def test_keep_shot_results_reads_back_lazily(
+        self, tmp_path, parallel, results_filename
+    ):
+        """_program_results contains lazy handles that can resolve shot
+        content on demand, with the runner's `num_shots` and
+        `max_frame_limit` forwarded and the parent program and name resolved
+        from the nested source. The custom filename catches a hard-coded
+        one; the real loky run has another process write the kept results.
+        """
+        config_kwargs = {}
+        if results_filename is not None:
+            config_kwargs["results_filename"] = results_filename
         checkpoint_dir = tmp_path / "ckpt"
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
@@ -1584,8 +1595,9 @@ class TestKeepShotResults:
                 item_checkpoint_dir=checkpoint_dir,
                 shot_checkpoint_dir=tmp_path / "shot_ckpt",
                 keep_shot_results=True,
-                lazy_loading=True,
+                **config_kwargs,
             ),
+            parallel_strategy=_loky_strategy() if parallel else None,
         )
         # Per-runner metadata forwarded to lazy ProgramResults (set as
         # attributes; the constructor doesn't accept them)
@@ -1623,53 +1635,6 @@ class TestKeepShotResults:
             assert all(frame_val == (index + 1) * 2 for frame_val in data)
             assert pr.num_shots == 5
             assert pr.max_frame_limit == 200
-            assert pr.parent_program is not None
-            assert pr.name == f"Results for Item {index}"
-
-    @pytest.mark.parametrize(
-        "parallel, results_filename",
-        [(False, "my_results.h5"), (True, None)],
-        ids=["serial_custom", "parallel_loky"],
-    )
-    def test_keep_shot_results_eager_loading(
-        self, tmp_path, parallel, results_filename
-    ):
-        """With lazy_loading=False, _program_results contains eager results
-        with correct shot content and metadata. The custom filename catches
-        a hard-coded one; the real loky run has another process write the
-        kept results, which the driver consolidates and decodes."""
-        config_kwargs = {}
-        if results_filename is not None:
-            config_kwargs["results_filename"] = results_filename
-        runner = _SimpleDoubleRunner(
-            [1, 2, 3],
-            config=CheckpointConfig(
-                item_checkpoint_dir=tmp_path / "item_ckpt",
-                shot_checkpoint_dir=tmp_path / "shot_ckpt",
-                keep_shot_results=True,
-                lazy_loading=False,
-                **config_kwargs,
-            ),
-            parallel_strategy=_loky_strategy() if parallel else None,
-        )
-        runner.num_shots = 5  # Set num_shots for real program execution
-        result = runner.run()
-        assert result == [2, 4, 6]
-
-        # Verify _program_results was populated with eager ProgramResults
-        assert len(runner._program_results) == 3
-        for index in [0, 1, 2]:
-            assert index in runner._program_results
-            # Check that it has shot_histories eagerly loaded
-            pr = runner._program_results[index]
-            assert len(pr.shot_histories) == 5
-
-            # Eager load: "counter" equals item_value * increment_by
-            # = (index + 1) * 2.
-            for shot_idx in range(5):
-                shot = pr.shot_histories[shot_idx]
-                assert shot is not None
-                assert shot.collect_data("counter", -1) == (index + 1) * 2
             assert pr.parent_program is not None
             assert pr.name == f"Results for Item {index}"
 
@@ -1869,7 +1834,6 @@ class TestKeepShotResults:
                     item_checkpoint_dir=item_checkpoint_dir,
                     shot_checkpoint_dir=shot_checkpoint_dir,
                     keep_shot_results=True,
-                    lazy_loading=False,
                     poll_interval=0.0,
                 ),
                 parallel_strategy=strategy,
@@ -2323,7 +2287,6 @@ class TestWorkerFileConsolidation:
                 item_checkpoint_dir=checkpoint_dir,
                 shot_checkpoint_dir=tmp_path / "shot_ckpt",
                 keep_shot_results=True,
-                lazy_loading=True,
             ),
         )
 
@@ -2772,9 +2735,7 @@ class TestBaseClassMechanisms:
         shot_ckpt_dir = tmp_path / "shots"
         runner = _CountingRunner(
             items=items,
-            config=CheckpointConfig(
-                shot_checkpoint_dir=shot_ckpt_dir, lazy_loading=False
-            ),
+            config=CheckpointConfig(shot_checkpoint_dir=shot_ckpt_dir),
             parallel_strategy=ParallelStrategy(
                 program_executor=loky.get_reusable_executor(max_workers=2),
                 n_program_chunks=2,
@@ -2990,3 +2951,24 @@ class TestDriverLiveItemReads:
         assert opened == []
         assert notified == []
         assert again == count
+
+
+def test_runner_file_with_removed_lazy_loading_key_loads(
+    tmp_path, monkeypatch
+):
+    """A runner file written before `lazy_loading` was removed holds the key;
+    reading it drops the key."""
+    runner = _SimpleDoubleRunner([1, 2])
+    monkeypatch.setattr(
+        _SimpleDoubleRunner,
+        "_SERIALIZE_ATTRS",
+        _SimpleDoubleRunner._SERIALIZE_ATTRS + ["lazy_loading"],
+    )
+    runner.lazy_loading = False
+    path = tmp_path / "old_runner.h5"
+    runner.write(path)
+    monkeypatch.undo()
+
+    loaded = _SimpleDoubleRunner.read(path)
+    assert loaded.items == [1, 2]
+    assert not hasattr(loaded, "lazy_loading")

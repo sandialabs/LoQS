@@ -143,7 +143,6 @@ class ProgramResults(Displayable):
         parent_program: "QuantumProgram | str | Path | None" = None,
         checkpoint_enabled: bool = False,
         checkpoint_dir: str | Path | None = None,
-        lazy_loading: bool = True,
         max_memory_shots: int = 100,
         num_shots: int | None = None,
         max_frame_limit: int | None = None,
@@ -225,9 +224,6 @@ class ProgramResults(Displayable):
 
         self._checkpoint_enabled = checkpoint_enabled
         """Whether checkpointing is enabled."""
-
-        self._lazy_loading = lazy_loading
-        """Whether lazy loading is enabled"""
 
         self._results_filename = results_filename
         """Filename for the canonical results checkpoint file."""
@@ -610,19 +606,16 @@ class ProgramResults(Displayable):
 
         self.mark_shots_as_written(shots_to_checkpoint)
 
-        # Implement lazy loading: remove written shots from memory
-        if self._lazy_loading:
-            for shot_index in shots_to_checkpoint:
-                if shot_index in self.shot_histories:
-                    del self.shot_histories[shot_index]
+        # Evict written shots from memory; they read back from the store.
+        for shot_index in shots_to_checkpoint:
+            self.shot_histories.pop(shot_index, None)
         return receipt
 
     def mark_shots_checkpointed(self, shot_indices: list[int]) -> None:
         """Record that the given shots are already durably checkpointed
         somewhere else (e.g. by the worker that computed them), without
-        writing anything here. Lets a driver's own `ProgramResults` still
-        honor `lazy_loading` (bounding its own memory) for shots it
-        received from a worker rather than checkpointing itself.
+        writing anything here. Marks the shots written and drops any of
+        them held in memory.
 
         Parameters
         ----------
@@ -630,10 +623,8 @@ class ProgramResults(Displayable):
             Shot indices to mark as already-checkpointed.
         """
         self.mark_shots_as_written(list(shot_indices))
-        if self._lazy_loading:
-            for shot_index in shot_indices:
-                if shot_index in self.shot_histories:
-                    del self.shot_histories[shot_index]
+        for shot_index in shot_indices:
+            self.shot_histories.pop(shot_index, None)
 
     @staticmethod
     def _count_live_done_shots(checkpoint_dir: Path) -> int:
@@ -785,7 +776,8 @@ class ProgramResults(Displayable):
         return store.canonical_path
 
     def get_shot_history(self, shot_index: int) -> History | None:
-        """Get a shot history, loading from checkpoint if lazy loading is on.
+        """Get a shot history, reading it from the checkpoint if it isn't
+        in memory.
 
         Raises `CheckpointReadError` if the store's file for the shot is
         unreadable.
@@ -801,47 +793,40 @@ class ProgramResults(Displayable):
             The requested History object, or None if not found.
         """
         # Check if shot is in memory cache first
-        if hasattr(self, "_lazy_loading") and self._lazy_loading:
-            if shot_index in self._memory_cache:
-                # Move to end of cache order (most recently used)
-                self._cache_order.remove(shot_index)
-                self._cache_order.append(shot_index)
-                return self._memory_cache[shot_index]
+        if shot_index in self._memory_cache:
+            # Move to end of cache order (most recently used)
+            self._cache_order.remove(shot_index)
+            self._cache_order.append(shot_index)
+            return self._memory_cache[shot_index]
 
-            # Check if shot is in shot_histories (for non-checkpointed runs)
-            if shot_index in self.shot_histories:
-                return self.shot_histories[shot_index]
-
-            # Not cached: load from the reader (a missing shot is None; a
-            # corrupt file raises `CheckpointReadError`).
-            # Since #146 `collect_shot_data` reads through the store, not this
-            # method, so it leaves `_memory_cache` empty and a read right after
-            # it decodes from the file; the store keeps no decoded shot.
-            loaded = False
-            reader = self._shot_reader()
-            if reader is not None:
-                try:
-                    history = reader.get(shot_index)
-                except KeyError:
-                    pass
-                else:
-                    self._memory_cache[shot_index] = history
-                    loaded = True
-            if loaded:
-                # Successfully loaded, move to end of cache order
-                self._cache_order.append(shot_index)
-
-                # Check if we need to evict from cache
-                if len(self._cache_order) > self._max_memory_shots:
-                    oldest_shot = self._cache_order.pop(0)
-                    del self._memory_cache[oldest_shot]
-
-                return self._memory_cache[shot_index]
-
-            return None
-        else:
-            # Normal mode: check if shot is in memory
-            if shot_index not in self.shot_histories:
-                return None
-
+        # Then shots not checkpointed, or not yet written
+        if shot_index in self.shot_histories:
             return self.shot_histories[shot_index]
+
+        # Not cached: load from the reader (a missing shot is None; a
+        # corrupt file raises `CheckpointReadError`).
+        # Since #146 `collect_shot_data` reads through the store, not this
+        # method, so it leaves `_memory_cache` empty and a read right after
+        # it decodes from the file; the store keeps no decoded shot.
+        loaded = False
+        reader = self._shot_reader()
+        if reader is not None:
+            try:
+                history = reader.get(shot_index)
+            except KeyError:
+                pass
+            else:
+                self._memory_cache[shot_index] = history
+                loaded = True
+        if loaded:
+            # Successfully loaded, move to end of cache order
+            self._cache_order.append(shot_index)
+
+            # Check if we need to evict from cache
+            if len(self._cache_order) > self._max_memory_shots:
+                oldest_shot = self._cache_order.pop(0)
+                del self._memory_cache[oldest_shot]
+
+            return self._memory_cache[shot_index]
+
+        return None

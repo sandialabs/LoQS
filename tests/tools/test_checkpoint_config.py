@@ -59,7 +59,6 @@ class TestCheckpointConfigStrOutput:
             shot_checkpoint_dir=shot_ckpt_dir,
             resume=True,
             keep_shot_results=True,
-            lazy_loading=False,
         )
         text = str(cfg)
         assert str(item_ckpt_dir) in text

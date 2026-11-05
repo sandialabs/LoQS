@@ -514,14 +514,13 @@ crash loses at most one worker's own in-flight batch (up to
 set it to `1` to checkpoint every shot as soon as it's computed, trading
 batching efficiency for the finest possible durability.
 
-The `0` above isn't a bug: `lazy_loading` (default `True`) evicts a
-shot from the returned [ProgramResults](api:ProgramResults)'s own in-memory
+The `0` above isn't a bug: a checkpointed run evicts each shot from the
+returned [ProgramResults](api:ProgramResults)'s own in-memory
 `shot_histories` as soon as it's durably checkpointed, so `run()`'s return
-value holds only the yet-unwritten tail once checkpointing is active --
-pass `lazy_loading=False` to keep every shot in memory regardless,
-or reload the full set from disk via `load_checkpoint()` as above.
-Note that `shot_wall_clock_times` is NOT affected by `lazy_loading` --
-it stays fully populated in memory regardless of checkpointing.
+value holds only the yet-unwritten tail. The shots read back through
+`get_shot_history`, `collect_shot_data` or `load_checkpoint()` as above.
+Note that `shot_wall_clock_times` is not evicted -- it stays fully
+populated in memory.
 
 ### Resuming after a crash
 
@@ -540,10 +539,9 @@ with tempfile.TemporaryDirectory() as resume_checkpoint_dir:
         checkpoint=True,
         checkpoint_batch_size=5,
         checkpoint_dir=resume_checkpoint_dir,
-        lazy_loading=False,
         verbose=False,
     )
-    print(f"shots after first call: {len(partial.shot_histories)}")
+    print(f"shots after first call: {len(partial.collect_shot_data('counter', -1))}")
 
     # Finishing off with more shots than originally planned: num_shots
     # differs from the original call, so force_resume=True is needed to
@@ -557,10 +555,9 @@ with tempfile.TemporaryDirectory() as resume_checkpoint_dir:
         force_resume=True,
         checkpoint_batch_size=5,
         checkpoint_dir=resume_checkpoint_dir,
-        lazy_loading=False,
         verbose=False,
     )
-    print(f"shots after resuming call: {len(finished.shot_histories)}")
+    print(f"shots after resuming call: {len(finished.collect_shot_data('counter', -1))}")
 ```
 
 If a resuming call's own `num_shots`/`max_frame_limit`/RNG seed happen to exactly match the original call, no mismatch is detected and `force_resume` isn't needed at all.

@@ -686,7 +686,6 @@ class QuantumProgram(Displayable):
         resume: bool = False,
         checkpoint_batch_size: int | None = None,
         checkpoint_dir: str | Path | None = None,
-        lazy_loading: bool = True,
         force_resume: bool = False,
         n_shot_batches: int | None = None,
         results_filename: str = "results.h5",
@@ -728,7 +727,15 @@ class QuantumProgram(Displayable):
             `checkpoint_batch_size`/`resume`/`force_resume` are all ignored).
             The sole gate for whether any checkpoint file gets read or
             written -- `checkpoint_batch_size`/`checkpoint_dir` being set
-            alone does not enable checkpointing.
+            alone does not enable checkpointing. A checkpointed run evicts
+            each shot from the returned [](api:ProgramResults)'s
+            `shot_histories` once it's written, bounding this process's
+            memory; shots read back via
+            [](api:ProgramResults.get_shot_history),
+            [](api:ProgramResults.collect_shot_data) or
+            [](api:ProgramResults.load_checkpoint).
+            [](api:ProgramResults.shot_wall_clock_times) is not evicted and
+            stays fully in memory.
 
         resume:
             Whether this call continues a prior checkpoint-enabled call
@@ -771,20 +778,6 @@ class QuantumProgram(Displayable):
             Directory to store checkpoint files. If None (default), checkpoints
             are stored in a `./checkpoints` directory in the current working
             directory. Only relevant when `checkpoint=True`; ignored otherwise.
-
-         lazy_loading:
-            Whether checkpointed shots are evicted from the returned
-            [](api:ProgramResults)'s own in-memory `shot_histories` as soon
-            as they're durably checkpointed (`True`, default -- bounds this
-            process's own memory use, at the cost of the returned object no
-            longer holding every shot in memory; evicted shots can still be
-            read back via [](api:ProgramResults.load_checkpoint) or
-            [](api:ProgramResults.get_shot_history)). Set to `False` to keep
-            every shot in memory regardless of checkpointing. Note that
-            [](api:ProgramResults.shot_wall_clock_times) is NOT evicted like
-            `shot_histories` is -- it stays fully populated in memory
-            regardless of `lazy_loading` or checkpointing. Has no effect
-            when `checkpoint` is `False`.
 
         force_resume:
             When resuming a checkpoint-enabled call (rerunning against a
@@ -867,7 +860,6 @@ class QuantumProgram(Displayable):
             parent_program=self,
             checkpoint_enabled=checkpoint_enabled,
             checkpoint_dir=resolved_checkpoint_dir,
-            lazy_loading=lazy_loading,
             num_shots=num_shots,
             max_frame_limit=max_frame_limit,
             results_filename=results_filename,
@@ -1008,8 +1000,8 @@ class QuantumProgram(Displayable):
                 f"in {resolved_checkpoint_dir}."
             )
 
-        # Bring the stored wall-clock times, and with `lazy_loading=False`
-        # the histories, into memory, skipping what is already there.
+        # Bring the stored wall-clock times into memory, skipping what is
+        # already there.
         new_times = [
             k
             for k in store.keys("shot_wall_clock_times")
@@ -1018,16 +1010,6 @@ class QuantumProgram(Displayable):
         program_results._merge_loaded_entries(
             (), store.iter_items("shot_wall_clock_times", keys=new_times)
         )
-        if not lazy_loading:
-            new_shots = [
-                k
-                for k in store.keys()
-                if k not in program_results.shot_histories
-            ]
-            program_results._merge_loaded_entries(
-                store.iter_items(keys=new_shots), ()
-            )
-
         return program_results
 
     # Entry point submitted to a parallel executor: computes a whole batch
@@ -1044,11 +1026,9 @@ class QuantumProgram(Displayable):
     ) -> tuple[dict[int, HistoryLike] | BatchReceipt, dict[int, float]]:
         pin_worker_threads()
 
-        # Non-lazy, so checkpoint() keeps the shots; named after the run's
-        # canonical file, so checkpoint() finds the driver's snapshot.
-        batch_results = ProgramResults(
-            lazy_loading=False, results_filename=results_filename
-        )
+        # Named after the run's canonical file, so checkpoint() finds the
+        # driver's snapshot.
+        batch_results = ProgramResults(results_filename=results_filename)
         for seed, shot_index in shot_specs:
             start_time = time.perf_counter()
             history = QuantumProgram._run_shot(

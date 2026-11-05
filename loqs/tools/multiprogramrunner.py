@@ -84,9 +84,6 @@ class CheckpointConfig(Serializable):
         Directory to checkpoint per-shot results to. Setting this to a
         non-`None` value is what turns on shot checkpointing
         (`shot_checkpoint`); coerced to a `Path` if given as a `str`.
-    lazy_loading : bool
-        Whether checkpointed shot results are loaded lazily from disk on
-        access rather than eagerly into memory.
     keep_shot_results : bool
         Whether per-shot results are retained (read back from disk) rather
         than discarded once each item completes. Requires both
@@ -108,7 +105,6 @@ class CheckpointConfig(Serializable):
         "resume",
         "force_resume",
         "shot_checkpoint_dir",
-        "lazy_loading",
         "keep_shot_results",
         "poll_interval",
         "show_progress",
@@ -120,7 +116,6 @@ class CheckpointConfig(Serializable):
     resume: bool = False
     force_resume: bool = False
     shot_checkpoint_dir: str | Path | None = None
-    lazy_loading: bool = True
     keep_shot_results: bool = False
     poll_interval: float = 1.0
     show_progress: bool = True
@@ -182,7 +177,6 @@ class CheckpointConfig(Serializable):
                 "\tShot checkpointing:\ton",
                 f"\t\tCheckpoint directory:\t{self.shot_checkpoint_dir}",
                 f"\t\tKeep shot results:\t{self.keep_shot_results}",
-                f"\t\tLazy loading:\t{self.lazy_loading}",
                 f"\t\tResults file:\t{self.results_filename}",
             ]
         else:
@@ -244,7 +238,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
         "resume",
         "force_resume",
         "shot_checkpoint_dir",
-        "lazy_loading",
         "index_map",
         "_reduced_results",
         "keep_shot_results",
@@ -287,7 +280,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
             if config.shot_checkpoint_dir is not None
             else None
         )
-        self.lazy_loading = config.lazy_loading
         self.index_map: dict[str, int] | None = None
         self._reduced_results: dict[int, Any] = {}
         self.keep_shot_results = config.keep_shot_results
@@ -356,7 +348,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
             resume=self.resume,
             force_resume=self.force_resume,
             shot_checkpoint_dir=self.shot_checkpoint_dir,
-            lazy_loading=self.lazy_loading,
             keep_shot_results=self.keep_shot_results,
             poll_interval=self.poll_interval,
             show_progress=self.show_progress,
@@ -386,12 +377,13 @@ class MultiProgramRunner(Serializable, Generic[T]):
         program_results = attr_dict.pop("_program_results", None)
         item_wall_clock_times = attr_dict.pop("item_wall_clock_times", None)
         shot_wall_clock_times = attr_dict.pop("shot_wall_clock_times", None)
+        # Files written before `lazy_loading` was removed still carry it.
+        attr_dict.pop("lazy_loading", None)
         config = CheckpointConfig(
             item_checkpoint_dir=attr_dict.pop("item_checkpoint_dir", None),
             resume=attr_dict.pop("resume", False),
             force_resume=attr_dict.pop("force_resume", False),
             shot_checkpoint_dir=attr_dict.pop("shot_checkpoint_dir", None),
-            lazy_loading=attr_dict.pop("lazy_loading", True),
             keep_shot_results=attr_dict.pop("keep_shot_results", False),
             poll_interval=attr_dict.pop("poll_interval", 1.0),
             show_progress=attr_dict.pop("show_progress", True),
@@ -407,11 +399,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
         obj._program_results = (
             program_results if program_results is not None else {}
         )
-        if (
-            obj.keep_shot_results
-            and obj.lazy_loading
-            and obj.item_checkpoint_dir is not None
-        ):
+        if obj.keep_shot_results and obj.item_checkpoint_dir is not None:
             item_store = obj._item_store()
             assert item_store is not None
             for index, pr in obj._program_results.items():
@@ -759,14 +747,11 @@ class MultiProgramRunner(Serializable, Generic[T]):
             )
         if not self.keep_shot_results:
             return
-        if self.lazy_loading:
-            assert isinstance(store, CheckpointStore)
-            self._program_results = {
-                index: self._make_lazy_program_results(store, index)
-                for index in store.keys("_program_results")
-            }
-        else:
-            self._program_results = dict(store.iter_items("_program_results"))
+        assert isinstance(store, CheckpointStore)
+        self._program_results = {
+            index: self._make_lazy_program_results(store, index)
+            for index in store.keys("_program_results")
+        }
 
     def _make_lazy_program_results(
         self, store: CheckpointStore, index: int
@@ -774,8 +759,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
         """Construct a lazy-loading ProgramResults for a nested entry.
 
         Creates a ProgramResults configured to load shots through the
-        store's nested view of the `_program_results` entry at `index`, with
-        lazy_loading=True. `num_shots`/`max_frame_limit` are forwarded from
+        store's nested view of the `_program_results` entry at `index`.
+        `num_shots`/`max_frame_limit` are forwarded from
         this runner (genuine per-runner scalars), and `shot_wall_clock_times`
         is forwarded from this runner's own already-populated per-item timing
         data; `parent_program`/`name` are genuinely per-item, so they aren't
@@ -804,7 +789,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
             shot_wall_clock_times=dict(
                 self.shot_wall_clock_times.get(index, {})
             ),
-            lazy_loading=True,
         )
         pr._set_nested_shot_source(store.nested(index))
         return pr
@@ -870,7 +854,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
             "shot_checkpoint": self.shot_checkpoint,
             "chkpt_subdir_prefix": self.CHKPT_SUBDIR_PREFIX,
             "results_filename": self.results_filename,
-            "lazy_loading": self.lazy_loading,
             "force_resume": self.force_resume,
             "num_shots": getattr(self, "num_shots", None),
         }
@@ -994,7 +977,6 @@ def _shared_item_worker(
     shot_checkpoint: bool = False,
     chkpt_subdir_prefix: str = "item",
     results_filename: str = "results.h5",
-    lazy_loading: bool = True,
     force_resume: bool = False,
     num_shots: int | None = None,
     shot_executor: Any = None,
@@ -1031,7 +1013,6 @@ def _shared_item_worker(
     if combined_callback is not None:
         resolved_run_kwargs["progress_callback"] = combined_callback
     resolved_run_kwargs.setdefault("verbose", False)
-    resolved_run_kwargs["lazy_loading"] = lazy_loading
     resolved_run_kwargs["force_resume"] = force_resume
     resolved_run_kwargs["results_filename"] = results_filename
 

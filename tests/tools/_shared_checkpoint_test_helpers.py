@@ -806,8 +806,8 @@ def shot_signature(
     through public access (`get_shot_history`, `shot_wall_clock_times`),
     asserting that the shot-history keys and the wall-clock keys each
     equal `range(num_shots)` exactly. With `checkpoint_dir`, also loads
-    that directory into a fresh non-lazy `ProgramResults` and checks its
-    keys the same way, which catches a stray key the lazy read can't."""
+    that directory into a fresh `ProgramResults` and checks its keys the
+    same way, which catches a stray key the store-backed read can't."""
     expected_keys = set(range(num_shots))
     assert set(results.shot_wall_clock_times) == expected_keys, (
         "shot_wall_clock_times keys "
@@ -828,7 +828,7 @@ def shot_signature(
         "get_shot_history returned None"
     )
     if checkpoint_dir is not None:
-        loaded = ProgramResults(lazy_loading=False)
+        loaded = ProgramResults()
         loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
         assert set(loaded.shot_histories) == expected_keys, (
             f"on-disk shot history keys {sorted(loaded.shot_histories)} "

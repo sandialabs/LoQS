@@ -269,18 +269,16 @@ class TestExecutorParallelism:
         # num_shots=25 with n_shot_batches=None auto-defaults to
         # ceil(25 / 20) = 2 batches, and run() submits that many.
         executor = InlineExecutor()
-        results = _build_seeded_counter_program().run(
+        _build_seeded_counter_program().run(
             num_shots=25,
             shot_executor=executor,
             n_shot_batches=None,
             checkpoint=True,
             checkpoint_dir=tmp_path / "checkpoint",
             checkpoint_batch_size=None,
-            lazy_loading=False,
             verbose=False,
         )
 
-        assert len(results.shot_histories) == 25
         assert executor.submit_count == 2
 
     @pytest.mark.usefixtures("inline_patches")
@@ -397,28 +395,16 @@ class TestResumeFromCheckpoint:
     """Test resume-from-checkpoint functionality."""
 
     @pytest.mark.parametrize(
-        "first_batch, first_lazy, resume_batch, resume_lazy",
-        [
-            (2, False, 2, False),
-            (1, False, 2, False),
-            (2, True, 2, False),
-            (2, True, 2, True),
-        ],
-        ids=[
-            "eager",
-            "batch_size_change",
-            "eager_resume_of_lazy_crash",
-            "lazy_resume",
-        ],
+        "first_batch, resume_batch",
+        [(2, 2), (1, 2)],
+        ids=["same_batch_size", "batch_size_change"],
     )
     def test_resume_after_crash(
         self,
         monkeypatch,
         tmp_path,
         first_batch,
-        first_lazy,
         resume_batch,
-        resume_lazy,
     ):
         program = _build_seeded_counter_program()
         checkpoint_dir = tmp_path / "checkpoints"
@@ -431,7 +417,6 @@ class TestResumeFromCheckpoint:
                 checkpoint=True,
                 checkpoint_batch_size=first_batch,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading=first_lazy,
                 verbose=False,
             )
         monkeypatch.undo()
@@ -445,17 +430,13 @@ class TestResumeFromCheckpoint:
             resume=True,
             checkpoint_batch_size=resume_batch,
             checkpoint_dir=checkpoint_dir,
-            lazy_loading=resume_lazy,
             verbose=False,
         )
         monkeypatch.undo()
 
         assert len(calls) == 2
         _assert_wall_clock_times(results, 4)
-        if not resume_lazy:
-            assert len(results.shot_histories) == 4
-            for idx in range(4):
-                assert results.shot_histories[idx][-1]["counter"] == idx + 1
+        assert results.collect_shot_data("counter", -1) == [1, 2, 3, 4]
 
     @pytest.mark.parametrize(
         "run_kwargs",
@@ -471,7 +452,6 @@ class TestResumeFromCheckpoint:
             checkpoint=True,
             checkpoint_batch_size=2,
             checkpoint_dir=checkpoint_dir,
-            lazy_loading=False,
         )
 
         resume_kwargs = {"max_frame_limit": 100, **run_kwargs}
@@ -481,7 +461,6 @@ class TestResumeFromCheckpoint:
                 resume=True,
                 checkpoint_batch_size=2,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading=False,
                 **resume_kwargs,
             )
 
@@ -522,15 +501,12 @@ class TestResumeFromCheckpoint:
             max_frame_limit=100,
             checkpoint_enabled=True,
             checkpoint_dir=checkpoint_dir,
-            lazy_loading=False,
         )
 
         # Stage a partial checkpoint: shots {0,1} and {4,5} done, {2,3}
         # missing (checkpoint_batch_size=2, num_shots=6)
         for shot_idx in [0, 1, 4, 5]:
-            results_worker = ProgramResults(
-                name=f"Worker {shot_idx}", lazy_loading=False
-            )
+            results_worker = ProgramResults(name=f"Worker {shot_idx}")
             history = History()
             history.append(Frame({"counter": shot_idx + 1}))
             results_worker.add_shot(shot_idx, history, wall_clock_time=0.05)
@@ -547,15 +523,11 @@ class TestResumeFromCheckpoint:
             n_shot_batches=3,
             checkpoint_dir=checkpoint_dir,
             shot_executor=InlineExecutor(),
-            lazy_loading=False,
             verbose=False,
         )
 
         assert sorted(calls) == [2, 3]
-        assert len(results.shot_histories) == 6
-        for shot_idx in range(6):
-            counter = results.shot_histories[shot_idx][-1]["counter"]
-            assert counter == shot_idx + 1
+        assert results.collect_shot_data("counter", -1) == [1, 2, 3, 4, 5, 6]
 
         # Worker files were cleaned up and results.h5 consolidated
         leftovers = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
@@ -582,11 +554,10 @@ class TestResumeFromCheckpoint:
             max_frame_limit=100,
             checkpoint_enabled=True,
             checkpoint_dir=checkpoint_dir,
-            lazy_loading=False,
         )
 
         for worker_id, shots in (("w0", [0, 1]), ("w1", [2, 3])):
-            results_worker = ProgramResults(lazy_loading=False)
+            results_worker = ProgramResults()
             for shot_idx in shots:
                 history = History()
                 history.append(Frame({"counter": shot_idx + 1}))
@@ -608,14 +579,10 @@ class TestResumeFromCheckpoint:
             resume=True,
             checkpoint_batch_size=2,
             checkpoint_dir=checkpoint_dir,
-            lazy_loading=False,
             verbose=False,
         )
 
-        assert len(results.shot_histories) == 4
-        for shot_idx in range(4):
-            counter = results.shot_histories[shot_idx][-1]["counter"]
-            assert counter == shot_idx + 1
+        assert results.collect_shot_data("counter", -1) == [1, 2, 3, 4]
         assert (checkpoint_dir / "results.h5").exists()
         leftovers = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
         assert not leftovers.payload_paths()
@@ -652,7 +619,6 @@ class TestResumeFromCheckpoint:
             checkpoint=True,
             checkpoint_batch_size=2,
             checkpoint_dir=checkpoint_dir,
-            lazy_loading=False,
             verbose=False,
         )
         assert (checkpoint_dir / "results.h5").exists()
@@ -667,10 +633,10 @@ class TestResumeFromCheckpoint:
                 verbose=False,
             )
 
-    def test_lazy_resume_of_complete_run_decodes_no_history(
+    def test_resume_of_complete_run_decodes_no_history(
         self, tmp_path, monkeypatch
     ):
-        """Resuming a finished checkpoint lazily decodes no History."""
+        """Resuming a finished checkpoint decodes no History."""
         program = _build_seeded_counter_program()
         program.run(num_shots=5, checkpoint=True, checkpoint_dir=tmp_path)
 
@@ -680,7 +646,6 @@ class TestResumeFromCheckpoint:
             checkpoint=True,
             resume=True,
             checkpoint_dir=tmp_path,
-            lazy_loading=True,
         )
         assert results.shot_histories == {}
         assert len(results.shot_wall_clock_times) == 5
@@ -707,7 +672,7 @@ class TestResumeFromCheckpoint:
     def test_loky_executor_checkpointed_run_reads_back_from_store(
         self, tmp_path
     ):
-        """Workers return receipts, so a non-lazy parallel run reads every
+        """Workers return receipts, so a parallel run reads every
         history back from the store, and a custom `results_filename` leaves
         one file."""
         loky = pytest.importorskip("loky")
@@ -718,13 +683,10 @@ class TestResumeFromCheckpoint:
             checkpoint_dir=tmp_path,
             shot_executor=executor,
             n_shot_batches=2,
-            lazy_loading=False,
             results_filename="custom.h5",
             verbose=False,
         )
-        assert sorted(results.shot_histories) == [0, 1, 2, 3]
-        for i in range(4):
-            assert results.shot_histories[i][-1]["counter"] == i + 1
+        assert results.collect_shot_data("counter", -1) == [1, 2, 3, 4]
         assert sorted(p.name for p in tmp_path.iterdir()) == ["custom.h5"]
 
     def test_resume_over_a_corrupt_payload_raises_before_any_shot(
@@ -734,7 +696,7 @@ class TestResumeFromCheckpoint:
         raises before any shot is computed."""
         program = _build_seeded_counter_program()
         program.run(num_shots=2, checkpoint=True, checkpoint_dir=tmp_path)
-        extra = ProgramResults(lazy_loading=False)
+        extra = ProgramResults()
         history = History()
         history.append(Frame({"counter": 3}))
         extra.add_shot(2, history)
@@ -756,24 +718,6 @@ class TestResumeFromCheckpoint:
                 force_resume=True,
                 checkpoint_dir=tmp_path,
             )
-
-    def test_non_lazy_resume_loads_stored_shots_from_the_store(self, tmp_path):
-        """Resuming with lazy_loading=False brings the stored histories into
-        memory and computes only the missing shots."""
-        program = _build_seeded_counter_program()
-        program.run(num_shots=3, checkpoint=True, checkpoint_dir=tmp_path)
-        # A resume with more shots needs force_resume (num_shots differs).
-        results = program.run(
-            num_shots=5,
-            checkpoint=True,
-            resume=True,
-            force_resume=True,
-            checkpoint_dir=tmp_path,
-            lazy_loading=False,
-        )
-        assert sorted(results.shot_histories) == [0, 1, 2, 3, 4]
-        for i in range(5):
-            assert results.shot_histories[i][-1]["counter"] == i + 1
 
 
 class TestResolveShotBatching:

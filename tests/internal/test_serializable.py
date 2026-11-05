@@ -895,7 +895,7 @@ class TestResolvingDecodeCache:
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
 
-            writer = ProgramResults(lazy_loading=False)
+            writer = ProgramResults()
             shared = MockSerializable(name="shared", value=7)
 
             for shot in range(3):
@@ -909,7 +909,7 @@ class TestResolvingDecodeCache:
 
             # Lazy consumer: each call opens its own h5py.File but reuses
             # the store's one canonical decode cache.
-            reader = ProgramResults(lazy_loading=True)
+            reader = ProgramResults()
             reader._checkpoint_dir = checkpoint_dir
 
             for shot in (2, 1, 0):
