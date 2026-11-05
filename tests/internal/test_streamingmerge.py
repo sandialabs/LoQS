@@ -2,12 +2,16 @@
 
 import pytest
 import h5py
+import numpy as np
 from loqs.internal.streamingmerge import (
+    get_dict_attr_keys,
     merge_dict_attr,
     iter_dict_attr_entries,
     get_dict_attr_value,
     get_dict_attr_group,
 )
+from loqs.core.frame import Frame
+from loqs.core.history import History
 from loqs.internal.serializable import Serializable
 
 
@@ -97,26 +101,6 @@ class TestMergeDictAttr:
                 result = list(iter_dict_attr_entries(h5_file, "test_dict"))
                 assert result == first + second
 
-    def test_mismatched_type_raises_error(self, make_temp_path):
-        """A float key onto an int dataset is refused."""
-        with make_temp_path(suffix=".h5") as temp_file:
-            with h5py.File(temp_file, "w") as h5_file:
-                merge_dict_attr(
-                    h5_file,
-                    "test_dict",
-                    [(1, "a"), (2, "b")],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-
-                with pytest.raises(TypeError):
-                    merge_dict_attr(
-                        h5_file,
-                        "test_dict",
-                        [(3.5, "c")],
-                        encode_cache={},
-                    )
-
     def test_append_to_empty_dict(self, make_temp_path):
         """Test appending to an initially empty dict."""
         with make_temp_path(suffix=".h5") as temp_file:
@@ -134,50 +118,155 @@ class TestMergeDictAttr:
                 result = list(iter_dict_attr_entries(h5_file, "dict"))
                 assert result == [(1, "a"), (2, "b")]
 
-    @pytest.mark.parametrize("phase", ["fresh", "append"])
-    def test_refused_value_leaves_dict_intact(self, make_temp_path, phase):
-        """A refused value leaves the key and value datasets the same length."""
+    @pytest.mark.parametrize(
+        "first, key_ds, value_ds, refused, exc, good, expected",
+        [
+            pytest.param(
+                [(1, "a"), (2, "b")],
+                True,
+                False,
+                [(3.5, "c")],
+                TypeError,
+                [(4, "e")],
+                [(1, "a"), (2, "b"), (4, "e")],
+                id="append_dataset_key",
+            ),
+            pytest.param(
+                None,
+                True,
+                False,
+                [(MockSerializable("obj", 1), "a")],
+                TypeError,
+                [(4, "e")],
+                [(4, "e")],
+                id="fresh_first_entry",
+            ),
+            pytest.param(
+                [(1, 10), (2, 20)],
+                True,
+                True,
+                [(3, 2**70)],
+                OverflowError,
+                [(4, 40)],
+                [(1, 10), (2, 20), (4, 40)],
+                id="dataset_value_overflow",
+            ),
+            pytest.param(
+                None,
+                True,
+                True,
+                [(1, 10), (2, "bad")],
+                TypeError,
+                [(4, 40)],
+                [(1, 10), (4, 40)],
+                id="fresh_later_entry",
+            ),
+        ],
+    )
+    def test_refused_entry_leaves_keys_and_values_paired(
+        self,
+        make_temp_path,
+        first,
+        key_ds,
+        value_ds,
+        refused,
+        exc,
+        good,
+        expected,
+    ):
+        """A refused entry leaves no orphan, so later entries keep their own
+        values."""
+        flags = {"key_use_dataset": key_ds, "value_use_dataset": value_ds}
         with make_temp_path(suffix=".h5") as temp_file:
             with h5py.File(temp_file, "w") as h5_file:
-                flags = {}
-                if phase == "fresh":
-                    entries = [(1, 10), (2, "bad")]
-                    expected = 1
-                    flags = {
-                        "key_use_dataset": True,
-                        "value_use_dataset": True,
-                    }
-                else:
+                if first is not None:
+                    merge_dict_attr(h5_file, "dict", first, **flags)
+                with pytest.raises(exc):
+                    merge_dict_attr(h5_file, "dict", refused, **flags)
+                merge_dict_attr(h5_file, "dict", good, **flags)
+
+                result = list(iter_dict_attr_entries(h5_file, "dict"))
+                assert result == expected
+
+    @pytest.mark.parametrize(
+        "first",
+        [pytest.param([(1, 0)], id="append"), pytest.param([], id="fresh")],
+    )
+    def test_refused_groups_entry_leaves_no_cache_entries(
+        self, make_temp_path, first
+    ):
+        """A retried entry reads back, as its refused try left no cache
+        entries behind."""
+        encode_cache: dict = {}
+        h1 = History([Frame({"v": 1})])
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                if first:
                     merge_dict_attr(
                         h5_file,
                         "dict",
-                        [(1, 10), (2, 20)],
-                        key_use_dataset=True,
-                        value_use_dataset=True,
+                        [(k, History([Frame({"v": v})])) for k, v in first],
+                        encode_cache=encode_cache,
                     )
-                    entries = [(3, "bad")]
-                    expected = 2
-
-                with pytest.raises(TypeError):
-                    merge_dict_attr(h5_file, "dict", entries, **flags)
-
-            with h5py.File(temp_file, "r") as h5_file:
-                dict_group = h5_file["dict"]["dict"]
-                keys_dataset = dict_group["keys"]["iterable"]["data"]
-                values_dataset = dict_group["values"]["iterable"]["data"]
-                assert len(keys_dataset) == len(values_dataset) == expected
-
-    def test_dataset_format_with_non_native_type_raises(self, make_temp_path):
-        """Requesting dataset format for a non-native key type fails."""
-        with make_temp_path(suffix=".h5") as temp_file:
-            with h5py.File(temp_file, "w") as h5_file:
-                with pytest.raises(TypeError):
+                with pytest.raises(ValueError):
                     merge_dict_attr(
                         h5_file,
                         "dict",
-                        [(MockSerializable("obj", 1), "value")],
-                        key_use_dataset=True,
+                        [(object(), h1)],
+                        encode_cache=encode_cache,
                     )
+                merge_dict_attr(
+                    h5_file, "dict", [(4, h1)], encode_cache=encode_cache
+                )
+
+                result = [
+                    (k, v[0]["v"])
+                    for k, v in iter_dict_attr_entries(h5_file, "dict")
+                ]
+                assert result == first + [(4, 1)]
+
+    @pytest.mark.parametrize(
+        "first, fits, too_wide, wrong_type",
+        [
+            pytest.param("abcd", "αβ", "ααα", b"ab", id="str"),
+            pytest.param(b"abcd", b"\xff\x00y", b"\xff" * 6, "ab", id="bytes"),
+        ],
+    )
+    def test_string_side_append_measures_utf8_bytes(
+        self, make_temp_path, first, fits, too_wide, wrong_type
+    ):
+        """A width check counts encoded bytes, and a side keeps its type."""
+        flags = {"key_use_dataset": True, "value_use_dataset": True}
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                merge_dict_attr(h5_file, "dict", [(1, first)], **flags)
+                merge_dict_attr(h5_file, "dict", [(2, fits)])
+                with pytest.raises(ValueError):
+                    merge_dict_attr(h5_file, "dict", [(3, too_wide)])
+                with pytest.raises(TypeError):
+                    merge_dict_attr(h5_file, "dict", [(3, wrong_type)])
+
+                result = list(iter_dict_attr_entries(h5_file, "dict"))
+        assert result == [(1, first), (2, fits)]
+        assert [type(v) for _, v in result] == [type(first)] * 2
+
+    def test_append_to_encoded_string_keys_keeps_their_type(
+        self, make_temp_path
+    ):
+        """Appending to a dict the encoder wrote leaves its str keys str."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                parent = h5_file.create_group("parent")
+                Serializable.encode(
+                    {"a": np.arange(2), "b": np.arange(3)},
+                    format="hdf5",
+                    h5_group=parent.create_group("d"),
+                )
+                merge_dict_attr(parent, "d", [("γ", np.arange(1))])
+
+                keys = list(get_dict_attr_keys(parent, "d"))
+        assert keys == ["a", "b", "γ"]
+        assert all(type(k) is str for k in keys)
 
 
 class TestIterDictAttrEntriesStartIndex:

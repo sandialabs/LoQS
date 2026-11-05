@@ -193,6 +193,18 @@ _MIXED_LIST = [1, "string", 3.14, MockSerializable(name="test", value=42)]
 
 
 class TestHDFIterableOptimizations:
+    def test_string_dataset_value_that_would_change_raises(
+        self, make_temp_path
+    ):
+        """A trailing NUL would be dropped on read, so encoding refuses."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                with pytest.raises(ValueError):
+                    HDF5Encoder.encode_iterable(
+                        [b"ab", b"c\x00"],
+                        h5_group=h5_file.create_group("root"),
+                    )
+
     @pytest.mark.parametrize(
         "test_list,storage_format,types",
         [
@@ -206,6 +218,15 @@ class TestHDFIterableOptimizations:
             ),
             pytest.param(
                 [b"bytes1", b"bytes2", b"bytes3"], "dataset", None, id="bytes"
+            ),
+            pytest.param(
+                ["α", "β"], "dataset", [str, str], id="non_ascii_strs"
+            ),
+            pytest.param(
+                [b"\xff\x00x", "é".encode()],
+                "dataset",
+                [bytes, bytes],
+                id="non_ascii_bytes",
             ),
             pytest.param(
                 list(range(1500)), "dataset", None, id="large_compressed"

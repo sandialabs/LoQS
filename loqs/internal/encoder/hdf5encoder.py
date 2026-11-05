@@ -450,6 +450,22 @@ def _decode_partitioned_children(h5_group, decode_cache):
             )
 
 
+def _string_dataset_bytes(item) -> bytes:
+    """The bytes an `S` dataset stores for a `str` or `bytes` item.
+
+    A `str` is encoded as strict UTF-8 and `bytes` are kept as they are.
+    Raises `ValueError` if the item wouldn't read back exactly: it ends in
+    a NUL (which `S` datasets drop on read) or is a `str` with no UTF-8 form.
+    """
+    data = item if isinstance(item, bytes) else item.encode("utf-8")
+    if data.endswith(b"\x00"):
+        raise ValueError(
+            f"Cannot store {item!r} in a fixed-width string dataset: "
+            "a trailing NUL would be dropped on read"
+        )
+    return data
+
+
 class HDF5Encoder(BaseEncoder):
 
     ENCODE_ID: ClassVar[int] = 0
@@ -857,23 +873,13 @@ class HDF5Encoder(BaseEncoder):
     ):
         first_element = to_encode_list[0]
         if isinstance(first_element, (str, bytes)):
-            # Find maximum str/bytes length to determine dtype
-            max_len = (
-                max(len(b) for b in to_encode_list) if to_encode_list else 0
-            )
+            # Size the dtype by the longest encoded item
+            encoded_items = [_string_dataset_bytes(b) for b in to_encode_list]
+            max_len = max(len(b) for b in encoded_items)
             dtype = f"S{max_len + 1}"  # +1 for null terminator
-
+            data = np.array(encoded_items, dtype=dtype)
             if isinstance(first_element, bytes):
-                data = np.array(
-                    [
-                        b.decode("utf-8", errors="replace")
-                        for b in to_encode_list
-                    ],
-                    dtype=dtype,
-                )
                 list_group.attrs["original_type"] = "bytes"
-            else:
-                data = np.array(to_encode_list, dtype=dtype)
         else:
             # For numeric types, determine appropriate dtype
             data = np.array(to_encode_list)
@@ -892,6 +898,23 @@ class HDF5Encoder(BaseEncoder):
             compression=compression,
             maxshape=maxshape,
         )
+
+    @staticmethod
+    def _decode_iterable_dataset(list_group) -> list:
+        """Read a dataset-format iterable side back as Python values."""
+        data = list_group["data"][()]
+        kind = data.dtype.kind
+        if kind in ("i", "u"):
+            return [int(x) for x in data.flat]
+        if kind == "f":
+            return [float(x) for x in data.flat]
+        if kind == "b":
+            return [bool(x) for x in data.flat]
+        if kind == "S":
+            if list_group.attrs.get("original_type") == "bytes":
+                return [bytes(x) for x in data.flat]
+            return [x.decode("utf-8") for x in data.flat]
+        return list(data.flat)
 
     @staticmethod
     def decode_iterable(encoded, decode_cache=None):
@@ -943,41 +966,7 @@ class HDF5Encoder(BaseEncoder):
                 data_dataset = list_group["data"]
                 assert isinstance(data_dataset, h5py.Dataset)
 
-            # Read data from dataset
-            data = data_dataset[()]
-
-            # Convert numpy array back to appropriate Python types
-            if data.dtype.kind in ["i", "u"]:  # integer types
-                value = [int(x) for x in data.flat]
-            elif data.dtype.kind == "f":  # float types
-                value = [float(x) for x in data.flat]
-            elif data.dtype.kind == "b":  # boolean types
-                value = [bool(x) for x in data.flat]
-            elif data.dtype.kind in ["U", "S"]:  # string types
-                # Check if original type was bytes
-                if list_group.attrs.get("original_type") == "bytes":
-                    value = [
-                        x.encode("utf-8") if isinstance(x, str) else x
-                        for x in data.flat
-                    ]
-                else:
-                    value = [
-                        str(x, "utf-8") if isinstance(x, bytes) else str(x)
-                        for x in data.flat
-                    ]
-            elif data.dtype.kind == "O":  # object types (could be mixed)
-                # Handle object arrays which might contain strings, bytes, etc.
-                value = []
-                for x in data.flat:
-                    if isinstance(x, bytes):
-                        value.append(x)  # Keep as bytes
-                    elif isinstance(x, str):
-                        value.append(x)
-                    else:
-                        value.append(x)
-            else:
-                # Fallback: convert to list
-                value = list(data.flat)
+            value = HDF5Encoder._decode_iterable_dataset(list_group)
         else:
             # Original format using individual groups, plus (possibly) one
             # shared collapsed blob covering some subset of the elements --
