@@ -23,7 +23,10 @@ import warnings
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.encoder.hdf5encoder import (
+    HDF5Encoder,
+    _string_dataset_bytes,
+)
 from loqs.internal.serializable import Serializable
 
 
@@ -177,12 +180,21 @@ def merge_dict_attr(
     For dataset-format sides (homogeneous native scalar types), appending
     reuses `HDF5Encoder._encode_iterable_dataset` directly. If a new entry's
     key or value doesn't match the dataset's established native type, a
-    `TypeError` is raised and no partial write completes.
+    `TypeError` is raised. A numeric or bool dataset side takes only values
+    of exactly `int`, `float` or `bool`, so a numpy scalar or a `bool` on an
+    `int` side is refused.
 
-    For dataset-format string/bytes sides: the dataset's fixed-width dtype
-    is determined from the first entry's length. Attempting to append a
-    later string/bytes value longer than that initial width will raise
-    `ValueError` rather than silently truncating.
+    Each entry is all or nothing: an entry that raises, on either side and
+    for any reason, leaves nothing behind (neither side, nor its encode-cache
+    entries, and no attribute when it was the first entry of a fresh one),
+    while entries before it stay.
+
+    For dataset-format string/bytes sides: strings are stored as UTF-8 and
+    the dataset's fixed width is the first entry's length in bytes. A value
+    that is longer than that width, or that a fixed-width dataset can't give
+    back exactly (a trailing NUL, a `str` with no UTF-8 form), raises
+    `ValueError` rather than being changed. A `str` side refuses `bytes`
+    and a `bytes` side refuses `str`, with `TypeError`.
 
     For groups-format sides (arbitrary or Serializable-typed entries), a new
     indexed subgroup is created and the entry is encoded into it via
@@ -218,27 +230,26 @@ def merge_dict_attr(
         `key_use_dataset=True` or `value_use_dataset=True` is requested on
         fresh creation but the first entry's type doesn't support dataset
         storage (e.g., a Serializable object when dataset was explicitly
-        requested).
+        requested), and if `bytes` go to a `str` side or the reverse.
     ValueError
-        If a string or bytes value is appended to a dataset-format string/
-        bytes column and the value is longer than the fixed width of the
-        dataset (determined from the first entry).
+        If a string or bytes value for a dataset-format side is longer, in
+        UTF-8 bytes, than the side's fixed width (set by the first entry),
+        or can't be read back exactly (a trailing NUL, a `str` with no UTF-8
+        form).
     """
+    entries = iter(entries)
     if attr_name not in parent_group:
-        # Create the dict structure fresh with streaming appends
-        _stream_into_new_dict_attr(
+        _create_dict_attr(
             parent_group,
             attr_name,
-            entries,
+            next(entries, None),
             encode_cache,
             key_use_dataset,
             value_use_dataset,
         )
-    else:
-        # Extend the existing dict structure
-        _stream_into_existing_dict_attr(
-            parent_group, attr_name, entries, encode_cache
-        )
+    _stream_into_existing_dict_attr(
+        parent_group, attr_name, entries, encode_cache
+    )
 
 
 def _resolve_dict_target_group(
@@ -392,18 +403,57 @@ def get_dict_attr_keys(
     )
 
 
-def _stream_into_new_dict_attr(
+def side_length(iterable_group: h5py.Group) -> int:
+    """The number of entries a dict side physically holds."""
+    if iterable_group.attrs.get("storage_format", "groups") == "dataset":
+        return int(iterable_group["data"].shape[0])
+    return len(iterable_group)
+
+
+def _trim_side(iterable_group: h5py.Group, n: int) -> None:
+    """Cut a dict side back to its first `n` entries.
+
+    Resizes a dataset side or deletes groups `str(n)` and up. A side that
+    holds `n` or fewer entries is left alone.
+    """
+    length = side_length(iterable_group)
+    if length <= n:
+        return
+    if iterable_group.attrs.get("storage_format", "groups") == "dataset":
+        iterable_group["data"].resize((n,))
+    else:
+        for i in range(n, length):
+            del iterable_group[str(i)]
+
+
+def _drop_cache_entries_from(encode_cache: dict | None, first_id: int) -> None:
+    """Remove every encode-cache entry whose cache ID is `first_id` or more.
+
+    A hash key left with no entries is deleted. Does nothing without a cache.
+    """
+    if encode_cache is None:
+        return
+    for key in list(encode_cache):
+        kept = [e for e in encode_cache[key] if e[1] < first_id]
+        if kept:
+            encode_cache[key] = kept
+        else:
+            del encode_cache[key]
+
+
+def _create_dict_attr(
     parent_group: h5py.Group,
     attr_name: str,
-    entries: Iterable[tuple[Any, Any]],
+    first_entry: tuple[Any, Any] | None,
     encode_cache: dict | None,
     key_use_dataset: bool,
     value_use_dataset: bool,
 ) -> None:
-    """Create and stream entries into a fresh dict attribute.
+    """Create a fresh dict attribute holding `first_entry`, if any.
 
-    Streams entries one at a time without materializing the entire iterable.
-    For dataset-format sides, the dataset is created on the first entry.
+    With no first entry both sides are empty groups-format sides. If the
+    entry's write raises, the attribute is deleted, its encode-cache entries
+    are dropped, and the error propagates.
     """
     dict_group = parent_group.create_group(attr_name)
     dict_subgroup = dict_group.create_group("dict")
@@ -422,35 +472,24 @@ def _stream_into_new_dict_attr(
     keys_iterable_group.attrs["iterable_type"] = "list"
     values_iterable_group.attrs["iterable_type"] = "list"
 
-    # Track whether datasets have been created for dataset-format sides
-    keys_dataset_created = False
-    values_dataset_created = False
-
-    # Stream entries one at a time
-    for key, value in entries:
-        # Append value first, so a value-side failure never leaves an
-        # orphaned key with no matching value.
-        values_dataset_created = _stream_entry_into_iterable_side(
-            values_iterable_group,
-            value,
-            value_use_dataset,
-            values_dataset_created,
-            encode_cache,
-        )
-
-        keys_dataset_created = _stream_entry_into_iterable_side(
-            keys_iterable_group,
-            key,
-            key_use_dataset,
-            keys_dataset_created,
-            encode_cache,
-        )
-
-    # If no entries were provided, set default storage format
-    if not keys_dataset_created:
+    if first_entry is None:
         keys_iterable_group.attrs["storage_format"] = "groups"
-    if not values_dataset_created:
         values_iterable_group.attrs["storage_format"] = "groups"
+        return
+
+    key, value = first_entry
+    first_id = HDF5Encoder.ENCODE_ID
+    try:
+        _stream_entry_into_iterable_side(
+            values_iterable_group, value, value_use_dataset, encode_cache
+        )
+        _stream_entry_into_iterable_side(
+            keys_iterable_group, key, key_use_dataset, encode_cache
+        )
+    except BaseException:
+        del parent_group[attr_name]
+        _drop_cache_entries_from(encode_cache, first_id)
+        raise
 
 
 def _stream_into_existing_dict_attr(
@@ -459,7 +498,12 @@ def _stream_into_existing_dict_attr(
     entries: Iterable[tuple[Any, Any]],
     encode_cache: dict | None,
 ) -> None:
-    """Stream entries into an existing dict attribute, preserving formats."""
+    """Stream entries into an existing dict attribute, preserving formats.
+
+    Each entry is all or nothing: if either side's append raises, both sides
+    are cut back to their lengths before the entry, its encode-cache entries
+    are dropped, and the error propagates.
+    """
     dict_group = parent_group[attr_name]
     dict_subgroup = dict_group["dict"]
 
@@ -476,49 +520,48 @@ def _stream_into_existing_dict_attr(
         "storage_format", "groups"
     )
 
-    # Append each entry one at a time, validating value before key to ensure
-    # no partial writes on type mismatches (if value append fails, key is never appended)
+    n_values = side_length(values_iterable_group)
+    n_keys = side_length(keys_iterable_group)
     for key, value in entries:
-        _append_to_iterable_side(
-            values_iterable_group, value, values_storage_format, encode_cache
-        )
-        _append_to_iterable_side(
-            keys_iterable_group, key, keys_storage_format, encode_cache
-        )
+        first_id = HDF5Encoder.ENCODE_ID
+        try:
+            _append_to_iterable_side(
+                values_iterable_group,
+                value,
+                values_storage_format,
+                encode_cache,
+            )
+            _append_to_iterable_side(
+                keys_iterable_group, key, keys_storage_format, encode_cache
+            )
+        except BaseException:
+            _trim_side(values_iterable_group, n_values)
+            _trim_side(keys_iterable_group, n_keys)
+            _drop_cache_entries_from(encode_cache, first_id)
+            raise
+        n_values += 1
+        n_keys += 1
 
 
 def _stream_entry_into_iterable_side(
     iterable_group: h5py.Group,
     item: Any,
     use_dataset: bool,
-    dataset_created: bool,
     encode_cache: dict | None,
-) -> bool:
-    """Stream a single entry into a freshly-created iterable subgroup.
-
-    Handles both dataset creation (on the first entry) and appending.
-    Returns True if the dataset was created/is active, False if groups
-    format was used.
+) -> None:
+    """Write the first entry of a freshly-created iterable subgroup.
 
     Parameters
     ----------
     iterable_group : h5py.Group
-        The iterable subgroup to append to.
+        The empty iterable subgroup to write to.
     item : Any
-        The item to append.
+        The item to write.
     use_dataset : bool
-        Whether to use dataset format (only consulted on first entry if not
-        yet created; raises TypeError if True but item isn't a native scalar).
-    dataset_created : bool
-        Whether a dataset has already been created for this side. Only
-        relevant when called multiple times within the same fresh creation.
+        Whether to use dataset format (raises TypeError if True but item
+        isn't a native scalar).
     encode_cache : dict | None
         Cache for encoding operations.
-
-    Returns
-    -------
-    bool
-        True if item was written to dataset format, False if groups format.
 
     Raises
     ------
@@ -527,8 +570,7 @@ def _stream_entry_into_iterable_side(
     """
     hdf5_native_types = (int, float, bool, str, bytes)
 
-    if use_dataset and not dataset_created:
-        # First entry for a requested dataset-format side
+    if use_dataset:
         item_type = type(item)
 
         if item_type not in hdf5_native_types:
@@ -543,110 +585,62 @@ def _stream_entry_into_iterable_side(
         HDF5Encoder._encode_iterable_dataset(
             iterable_group, [item], extendable_dataset=True
         )
-        return True
-    elif dataset_created:
-        # Already in dataset format, append to it
-        _append_to_iterable_side(iterable_group, item, "dataset", encode_cache)
-        return True
     else:
-        # Use groups format; mark it on the first entry
-        next_index = len(iterable_group)
-        if next_index == 0:
-            iterable_group.attrs["storage_format"] = "groups"
-        item_group = iterable_group.create_group(
-            str(next_index), track_order=True
-        )
+        iterable_group.attrs["storage_format"] = "groups"
+        item_group = iterable_group.create_group("0", track_order=True)
         Serializable.encode(
             item, format="hdf5", h5_group=item_group, encode_cache=encode_cache
         )
-        return False
-
-
-def _check_string_truncation(item: Any, dtype: np.dtype) -> None:
-    """Check if a string/bytes item would be truncated by the dtype width."""
-    dtype_kind = dtype.kind
-    item_type = type(item)
-
-    if dtype_kind == "U":
-        # Unicode: itemsize in bytes, each char is 4 bytes
-        fixed_width = dtype.itemsize // 4
-    else:
-        # Byte string: itemsize in bytes
-        fixed_width = dtype.itemsize
-
-    item_length = len(item)
-    if item_length > fixed_width:
-        raise ValueError(
-            f"Cannot append {item_type.__name__} of length "
-            f"{item_length} to dataset with fixed width {fixed_width}"
-        )
-
-
-def _validate_string_bytes_type(
-    item: Any, dtype: np.dtype, iterable_group: h5py.Group
-) -> None:
-    """Validate string/bytes item type for a dataset."""
-    item_type = type(item)
-    dtype_kind = dtype.kind
-
-    if dtype_kind == "U":  # Unicode string
-        if not isinstance(item, str):
-            raise TypeError(
-                f"Cannot append {item_type.__name__} to dataset "
-                f"of string dtype {dtype}"
-            )
-    elif dtype_kind == "S":  # Byte string
-        # Check if originally a string (HDF5 stores strings as bytes)
-        original_type = iterable_group.attrs.get("original_type")
-        if original_type == "bytes":
-            if not isinstance(item, bytes):
-                raise TypeError(
-                    f"Cannot append {item_type.__name__} to dataset "
-                    f"of bytes dtype {dtype}"
-                )
-        else:
-            # Originally string, stored as bytes
-            if not isinstance(item, (str, bytes)):
-                raise TypeError(
-                    f"Cannot append {item_type.__name__} to dataset "
-                    f"of string dtype {dtype}"
-                )
 
 
 def _validate_item_for_dataset(
     item: Any, dtype: np.dtype, iterable_group: h5py.Group
-) -> None:
-    """Validate that an item can be appended to a dataset of given dtype.
+) -> Any:
+    """Validate an item for a dataset of the given dtype; return what to write.
 
-    Raises TypeError or ValueError if the item is incompatible.
+    Raises TypeError if the item's type doesn't fit the dataset, and
+    ValueError if a string/bytes item can't be stored exactly.
     """
     item_type = type(item)
     dtype_kind = dtype.kind
 
-    # Check type compatibility based on dtype kind
     if dtype_kind in ("i", "u"):  # integer types (signed, unsigned)
-        if not isinstance(item, (int, np.integer)):
+        if item_type is not int:
             raise TypeError(
                 f"Cannot append {item_type.__name__} to dataset "
                 f"of integer dtype {dtype}"
             )
     elif dtype_kind == "f":  # floating point types
-        if not isinstance(item, (float, np.floating)):
+        if item_type is not float:
             raise TypeError(
                 f"Cannot append {item_type.__name__} to dataset "
                 f"of float dtype {dtype}"
             )
     elif dtype_kind == "b":  # boolean types
-        if not isinstance(item, (bool, np.bool_)):
+        if item_type is not bool:
             raise TypeError(
                 f"Cannot append {item_type.__name__} to dataset "
                 f"of bool dtype {dtype}"
             )
-    elif dtype_kind in ("U", "S", "O"):  # string, bytes, or object types
-        if dtype_kind != "O":  # Not object, validate string/bytes
-            _validate_string_bytes_type(item, dtype, iterable_group)
-        # For object dtype, allow anything
-    else:
+    elif dtype_kind == "S":
+        expected = (
+            bytes
+            if iterable_group.attrs.get("original_type") == "bytes"
+            else str
+        )
+        if not isinstance(item, expected):
+            raise TypeError(
+                f"Cannot append {item_type.__name__} to dataset "
+                f"of {expected.__name__} dtype {dtype}"
+            )
+        data = _string_dataset_bytes(item)
+        if len(data) > dtype.itemsize:
+            raise ValueError(
+                f"Cannot append {item_type.__name__} of {len(data)} bytes "
+                f"to dataset with fixed width {dtype.itemsize}"
+            )
+        return data
+    elif dtype_kind != "O":  # object dtype accepts anything
         # For other types, try conversion
         try:
             np.array([item], dtype=dtype)
@@ -655,10 +649,21 @@ def _validate_item_for_dataset(
                 f"Cannot append {item_type.__name__} to dataset "
                 f"of dtype {dtype}"
             ) from e
+    return item
 
-    # For string/bytes, check truncation risk
-    if dtype_kind in ("U", "S"):
-        _check_string_truncation(item, dtype)
+
+def _make_side_growable(iterable_group: h5py.Group) -> None:
+    """Rewrite a fixed-size dataset side as an extendable one."""
+    if iterable_group.attrs.get("storage_format", "groups") != "dataset":
+        return
+    dataset = iterable_group["data"]
+    if dataset.chunks is not None or dataset.shape[0] == 0:
+        return
+    items = HDF5Encoder._decode_iterable_dataset(iterable_group)
+    del iterable_group["data"]
+    HDF5Encoder._encode_iterable_dataset(
+        iterable_group, items, extendable_dataset=True
+    )
 
 
 def _append_to_iterable_side(
@@ -669,38 +674,17 @@ def _append_to_iterable_side(
 ) -> None:
     """Append a single item to an iterable subgroup."""
     if storage_format == "dataset":
-        # Append to the dataset
+        # Dataset sides made by the generic encoder are fixed-size
+        _make_side_growable(iterable_group)
         dataset = iterable_group["data"]
         current_length = len(dataset)
-        dtype = dataset.dtype
 
-        # Validate item type and check for truncation
-        _validate_item_for_dataset(item, dtype, iterable_group)
+        to_write = _validate_item_for_dataset(
+            item, dataset.dtype, iterable_group
+        )
 
-        # If dataset was created non-chunked (e.g. by generic encoder), convert to extendable
-        if dataset.chunks is None:
-            existing_data = dataset[()]
-            del iterable_group["data"]
-            HDF5Encoder._encode_iterable_dataset(
-                iterable_group, list(existing_data), extendable_dataset=True
-            )
-            dataset = iterable_group["data"]
-            current_length = len(dataset)
-
-        # Resize and append
-        new_size = current_length + 1
-        dataset.resize((new_size,))
-
-        # Convert item to numpy array for assignment
-        if isinstance(item, (str, bytes)):
-            # Handle string/bytes specially
-            if isinstance(item, bytes):
-                item_to_write = item.decode("utf-8", errors="replace")
-            else:
-                item_to_write = item
-            dataset[current_length] = item_to_write
-        else:
-            dataset[current_length] = item
+        dataset.resize((current_length + 1,))
+        dataset[current_length] = to_write
     else:
         # Append to groups format
         next_index = len(iterable_group)
@@ -726,30 +710,7 @@ def _read_iterable_side(
     rather than one-at-a-time alongside values.
     """
     if storage_format == "dataset":
-        dataset = iterable_group["data"]
-        data = dataset[()]
-
-        # Convert numpy array back to Python types
-        if data.dtype.kind in ["i", "u"]:  # integer types
-            return [int(x) for x in data.flat]
-        elif data.dtype.kind == "f":  # float types
-            return [float(x) for x in data.flat]
-        elif data.dtype.kind == "b":  # boolean types
-            return [bool(x) for x in data.flat]
-        elif data.dtype.kind in ["U", "S"]:  # string types
-            # Check if original type was bytes
-            if iterable_group.attrs.get("original_type") == "bytes":
-                return [
-                    x.encode("utf-8") if isinstance(x, str) else x
-                    for x in data.flat
-                ]
-            else:
-                return [
-                    str(x, "utf-8") if isinstance(x, bytes) else str(x)
-                    for x in data.flat
-                ]
-        else:
-            return list(data.flat)
+        return HDF5Encoder._decode_iterable_dataset(iterable_group)
     else:
         # Read from groups format
         result = []
@@ -902,17 +863,10 @@ def get_dict_attr_value(
             return float(value)
         elif dataset.dtype.kind == "b":
             return bool(value)
-        elif dataset.dtype.kind in ["U", "S"]:
+        elif dataset.dtype.kind == "S":
             if values_iterable_group.attrs.get("original_type") == "bytes":
-                return (
-                    value.encode("utf-8") if isinstance(value, str) else value
-                )
-            else:
-                return (
-                    str(value, "utf-8")
-                    if isinstance(value, bytes)
-                    else str(value)
-                )
+                return bytes(value)
+            return value.decode("utf-8")
         else:
             return value
     else:

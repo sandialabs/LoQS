@@ -243,7 +243,9 @@ class ProgramResults(Displayable):
         It is seeded from the snapshot's own encode when this object writes the
         canonical file, by decoding the file when it already exists at
         construction, and emptied whenever the store is rebuilt for another
-        directory or filename."""
+        directory or filename. Its entries carry no object IDs, so a live object
+        reused across batches is written as a `copy` per batch, and read back as
+        one copy per shot."""
 
         self._shot_store_cache: CheckpointStore | None = None
         """The store `_shot_store()` hands out. Not serialized."""

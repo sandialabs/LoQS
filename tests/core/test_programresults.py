@@ -124,7 +124,7 @@ def _consolidate_spying_on_decode(
 
 
 def _trivial_quantum_program(
-    name: str, stack_depth: int = 3
+    name: str, stack_depth: int = 3, initial_history=None
 ) -> QuantumProgram:
     """A minimal `QuantumProgram` with a QSim state; `stack_depth` keeps that
     many of its three initialization instructions."""
@@ -151,6 +151,7 @@ def _trivial_quantum_program(
     ]
     return QuantumProgram(
         stack[:stack_depth],
+        initial_history=initial_history,
         default_noise_model=trivial_codepack.create_ideal_model(qubits),
         state_type=QSimQuantumState,
         patch_types={"Trivial": trivial_codepack.create_qec_code()},
@@ -1142,6 +1143,57 @@ class TestParentProgramFileWriting:
         # Modification time should be the same (same file, not rewritten)
         mtime2 = file2.stat().st_mtime
         assert mtime1 == mtime2
+
+    @pytest.mark.parametrize("worker_id", [None, "w0"])
+    def test_shot_colliding_with_a_program_object_keeps_its_content(
+        self, tmp_path, worker_id
+    ):
+        pytest.importorskip("quantumsim")
+        pytest.importorskip("stim")
+        program = _trivial_quantum_program(
+            "Colliding shot",
+            initial_history=History([Frame({"v": -1})]),
+        )
+        checkpoint_dir = tmp_path / "checkpoints"
+        results = ProgramResults(
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=checkpoint_dir,
+        )
+        results.add_shot(0, History([Frame({"v": -2})]))
+        results.checkpoint(checkpoint_dir, worker_id=worker_id)
+        if worker_id is not None:
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
+
+        loaded = ProgramResults()
+        loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+        assert loaded.shot_histories[0][0]["v"] == -2
+
+    def test_object_in_two_batches_reads_back_as_two_objects(self, tmp_path):
+        pytest.importorskip("quantumsim")
+        pytest.importorskip("stim")
+        from loqs.core.recordables.patchlayout import PatchRelation
+
+        program = _trivial_quantum_program("Object in two batches")
+        results = ProgramResults(
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=tmp_path,
+        )
+        rel = PatchRelation({"a": "L0"}, data={"x": 1})
+        for i in range(2):
+            results.add_shot(i, History([Frame({"rel": rel, "i": i})]))
+            results.checkpoint(tmp_path)
+        cache = results._checkpoint_encode_cache
+        assert not [e for v in cache.values() for e in v if e[0] is not None]
+
+        loaded = ProgramResults()
+        loaded.load_checkpoint(checkpoint_dir=tmp_path)
+        rel0 = loaded.get_shot_history(0)[0]["rel"]
+        rel1 = loaded.get_shot_history(1)[0]["rel"]
+        assert rel0.patch_labels == rel1.patch_labels
+        assert rel0.data == rel1.data
+        assert rel0 is not rel1
 
     def test_seeding_over_a_corrupt_parent_program_names_the_file(
         self, tmp_path

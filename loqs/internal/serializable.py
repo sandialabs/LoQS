@@ -16,10 +16,13 @@ from collections.abc import Mapping
 import contextvars
 import functools
 import gzip
+import hashlib
 import importlib
 import re
+import struct
 import h5py
 import numpy as np
+import scipy.sparse as sps
 from pathlib import Path
 from io import TextIOBase
 from typing import (
@@ -256,6 +259,52 @@ placeholder handed out by an earlier decode can sit in an object a later
 decode reaches by a plain reference, through a decode cache that spans
 decodes. It never resets.
 """
+
+# Encode-cache key format (`Serializable._serial_hash`): the SHA-256 digest
+# of a byte stream of entries, each a one-byte tag and a self-delimiting
+# payload. A tag names one kind of value and is never reused, so the stream
+# decodes back to one value, and equal keys mean equal content, in value and
+# in type. The kinds mirror the encoders' dispatch: a type they can write
+# needs an entry, and any other type raises `ValueError`.
+#
+# Leaves are the rows of `_LEAF_KINDS`: tag, byte length, payload. Other
+# kinds (`Serializable._serial_hash` and `_feed_composite`), where a count
+# is a little-endian uint64 and a name is a length-prefixed UTF-8 string:
+#   S  Serializable: its class's module and qualname, then each encoding
+#      attr; nested inside a value, just its 16-byte key
+#   R  cycle back to a Serializable on the recursion path: levels up
+#   d  dict: count, then key and value in order
+#   l  list, t  tuple: count, then the items
+#   e  set or frozenset: count, then the items' sorted 16-byte sub-digests
+#   a  array: dtype name, ndim, shape, C-order bytes
+#   o  object array: ndim, shape, then the items
+#   p  sparse matrix: CSR dtype name, shape, then data, indices and indptr
+#      as `a` entries
+#   y  class: module and qualname
+#   f  other callable: the source text the encoders write
+
+
+def _np_scalar_payload(value: np.generic) -> bytes:
+    dtype = value.dtype.str.encode("ascii")
+    return struct.pack("<Q", len(dtype)) + dtype + value.tobytes()
+
+
+_LEAF_KINDS: tuple[tuple[type, bytes, Callable[[Any], bytes]], ...] = (
+    (type(None), b"N", lambda v: b""),
+    (bool, b"B", lambda v: b"\x01" if v else b"\x00"),
+    (np.generic, b"g", _np_scalar_payload),
+    (int, b"i", lambda v: str(int(v)).encode("ascii")),
+    (float, b"F", lambda v: struct.pack("<d", v)),
+    (complex, b"c", lambda v: struct.pack("<2d", v.real, v.imag)),
+    (str, b"s", lambda v: v.encode("utf-8", "surrogatepass")),
+    (bytes, b"b", bytes),
+)
+"""Leaf kinds of the key format: type, tag, payload. A subclass matches the
+first row it's an instance of, so `bool` precedes `int` and `np.generic`
+precedes `float` (`np.float64` subclasses `float`)."""
+
+_LEAF_BY_TYPE = {kind: (tag, payload) for kind, tag, payload in _LEAF_KINDS}
+"""Exact-type lookup into `_LEAF_KINDS`, the fast path for common leaves."""
 
 
 @dataclass
@@ -676,131 +725,189 @@ class Serializable:
     """
 
     @staticmethod
-    def _serial_hash(obj: Any, _visited: set | None = None) -> int:
+    def _serial_hash(obj: Any, _visited: dict | None = None) -> int:
         """
-        Generate a unique serial ID for an object based on its serializable content.
+        Key an object by a digest of its encoded content.
 
-        This method recursively computes a hash of an object's serializable attributes,
-        allowing objects with identical content to share the same serial ID even if
-        they are different instances. During one top-level `encode`, each
-        `Serializable`'s hash is computed once (see `_SERIAL_HASH_MEMO`), and
-        a non-object numpy array is hashed from its raw bytes.
+        The key is the first 16 bytes of a SHA-256 digest of a type-tagged,
+        self-delimiting byte stream of the content the encoders write, as a
+        big-endian `int`. It is collision-resistant, so the encode cache can
+        treat an equal key as equal content. It is strict in type: `1`,
+        `True`, `1.0` and `np.int64(1)` all differ, and so do two classes
+        with equal attributes. It is deterministic across processes. During
+        one top-level `encode`, each `Serializable`'s key is computed once
+        (see `_SERIAL_HASH_MEMO`).
 
         Parameters
         ----------
         obj : Any
-            The object to compute a serial ID for.
-        _visited : set, optional
-            Internal parameter to track visited objects and prevent circular references.
+            The object to compute a key for.
+        _visited : dict, optional
+            Internal: object ID to depth, for the `Serializable`s on the
+            current recursion path. A cycle is keyed by how many levels up
+            its target sits, never by an address.
 
         Returns
         -------
         int
-            A hash representing the object's serializable content.
+            A 128-bit key for the object's serializable content.
+
+        Raises
+        ------
+        ValueError
+            If a value is of a type that cannot be encoded.
         """
         if _visited is None:
-            _visited = set()
+            _visited = {}
 
-        # Handle circular references by tracking object IDs
+        if not isinstance(obj, Serializable):
+            hasher = hashlib.sha256()
+            Serializable._feed_serial_hash(hasher, obj, _visited)
+            return int.from_bytes(hasher.digest()[:16], "big")
+
         obj_id = id(obj)
-        if obj_id in _visited:
-            # For circular references, use the object ID as a fallback
-            # This ensures we don't get infinite recursion
+        depth = _visited.get(obj_id)
+        if depth is not None:
             memo = _SERIAL_HASH_MEMO.get()
             if memo is not None:
                 # Hashes that met the cycle must not be memoized
                 memo.update(dict.fromkeys(_visited))
-            return hash(f"circular_ref_{obj_id}")
+            return int.from_bytes(
+                hashlib.sha256(
+                    b"R" + struct.pack("<Q", len(_visited) - depth)
+                ).digest()[:16],
+                "big",
+            )
 
         memo = _SERIAL_HASH_MEMO.get()
         if memo is not None and memo.get(obj_id) is not None:
             return memo[obj_id][1]
 
-        _visited.add(obj_id)
-
+        _visited[obj_id] = len(_visited)
         try:
-            if isinstance(obj, Serializable):
-                # For Serializable objects, hash the tuple of serial IDs of their _SERIALIZE_ATTRS
-                result = hash(
-                    tuple(
-                        Serializable._serial_hash(
-                            obj._get_encoding_attr(attr), _visited
-                        )
-                        for attr in obj._SERIALIZE_ATTRS
-                    )
+            cls = type(obj)
+            hasher = hashlib.sha256(b"S")
+            Serializable._feed_str(hasher, cls.__module__)
+            Serializable._feed_str(hasher, cls.__qualname__)
+            for attr in obj._SERIALIZE_ATTRS:
+                Serializable._feed_serial_hash(
+                    hasher, obj._get_encoding_attr(attr), _visited
                 )
-                if memo is not None and obj_id not in memo:
-                    memo[obj_id] = (obj, result)
-                return result
-            elif isinstance(obj, list):
-                # For lists, hash the tuple of serial IDs of each element
-                return hash(
-                    tuple(
-                        Serializable._serial_hash(item, _visited)
-                        for item in obj
-                    )
-                )
-            elif isinstance(obj, tuple):
-                # Element by element, tagged so a tuple and a list holding
-                # the same elements hash differently. Elements may hash
-                # coarsely (e.g. Instruction), so don't defer to hash().
-                return hash(
-                    (
-                        "tuple",
-                        tuple(
-                            Serializable._serial_hash(item, _visited)
-                            for item in obj
-                        ),
-                    )
-                )
-            elif isinstance(obj, dict):
-                # For dicts, hash the tuple of serial IDs of keys and values
-                keys_id = Serializable._serial_hash(list(obj.keys()), _visited)
-                values_id = Serializable._serial_hash(
-                    list(obj.values()), _visited
-                )
-                return hash((keys_id, values_id))
-            elif isinstance(obj, np.ndarray):
-                # Object arrays hash their elements (their bytes are pointers);
-                # any other array hashes its shape, dtype and raw bytes.
-                if obj.dtype.kind == "O":
-                    return hash(
-                        (
-                            Serializable._serial_hash(obj.shape, _visited),
-                            Serializable._serial_hash(
-                                obj.flatten().tolist(), _visited
-                            ),
-                        )
-                    )
-                return hash(
-                    ("ndarray", obj.shape, obj.dtype.str, obj.tobytes())
-                )
-            elif isinstance(obj, (set, frozenset)):
-                # Order-free: equal sets can iterate in different orders
-                return hash(
-                    frozenset(
-                        Serializable._serial_hash(item, _visited)
-                        for item in obj
-                    )
-                )
-            else:
-                # Base case: hash the object itself
-                try:
-                    return hash(obj)
-                except TypeError:
-                    # For unhashable objects, use their string representation
-                    return hash(str(obj))
+            result = int.from_bytes(hasher.digest()[:16], "big")
+            if memo is not None and obj_id not in memo:
+                memo[obj_id] = (obj, result)
+            return result
         finally:
-            _visited.remove(obj_id)
+            del _visited[obj_id]
+
+    @staticmethod
+    def _feed_str(hasher, text: str) -> None:
+        """Feed a length-prefixed UTF-8 string into a hasher."""
+        data = text.encode("utf-8", "surrogatepass")
+        hasher.update(struct.pack("<Q", len(data)))
+        hasher.update(data)
+
+    @staticmethod
+    def _feed_array(hasher, tag: bytes, arr: np.ndarray) -> None:
+        """Feed a non-object array's dtype, shape and C-order bytes."""
+        hasher.update(tag)
+        Serializable._feed_str(hasher, arr.dtype.str)
+        hasher.update(struct.pack(f"<Q{arr.ndim}Q", arr.ndim, *arr.shape))
+        hasher.update(arr.tobytes())
+
+    @staticmethod
+    def _feed_serial_hash(hasher, value: Any, _visited: dict) -> None:
+        """
+        Stream one value into a hasher for `_serial_hash`, as one entry of
+        the key format described above `_LEAF_KINDS`.
+
+        Raises
+        ------
+        ValueError
+            If the value is of a type that cannot be encoded.
+        """
+        leaf = _LEAF_BY_TYPE.get(type(value))
+        if leaf is None:
+            if Serializable._feed_composite(hasher, value, _visited):
+                return
+            leaf = next(
+                (
+                    (tag, payload)
+                    for kind, tag, payload in _LEAF_KINDS
+                    if isinstance(value, kind)
+                ),
+                None,
+            )
+            if leaf is None:
+                raise ValueError("Unknown type to encode")
+        tag, payload = leaf
+        data = payload(value)
+        hasher.update(tag + struct.pack("<Q", len(data)) + data)
+
+    @staticmethod
+    def _feed_composite(hasher, value: Any, _visited: dict) -> bool:
+        """
+        Feed a value of a non-leaf kind of the key format, in the encoders'
+        dispatch order, and return whether it was one.
+        """
+        update = hasher.update
+        pack = struct.pack
+        feed = Serializable._feed_serial_hash
+        if isinstance(value, Serializable):
+            key = Serializable._serial_hash(value, _visited)
+            update(b"S" + key.to_bytes(16, "big"))
+        elif isinstance(value, dict):
+            update(b"d" + pack("<Q", len(value)))
+            for k, v in value.items():
+                feed(hasher, k, _visited)
+                feed(hasher, v, _visited)
+        elif isinstance(value, np.ndarray) and value.dtype.kind == "O":
+            update(b"o" + pack(f"<Q{value.ndim}Q", value.ndim, *value.shape))
+            for item in value.flatten().tolist():
+                feed(hasher, item, _visited)
+        elif isinstance(value, np.ndarray):
+            Serializable._feed_array(hasher, b"a", value)
+        elif sps.issparse(value):
+            csr = value.tocsr()
+            update(b"p")
+            Serializable._feed_str(hasher, csr.dtype.str)
+            update(pack("<2Q", *csr.shape))
+            for arr in (csr.data, csr.indices, csr.indptr):
+                Serializable._feed_array(hasher, b"a", np.asarray(arr))
+        elif isinstance(value, (list, tuple)):
+            tag = b"l" if isinstance(value, list) else b"t"
+            update(tag + pack("<Q", len(value)))
+            for item in value:
+                feed(hasher, item, _visited)
+        elif isinstance(value, (set, frozenset)):
+            subdigests = []
+            for item in value:
+                sub = hashlib.sha256()
+                feed(sub, item, _visited)
+                subdigests.append(sub.digest()[:16])
+            update(b"e" + pack("<Q", len(subdigests)))
+            update(b"".join(sorted(subdigests)))
+        elif isinstance(value, type):
+            update(b"y")
+            Serializable._feed_str(hasher, value.__module__)
+            Serializable._feed_str(hasher, value.__qualname__)
+        elif callable(value):
+            update(b"f")
+            Serializable._feed_str(
+                hasher, Serializable._get_function_str(value)
+            )
+        else:
+            return False
+        return True
 
     @staticmethod
     def _content_equal(a: Any, b: Any) -> bool:
         """
         Exact structural equality of two possibly nested values.
 
-        Unlike comparing `_serial_hash` values, this ignores dict key
-        order, handles numpy arrays and never relies on a hash collision
-        being impossible.
+        Looser than comparing `_serial_hash` keys: it ignores dict key
+        order, falls back to `==` (so `1 == 1.0`), defers to a class's
+        own `__eq__`, and stops at the first difference.
 
         Rules, in order: identical objects are equal; a `Serializable`
         only equals one of the same type, compared with the class's own
@@ -1385,6 +1492,8 @@ class Serializable:
 
         ignore_no_serialize_flags : bool, optional
             Whether to ignore serialization flags and force serialization.
+            It can't be combined with an `encode_cache` (a `ValueError`),
+            because the cache's key reads attributes with the flags honoured.
 
         reset_encode_id : bool, optional
             Whether to reset the global encode ID counter. Useful for starting
@@ -1414,6 +1523,12 @@ class Serializable:
         >>> encoded_json["encode_type"]  # Should be 'Serializable'
         'Serializable'
         """
+        if ignore_no_serialize_flags and encode_cache is not None:
+            raise ValueError(
+                "ignore_no_serialize_flags=True cannot be combined with an "
+                "encode_cache: the cache key honours no-serialize flags"
+            )
+
         if _SERIAL_HASH_MEMO.get() is None:
             memo_token = _SERIAL_HASH_MEMO.set({})
             try:
@@ -1974,7 +2089,7 @@ class Serializable:
         if encode_cache is None or not obj._CACHE_ON_SERIALIZE:
             return encode_uncached_obj(obj)
 
-        # Get serial ID for this object
+        # Key this object by its content
         _serial_hash = Serializable._serial_hash(obj)
         object_id = id(obj)
 
@@ -2006,7 +2121,8 @@ class Serializable:
         else:
             HDF5Encoder.ENCODE_ID += 1
 
-        # Check if _serial_hash exists in cache (different instances with same content)
+        # A key match means equal content (see `_serial_hash`), so a
+        # different instance with a matching key is written as a copy
         if _serial_hash in encode_cache:
             # Same serial content but different instance, create a copy
             # First entry in list is the source object

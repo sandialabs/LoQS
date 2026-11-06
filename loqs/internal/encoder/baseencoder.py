@@ -12,6 +12,8 @@ from contextlib import contextmanager
 import copy
 from typing import Callable, ClassVar
 
+import numpy as np
+
 from loqs.internal.serializable import (
     DeferredRef,
     Serializable,
@@ -24,6 +26,9 @@ from loqs.internal.serializable import (
     IncorrectDecodableTypeError,
     MisformedDecodableError,
 )
+
+NUMPY_SCALAR_TYPES = (np.number, np.bool_)
+"""The numpy scalar types the encoders tag, so they read back with their dtype."""
 
 
 def copy_cached_reference(reference_obj):
