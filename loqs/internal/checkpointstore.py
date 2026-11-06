@@ -705,7 +705,7 @@ class _ReadableStore(BaseCheckpointStore):
         finally:
             _drop_transient(transient)
 
-    def iter_collected(  # noqa: C901
+    def _iter_collected(  # noqa: C901
         self,
         collect: Callable[[Any], Any],
         *,

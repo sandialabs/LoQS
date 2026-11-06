@@ -454,7 +454,7 @@ class ProgramResults(Displayable):
         )
         reader = self._shot_reader()
         if reader is not None:
-            stored = reader.iter_collected(
+            stored = reader._iter_collected(
                 collect,
                 keys=[
                     k for k in reader.keys() if k not in self.shot_histories
