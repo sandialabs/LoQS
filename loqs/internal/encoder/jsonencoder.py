@@ -17,10 +17,13 @@ from loqs.internal.serializable import (
     IncorrectDecodableTypeError,
     MisformedDecodableError,
 )
-from loqs.types import Bool, Float, Int
+from loqs.types import Int
 from loqs.internal import Serializable, SERIALIZATION_VERSION
 from loqs.internal.encoder import BaseEncoder
-from loqs.internal.encoder.baseencoder import copy_cached_reference
+from loqs.internal.encoder.baseencoder import (
+    NUMPY_SCALAR_TYPES,
+    copy_cached_reference,
+)
 from loqs.internal.versioning import VersionedDecoder
 
 # Per-shape version dispatch (see VersionedDecoder) -- one registry per
@@ -245,6 +248,14 @@ def _decode_json_primitive_v1(encoded):
         assert "version" in encoded
         assert "value" in encoded
         value = encoded["value"]
+        if "dtype" in encoded:
+            dtype = np.dtype(encoded["dtype"])
+            assert dtype.kind in "biufc"
+            if dtype.kind == "c":
+                return dtype.type(complex(*value))
+            return dtype.type(value)
+        if encoded.get("cast_to", None) == "complex":
+            return complex(*value)
         assert isinstance(value, EncodablePrimitives)
     return value
 
@@ -657,6 +668,11 @@ class JSONEncoder(BaseEncoder):
             "items": {},
         }
         for k, v in to_encode.items():
+            if isinstance(k, NUMPY_SCALAR_TYPES):
+                raise TypeError(
+                    f"Cannot encode a numpy scalar dict key ({k!r}) in JSON; "
+                    f"JSON keys are strings"
+                )
             # Handle tuple keys by converting to strings
             if isinstance(k, tuple):
                 encoded_k = str(k)
@@ -905,6 +921,12 @@ class JSONEncoder(BaseEncoder):
         attribute elsewhere in this codebase -- keeping strings wrapped
         avoids that collision, since a dict never matches that heuristic.
 
+        Numpy scalars keep their dtype, written in a wrapper with a `dtype`
+        field, and Python `complex` values are tagged `cast_to: "complex"`.
+        A numpy scalar that can't be stored exactly (a `timedelta64`, or a
+        floating or complex type wider than 64 or 128 bits) raises
+        `ValueError`.
+
         Parameters
         ----------
         to_encode : Any
@@ -913,13 +935,58 @@ class JSONEncoder(BaseEncoder):
         Returns
         -------
         Any
-            The primitive value directly (for JSON), except strings, which
-            keep the `{"encode_type": "primitive", ...}` wrapper.
+            The primitive value directly (for JSON), except strings, numpy
+            scalars and `complex`, which use the
+            `{"encode_type": "primitive", ...}` wrapper.
         """
-        if isinstance(to_encode, Bool):
-            # Checked before `Int`, since `bool` is a subclass of `int`.
+        # Exact Python types first: `np.float64` subclasses `float` and
+        # `np.complex128` subclasses `complex`, so they must not match here.
+        t = type(to_encode)
+        if t is bool or t is int or t is float or to_encode is None:
+            return to_encode
+        if t is str:
+            return {
+                "encode_type": "primitive",
+                "version": SERIALIZATION_VERSION,
+                "value": to_encode,
+            }
+
+        if isinstance(to_encode, NUMPY_SCALAR_TYPES):
+            dtype = to_encode.dtype
+            if dtype.kind not in "biufc":
+                raise ValueError(
+                    f"Cannot encode a numpy scalar of dtype {dtype} in JSON"
+                )
+            if (dtype.kind == "f" and dtype.itemsize > 8) or (
+                dtype.kind == "c" and dtype.itemsize > 16
+            ):
+                raise ValueError(
+                    f"Cannot store a numpy scalar of dtype {dtype} exactly "
+                    f"in JSON"
+                )
+            if dtype.kind == "c":
+                value = [float(to_encode.real), float(to_encode.imag)]
+            else:
+                value = to_encode.item()
+            return {
+                "encode_type": "primitive",
+                "version": SERIALIZATION_VERSION,
+                "value": value,
+                "dtype": dtype.name,
+            }
+
+        if isinstance(to_encode, complex):
+            return {
+                "encode_type": "primitive",
+                "version": SERIALIZATION_VERSION,
+                "value": [to_encode.real, to_encode.imag],
+                "cast_to": "complex",
+            }
+
+        # Subclasses of the Python primitives (e.g. an `IntEnum`)
+        if isinstance(to_encode, bool):
             return bool(to_encode)
-        elif isinstance(to_encode, Int):
+        elif isinstance(to_encode, int):
             return int(to_encode)
         elif isinstance(to_encode, str):
             return {
@@ -927,7 +994,7 @@ class JSONEncoder(BaseEncoder):
                 "version": SERIALIZATION_VERSION,
                 "value": to_encode,
             }
-        elif isinstance(to_encode, Float):
+        elif isinstance(to_encode, float):
             return float(to_encode)
 
         return to_encode

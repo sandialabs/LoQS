@@ -38,12 +38,15 @@ from loqs.internal.encoder.hdf5encoder import HDF5Encoder, _get_version
 from loqs.internal.serializable import ResolvingDecodeCache, Serializable
 from loqs.internal.streamingmerge import (
     _decode_group_entry,
+    _make_side_growable,
     decode_object_attrs,
     _read_iterable_side,
     _reset_empty_groups_format_dict_attr,
     _resolve_checkpoint_object_group,
+    _trim_side,
     merge_dict_attr,
     remove_transient_file,
+    side_length,
 )
 from loqs.internal.swmrledger import is_swmr_ledger_file
 
@@ -290,36 +293,6 @@ def _iterable_groups(
     return pair
 
 
-def side_length(iterable_group: h5py.Group) -> int:
-    """The number of entries a dict side physically holds."""
-    if iterable_group.attrs.get("storage_format", "groups") == "dataset":
-        return int(iterable_group["data"].shape[0])
-    return len(iterable_group)
-
-
-def _make_side_growable(iterable_group: h5py.Group) -> None:
-    """Rewrite a fixed-size dataset side as an extendable one."""
-    if iterable_group.attrs.get("storage_format", "groups") != "dataset":
-        return
-    dataset = iterable_group["data"]
-    if dataset.chunks is not None or dataset.shape[0] == 0:
-        return
-    data = dataset[()]
-    if (
-        data.dtype.kind == "S"
-        and iterable_group.attrs.get("original_type") != "bytes"
-    ):
-        items: list[Any] = [x.decode("utf-8") for x in data.flat]
-    elif data.dtype.kind in ("S", "U"):
-        items = list(data.flat)
-    else:
-        items = [x.item() if isinstance(x, np.generic) else x for x in data]
-    del iterable_group["data"]
-    HDF5Encoder._encode_iterable_dataset(
-        iterable_group, items, extendable_dataset=True
-    )
-
-
 class CheckpointReadError(RuntimeError):
     """A store file could not be read.
 
@@ -368,10 +341,10 @@ def _dataset_value(values_group: h5py.Group, pos: int) -> Any:
         return float(value)
     if kind == "b":
         return bool(value)
-    if kind in ("U", "S"):
+    if kind == "S":
         if values_group.attrs.get("original_type") == "bytes":
-            return value.encode("utf-8") if isinstance(value, str) else value
-        return str(value, "utf-8") if isinstance(value, bytes) else str(value)
+            return bytes(value)
+        return value.decode("utf-8")
     return value
 
 
@@ -597,15 +570,19 @@ class _ReadableStore(BaseCheckpointStore):
 
 
 def _working_copy(encode_cache: dict | None) -> dict:
-    """A copy of an encode cache that encoding can't change in place.
+    """A copy of an encode cache that encoding can't change in place, and
+    that carries no object IDs.
 
-    Encoding appends to the per-hash lists, so the lists are copied too.
+    An object ID only names its object while that object lives. A cache
+    that outlives the objects would take a new equal-content object at a
+    freed address for the old one and write a `reference` to it. With no
+    IDs left only a hash's first entry is ever read, so each hash keeps
+    just its source's entry and the copies' entries go too.
     """
     if encode_cache is None:
         return {}
     return {
-        key: list(value) if isinstance(value, list) else value
-        for key, value in encode_cache.items()
+        key: [(None, entries[0][1])] for key, entries in encode_cache.items()
     }
 
 
@@ -702,14 +679,8 @@ def _trim_attr(
     if committed == 0:
         del container[name]
         return
-    for side, length in zip(sides, lengths):
-        if length == committed:
-            continue
-        if side.attrs.get("storage_format", "groups") == "dataset":
-            side["data"].resize((committed,))
-        else:
-            for i in range(committed, length):
-                del side[str(i)]
+    for side in sides:
+        _trim_side(side, committed)
 
 
 def _read_next_id(f: h5py.File, path: str | os.PathLike) -> int:
@@ -1381,7 +1352,7 @@ class CheckpointStore(_ReadableStore):
                     added[streamed.name] = [key for key, _ in pairs]
             writer.commit(added)
         if encode_cache is not None:
-            encode_cache.update(work)
+            encode_cache.update(_working_copy(work))
 
     def consolidate(
         self, *, encode_cache: dict | None = None
@@ -1411,6 +1382,8 @@ class CheckpointStore(_ReadableStore):
                     appended.update(
                         self._merge_payload(writer, path, work, shared)
                     )
+                    # No payload's object IDs reach the next payload.
+                    work = _working_copy(work)
             if encode_cache is not None:
                 encode_cache.update(work)
         self._remove_leftovers(payloads)
