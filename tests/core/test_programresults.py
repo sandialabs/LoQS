@@ -427,6 +427,27 @@ class TestProgramResults:
                 assert shot is not None
                 assert shot[0]["shot_id"] == i
 
+    def test_add_shot_replaces_a_lazily_read_shot(self, tmp_path):
+        """A shot replaced after a lazy read is what reads back, and the
+        cache bookkeeping stays consistent for later evictions."""
+        results = ProgramResults(max_memory_shots=1)
+        for i in (0, 1):
+            results.add_shot(i, History([Frame({"v": i})]))
+        checkpoint_dir = tmp_path / "checkpoints"
+        results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+        results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
+        assert results.get_shot_history(1)[0]["v"] == 1
+
+        results.add_shot(1, History([Frame({"v": 99})]))
+        assert results.get_shot_history(1)[0]["v"] == 99
+        # This lazy read evicts, so it raises if shot 1 is still listed
+        assert results.get_shot_history(0)[0]["v"] == 0
+        assert results.collect_shot_data("v", indices=-1) == [0, 99]
+
+    def test_max_memory_shots_below_one_raises(self):
+        with pytest.raises(ValueError):
+            ProgramResults(max_memory_shots=0)
+
     def test_checkpoint_of_nothing(self, tmp_path):
         """Checkpointing no shots writes no files, and loading from a
         missing or empty directory is a no-op."""

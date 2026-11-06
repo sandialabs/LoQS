@@ -1321,7 +1321,7 @@ class QuantumProgram(Displayable):
             otherwise it is not included in the dict
 
         Finally, if all sources are exhausted and no object has been found,
-        a `ValueError` will be raised.
+        a `RuntimeError` will be raised.
 
         Parameters
         ----------
@@ -1430,7 +1430,7 @@ class QuantumProgram(Displayable):
                         idxs = int(idx_str)
                     except ValueError:
                         raise ValueError(
-                            "Invalid index spec for history priority for {name}"
+                            f"Invalid index spec for history priority for {name}"
                         )
 
                 # Collect the requested data; out-of-range indices (e.g.

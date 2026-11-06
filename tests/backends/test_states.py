@@ -201,9 +201,11 @@ def test_init_and_copy(adapter):
     assert adapter.probe(adapter.make(2, LABELS)) == [0, 0]
 
     source = adapter.make([1, 0], LABELS)
-    assert adapter.probe(adapter.cls(source, LABELS)) == [1, 0]
-
-    for dup in (source.copy(), copy.deepcopy(source)):
+    for dup in (
+        adapter.cls(source, LABELS),
+        source.copy(),
+        copy.deepcopy(source),
+    ):
         assert dup is not source
         assert adapter.probe(dup) == [1, 0]
         # Editing the copy must leave the source alone

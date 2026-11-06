@@ -186,6 +186,27 @@ class TestPatchBuilderAndRemoverInstructions:
         assert "L0" not in f["patches"]
 
 
+class TestRepeatUntilSuccessInstruction:
+
+    @pytest.mark.parametrize(
+        "expected,mapped",
+        [
+            (True, True),
+            (MeasurementOutcomes({"Q0": [1]}), {"Q1": [1]}),
+        ],
+        ids=["bool", "outcomes"],
+    )
+    def test_map_qubits(self, expected, mapped):
+        inst = builders.build_repeat_until_success_instruction(
+            instructions=[Instruction(lambda: Frame({}), name="Leaf")],
+            rus_key="ok",
+            expected=expected,
+            name="RUS",
+        )
+        new = inst.map_qubits({"Q0": "Q1"})
+        assert new.data["expected"] == mapped
+
+
 class TestLookupDecoderInstruction:
     """The lookup decoder reads its syndrome from the history slice its
     priorities name, XORs with the previous raw syndrome, applies the
