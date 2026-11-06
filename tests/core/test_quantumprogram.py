@@ -1,5 +1,7 @@
 """Tester for loqs.core.quantumprogram"""
 
+import warnings
+
 import pytest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -193,6 +195,22 @@ class TestQuantumProgram:
 
         assert len(program_results.shot_histories) == 1
         assert len(program_results.shot_histories[0]) > 0
+
+    def test_history_initial_history_expires_initial_state(self):
+        initial = History([Frame({"state": QSimQuantumState(1, ["Q0"])})])
+        program = _build_state_program(
+            "History initial history", initial_history=initial
+        )
+
+        results = program.run()
+
+        shot_history = results.shot_histories[0]
+        with pytest.warns(UserWarning):
+            shot_history[0]["state"]
+        # The run leaves the caller's initial history untouched
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            initial[0]["state"]
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_program_serialization_parameterized(self, format, make_temp_path):
