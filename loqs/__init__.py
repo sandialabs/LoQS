@@ -23,3 +23,4 @@ from . import core
 # Import after core
 from . import codepacks
 from . import tools
+from . import engines
