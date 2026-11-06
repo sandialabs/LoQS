@@ -14,6 +14,7 @@ import h5py
 import numpy as np
 
 import loqs.core.programresults as programresults_module
+import loqs.internal.checkpointstore as checkpointstore_module
 import loqs.internal.swmrledger as swmrledger_module
 from loqs.core.programresults import ProgramResults
 from loqs.internal.checkpointstore import (
@@ -30,6 +31,11 @@ from loqs.core.history import History
 from loqs.core import Frame, QuantumProgram
 from loqs.internal.serializable import Serializable
 from loqs.internal import worker_id as global_worker_id
+from tests.tools._shared_checkpoint_test_helpers import (
+    as_fresh_process,
+    build_tagged_program,
+    cache_nodes,
+)
 
 
 def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
@@ -38,7 +44,7 @@ def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
     work, run via `multiprocessing.Pool` so several of these genuinely
     execute at the same time."""
     checkpoint_dir, worker_id, shots_per_worker = args
-    results = ProgramResults(lazy_loading=False)
+    results = ProgramResults()
     for i in range(shots_per_worker):
         history = History()
         history.append(Frame({"worker_id": worker_id, "local_shot": i}))
@@ -49,8 +55,8 @@ def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
 def _results_with_shots(
     indices: Iterable[int], frame_key: str = "shot", **kwargs: Any
 ) -> ProgramResults:
-    """A non-lazy `ProgramResults` holding one single-frame shot per index."""
-    results = ProgramResults(lazy_loading=False, **kwargs)
+    """A `ProgramResults` holding one single-frame shot per index."""
+    results = ProgramResults(**kwargs)
     for i in indices:
         history = History()
         history.append(Frame({frame_key: i}))
@@ -311,7 +317,7 @@ class TestProgramResults:
         that bypasses the store or skips the bootstrap snapshot."""
         from loqs.internal.checkpointstore import COMMIT_MARKER_ATTR
 
-        results = ProgramResults(name="fresh", lazy_loading=False)
+        results = ProgramResults(name="fresh")
         for i in range(2):
             history = History()
             history.append(Frame({"shot": i}))
@@ -369,12 +375,12 @@ class TestProgramResults:
                 )
 
         checkpoint_dir = tmp_path / "checkpoints"
-        worker1 = ProgramResults(name="Worker 1", lazy_loading=False)
+        worker1 = ProgramResults(name="Worker 1")
         for batch in ((0, 1), (2, 3)):
             add_shots(worker1, batch)
             worker1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
             assert len(worker1._unwritten_shots) == 0
-        worker2 = ProgramResults(name="Worker 2", lazy_loading=False)
+        worker2 = ProgramResults(name="Worker 2")
         add_shots(worker2, (4, 5))
         worker2.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w2")
 
@@ -397,8 +403,8 @@ class TestProgramResults:
         final.load_checkpoint(checkpoint_dir=checkpoint_dir)
         assert_loaded(final, range(8))
 
-    def test_lazy_loading(self):
-        """Test lazy loading functionality."""
+    def test_checkpointed_shots_leave_memory_and_read_back(self):
+        """Checkpointed shots leave memory and read back from the store."""
         with tempfile.TemporaryDirectory() as temp_dir:
             results = ProgramResults(
                 name="Lazy Loading Test", max_memory_shots=2
@@ -414,8 +420,7 @@ class TestProgramResults:
             results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
             results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
-            # Clear in-memory shots (simulate lazy loading scenario)
-            results.shot_histories.clear()
+            assert results.shot_histories == {}
 
             for i in (0, 1, 2):
                 shot = results.get_shot_history(i)
@@ -459,7 +464,7 @@ class TestProgramResults:
         checkpoint_dir = tmp_path / "checkpoints"
 
         def checkpoint_shots(indices, worker_id):
-            results = ProgramResults(name="Memory Test", lazy_loading=False)
+            results = ProgramResults(name="Memory Test")
             for i in indices:
                 history = History()
                 history.append(
@@ -530,9 +535,7 @@ class TestProgramResults:
             with tempfile.TemporaryDirectory() as temp_dir:
                 checkpoint_dir = Path(temp_dir) / "checkpoints"
 
-                results = ProgramResults(
-                    name="Wall Clock Memory Test", lazy_loading=False
-                )
+                results = ProgramResults(name="Wall Clock Memory Test")
                 for i in range(num_shots):
                     history = History()
                     history.append(
@@ -627,7 +630,7 @@ class TestShotCheckpointBatchWithLedger:
         a mark made before or regardless of the write, or between the write
         and its commit."""
         checkpoint_dir = tmp_path / "checkpoints"
-        results = ProgramResults(lazy_loading=False)
+        results = ProgramResults()
         for i in range(3):
             history = History()
             history.append(Frame({"shot": i}))
@@ -695,7 +698,7 @@ class TestMixedFormatShotCheckpoints:
         checkpoint_dir = tmp_path / "checkpoints"
         checkpoint_dir.mkdir()
 
-        live = ProgramResults(lazy_loading=False)
+        live = ProgramResults()
         for i in range(2, 4):
             history = History()
             history.append(Frame({"shot_id": i}))
@@ -768,16 +771,16 @@ class TestMixedFormatShotCheckpoints:
         """A checkpoint under the `worker_id` of a killed writer succeeds,
         and the reloaded run holds the killed and the new shots."""
         checkpoint_dir = tmp_path / "checkpoints"
-        canonical = ProgramResults(lazy_loading=False)
+        canonical = ProgramResults()
         canonical.add_shot(0, self._shot_history(0))
         canonical.checkpoint(checkpoint_dir=checkpoint_dir)
         self._write_killed_writer_files(checkpoint_dir)
 
-        results = ProgramResults(lazy_loading=False)
+        results = ProgramResults()
         results.add_shot(8, self._shot_history(8))
         results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="killed")
 
-        loaded = ProgramResults(lazy_loading=False)
+        loaded = ProgramResults()
         loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
         assert set(loaded.shot_histories) == {0, 6, 7, 8}
 
@@ -795,7 +798,7 @@ class TestMixedFormatShotCheckpoints:
 
         # A serial writer's results.h5: shots 0-3 with wall-clock times and
         # a non-default name.
-        canonical = ProgramResults(name="mixed run", lazy_loading=False)
+        canonical = ProgramResults(name="mixed run")
         for i in range(4):
             canonical.add_shot(
                 i, self._shot_history(i), wall_clock_time=0.5 + i
@@ -804,7 +807,7 @@ class TestMixedFormatShotCheckpoints:
 
         # A live writer in this process: ledger plus payload, shots 4-5,
         # no wall-clock times.
-        live = ProgramResults(lazy_loading=False)
+        live = ProgramResults()
         for i in (4, 5):
             live.add_shot(i, self._shot_history(i))
         live.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="live")
@@ -816,7 +819,7 @@ class TestMixedFormatShotCheckpoints:
         assert store.keys() == list(range(8))
         assert store.missing(range(10)) == [8, 9]
 
-        loaded = ProgramResults(lazy_loading=False)
+        loaded = ProgramResults()
         loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
         assert loaded.name == "mixed run"
         assert set(loaded.shot_histories) == set(range(8))
@@ -831,16 +834,17 @@ class TestMixedFormatShotCheckpoints:
         ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
         assert list(checkpoint_dir.iterdir()) == [store.canonical_path]
 
-        consolidated = ProgramResults(lazy_loading=False)
+        consolidated = ProgramResults()
         consolidated.load_checkpoint(checkpoint_dir=checkpoint_dir)
         assert set(consolidated.shot_histories) == set(range(8))
         for i in range(8):
             assert consolidated.shot_histories[i][0]["shot_id"] == i
 
-    def test_lazy_reads_follow_a_payload_into_consolidation(self, tmp_path):
-        """A lazy reader finds a shot in an unconsolidated payload, and
-        keeps finding the others once consolidation moved them into
-        `results.h5` and deleted the payload."""
+    def test_lazy_reads_follow_other_writers(self, tmp_path, monkeypatch):
+        """A lazy reader's cached key index follows another writer's new
+        payload, consolidation deleting payloads, and a canonical append
+        that leaves the source list and (on a coarse-timestamp filesystem)
+        the file identity unchanged."""
         checkpoint_dir = tmp_path / "checkpoints"
         results = ProgramResults()
         for i in range(2):
@@ -849,23 +853,56 @@ class TestMixedFormatShotCheckpoints:
         payload_file = checkpoint_dir / "worker_w0_shots_0_payload.h5"
         assert payload_file.exists()
 
-        shot_1 = results.get_shot_history(1)
-        assert shot_1 is not None
-        assert shot_1[0]["shot_id"] == 1
+        def shot_id(i: int) -> int | None:
+            shot = results.get_shot_history(i)
+            return None if shot is None else shot[0]["shot_id"]
+
+        def other_writes(i: int, **kwargs: Any) -> None:
+            other = ProgramResults()
+            other.add_shot(i, self._shot_history(i))
+            other.checkpoint(checkpoint_dir=checkpoint_dir, **kwargs)
+
+        assert shot_id(1) == 1
+        other_writes(2, worker_id="w1")
+        assert shot_id(2) == 2
 
         ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
         assert not payload_file.exists()
 
-        shot_0 = results.get_shot_history(0)
-        assert shot_0 is not None
-        assert shot_0[0]["shot_id"] == 0
+        monkeypatch.setattr(
+            CheckpointStore,
+            "_identity",
+            staticmethod(lambda st: (st.st_dev, st.st_ino)),
+        )
+        assert shot_id(0) == 0
+        other_writes(3)
+        assert shot_id(3) == 3
+
+    def test_collect_shot_data_leaves_no_history_in_the_decode_cache(
+        self, tmp_path
+    ):
+        """After a lazy collect and a `get_shot_history`, the store's decode
+        cache holds no shot `History`, including a source another shot's
+        `copy` resolved."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        writer = ProgramResults()
+        for i in (1, 2, 0):
+            writer.add_shot(i, self._shot_history(i % 2))
+            writer.checkpoint(checkpoint_dir=checkpoint_dir)
+        results = ProgramResults(checkpoint_dir=checkpoint_dir)
+        assert results.collect_shot_data("shot_id", [0]) == [[0], [1], [0]]
+        results.get_shot_history(1)
+        assert not any(
+            isinstance(v, History)
+            for v in results._shot_store()._canonical_decode_cache.values()
+        )
 
     def test_checkpoint_closes_shot_ledger_on_return(self, tmp_path):
         """A lone `checkpoint()` call closes and unregisters its shot ledger
         before returning; a handle left open would block consolidation's
         delete on Windows."""
         checkpoint_dir = tmp_path / "checkpoints"
-        results = ProgramResults(lazy_loading=False)
+        results = ProgramResults()
         for i in range(2):
             results.add_shot(i, self._shot_history(i))
         results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
@@ -891,7 +928,7 @@ class TestMixedFormatShotCheckpoints:
         ledger_path = (
             _shot_store(checkpoint_dir).ledger_path(global_worker_id())
         ).resolve()
-        results = ProgramResults(lazy_loading=False)
+        results = ProgramResults()
 
         with programresults_module._held_shot_ledger(
             checkpoint_dir, global_worker_id()
@@ -920,7 +957,7 @@ class TestMixedFormatShotCheckpoints:
         from loqs.internal.streamingmerge import get_dict_attr_keys
 
         checkpoint_dir = tmp_path / "checkpoints"
-        results = ProgramResults(lazy_loading=False)
+        results = ProgramResults()
         for i in range(2):
             results.add_shot(i, self._shot_history(i))
         results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
@@ -942,7 +979,7 @@ class TestMixedFormatShotCheckpoints:
                     checkpoint_dir=checkpoint_dir
                 )
         assert ledger_path.exists() and payload_path.exists()
-        loaded = ProgramResults(lazy_loading=False)
+        loaded = ProgramResults()
         loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
         assert set(loaded.shot_histories) == {0, 1}
 
@@ -966,7 +1003,7 @@ class TestLiveShotCount:
         checkpoint_dir.mkdir()
 
         def shots(indices) -> ProgramResults:
-            pr = ProgramResults(lazy_loading=False)
+            pr = ProgramResults()
             for i in indices:
                 history = History()
                 history.append(Frame({"shot_id": i}))
@@ -1189,12 +1226,78 @@ class TestParentProgramFileWriting:
                 checkpoint_dir=checkpoint_dir,
             )
 
+    def test_fresh_snapshot_seeds_from_its_own_encode(self, tmp_path):
+        """A fresh object's seed equals the one a resume decodes, and shots
+        written after either seeding read back with the right program."""
+        d = tmp_path / "ckpt"
+        program = build_tagged_program()
+        as_fresh_process()
+        fresh = ProgramResults(
+            parent_program=program, checkpoint_enabled=True, checkpoint_dir=d
+        )
+        seed = fresh._checkpoint_encode_cache
+        assert seed
+        assert seed == CheckpointStore(d, SHOT_LAYOUT).shared_encode_cache()
+
+        def add(results, i):
+            frame = Frame({"program_ref": program, "seed": i})
+            results.add_shot(i, History([frame]))
+            results.checkpoint(checkpoint_dir=d)
+
+        add(fresh, 0)
+        add(fresh, 1)
+        as_fresh_process()
+        resumed = ProgramResults(
+            parent_program=program, checkpoint_enabled=True, checkpoint_dir=d
+        )
+        add(resumed, 2)
+        add(resumed, 3)
+
+        path = d / "results.h5"
+        assert [
+            n["cache_type"]
+            for n in cache_nodes(path)
+            if n.get("class") == "QuantumProgram"
+        ] == ["source"]
+        store = CheckpointStore(d, SHOT_LAYOUT)
+        for i in range(4):
+            frame = store.get(i)[0]
+            assert frame["seed"] == i
+            assert Serializable._serial_hash(
+                frame["program_ref"]
+            ) == Serializable._serial_hash(program)
+
+    def test_checkpoint_into_a_second_directory_reads_back(self, tmp_path):
+        """Checkpointing into a second directory drops the first one's cache,
+        so a shot written there reads back as the right program."""
+        a, b = tmp_path / "a", tmp_path / "b"
+        program = build_tagged_program()
+        other = build_tagged_program()
+        other.name = "another program"
+        ProgramResults(
+            parent_program=other, checkpoint_enabled=True, checkpoint_dir=b
+        )
+        results = ProgramResults(
+            parent_program=program, checkpoint_enabled=True, checkpoint_dir=a
+        )
+        for i, target in enumerate((a, b)):
+            frame = Frame({"program_ref": program, "seed": i})
+            results.add_shot(i, History([frame]))
+            results.checkpoint(checkpoint_dir=target)
+
+        frame = CheckpointStore(b, SHOT_LAYOUT).get(1)[0]
+        assert frame["seed"] == 1
+        assert Serializable._serial_hash(
+            frame["program_ref"]
+        ) == Serializable._serial_hash(program)
+
 
 class TestResumeCheckpointing:
     """Test resume functionality for checkpoint-enabled runs."""
 
     def test_nested_source_reads(self, tmp_path):
-        """A nested proxy returns its own entry's shots, `None` for another
+        """A nested proxy returns its own entry's shots, leaving no
+        `History` in the enclosing store's decode cache, `None` for another
         entry's, and `collect_shot_data` reads it."""
         store = _write_nested_source(
             tmp_path,
@@ -1204,13 +1307,16 @@ class TestResumeCheckpointing:
             },
         )
 
-        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr = ProgramResults()
         nested_pr._set_nested_shot_source(store.nested(0))
 
         history = nested_pr.get_shot_history(1)
         assert history is not None
         assert history[0]["nested"] == 1
-        assert 1 in nested_pr._memory_cache
+        assert not any(
+            isinstance(v, History)
+            for v in store._canonical_decode_cache.values()
+        )
         assert nested_pr.get_shot_history(4) is None
 
         assert not nested_pr.shot_histories
@@ -1223,7 +1329,7 @@ class TestResumeCheckpointing:
             tmp_path, max_frame_limit=17
         )
 
-        nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
+        nested_pr = ProgramResults(max_frame_limit=None)
         nested_pr._set_nested_shot_source(store.nested(0))
 
         def always_fails(path, mode, *args, **kwargs):
@@ -1241,7 +1347,7 @@ class TestResumeCheckpointing:
         `CheckpointReadError` naming it. Catches corruption read as "not
         there"."""
         checkpoint_dir = tmp_path / "checkpoints"
-        results = ProgramResults(num_shots=2, lazy_loading=False)
+        results = ProgramResults(num_shots=2)
         for i in range(2):
             history = History()
             history.append(Frame({"shot": i}))
@@ -1249,7 +1355,7 @@ class TestResumeCheckpointing:
         results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
         results.consolidate_checkpoints(checkpoint_dir)
 
-        reader = ProgramResults(num_shots=3, lazy_loading=True)
+        reader = ProgramResults(num_shots=3)
         reader._checkpoint_dir = checkpoint_dir
         assert reader.get_shot_history(2) is None
         assert reader.get_shot_history(1) is not None
@@ -1266,14 +1372,14 @@ class TestResumeCheckpointing:
         on disk, collects all three in index order. Catches the in-memory
         shortcut dropping evicted shots."""
         checkpoint_dir = tmp_path / "checkpoints"
-        writer = ProgramResults(num_shots=3, lazy_loading=False)
+        writer = ProgramResults(num_shots=3)
         for i in range(3):
             history = History()
             history.append(Frame({"shot": i}))
             writer.add_shot(i, history)
         writer.checkpoint(checkpoint_dir=checkpoint_dir)
 
-        reader = ProgramResults(num_shots=3, lazy_loading=True)
+        reader = ProgramResults(num_shots=3)
         reader._checkpoint_dir = checkpoint_dir
         for i in (0, 2):
             history = History()
@@ -1290,14 +1396,14 @@ class TestResumeCheckpointing:
         calls = []
         for n_shots in (2, 6):
             checkpoint_dir = tmp_path / f"checkpoints{n_shots}"
-            writer = ProgramResults(num_shots=n_shots, lazy_loading=False)
+            writer = ProgramResults(num_shots=n_shots)
             for i in range(n_shots):
                 history = History()
                 history.append(Frame({"shot": i}))
                 writer.add_shot(i, history)
             writer.checkpoint(checkpoint_dir=checkpoint_dir)
 
-            reader = ProgramResults(num_shots=n_shots, lazy_loading=True)
+            reader = ProgramResults(num_shots=n_shots)
             reader._checkpoint_dir = checkpoint_dir
             store = reader._shot_store()
             real_key_index = store._key_index
@@ -1320,7 +1426,7 @@ class TestResumeCheckpointing:
         )
 
         # Load from nested source with decoding spy
-        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr = ProgramResults()
         nested_pr._set_nested_shot_source(store.nested(0))
 
         # Spy on Serializable.decode, capturing each group's path eagerly
@@ -1376,17 +1482,17 @@ class TestResumeCheckpointing:
             tmp_path, max_frame_limit=17
         )
 
-        resolved = ProgramResults(lazy_loading=True, max_frame_limit=None)
+        resolved = ProgramResults(max_frame_limit=None)
         resolved._set_nested_shot_source(store.nested(0))
         assert resolved.name == "RealName"
         assert resolved.parent_program == "RealProgram"
         assert resolved.max_frame_limit == 17
 
-        preset_limit = ProgramResults(lazy_loading=True, max_frame_limit=99)
+        preset_limit = ProgramResults(max_frame_limit=99)
         preset_limit._set_nested_shot_source(store.nested(0))
         assert preset_limit.max_frame_limit == 99
 
-        assigned = ProgramResults(lazy_loading=True)
+        assigned = ProgramResults()
         assigned._set_nested_shot_source(store.nested(0))
         assigned.name = "ExplicitName"
         assigned.parent_program = "ExplicitParent"
@@ -1403,7 +1509,7 @@ class TestResumeCheckpointing:
         implementation would trip."""
         store = self._build_nested_source_with_name_and_parent(tmp_path)
 
-        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr = ProgramResults()
         nested_pr._set_nested_shot_source(store.nested(0))
 
         real_decode = Serializable.decode
@@ -1431,7 +1537,7 @@ class TestResumeCheckpointing:
         path = store.canonical_path
         path.write_bytes(path.read_bytes()[:200])
 
-        nested_pr = ProgramResults(lazy_loading=True)
+        nested_pr = ProgramResults()
         nested_pr._set_nested_shot_source(store.nested(0))
 
         with pytest.raises(CheckpointReadError):
@@ -1469,3 +1575,205 @@ class TestResumeCheckpointing:
 
             assert indices == [0, 1, 2, 3, 4]
             assert not any(isinstance(value, History) for value in decoded)
+
+
+class _Marker(Serializable):
+    """A cached object a frame can hold, to select by value."""
+
+    _SERIALIZE_ATTRS = ["value"]
+    _CACHE_ON_SERIALIZE = True
+
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return isinstance(other, _Marker) and self.value == other.value
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def _selective_history(i: int, arrays: bool) -> History:
+    """A four-frame history: frame 0 holds a numpy array when `arrays`
+    (a real HDF5 group), the rest are plain, and one key is expired."""
+    history = History()
+    first = {"shot": i, "tag": "a"}
+    if arrays:
+        first["arr"] = np.arange(3) + i
+    history.append(Frame(first))
+    for j in range(1, 4):
+        data = {"shot": i, "j": j, "tag": "b" if j % 2 else "a"}
+        if j == 2:
+            data["sometimes"] = i
+        history.append(Frame(data))
+    history[3].expire("shot")
+    return history
+
+
+def _selective_reader(directory: Path, histories, worker_id):
+    """A checkpointed `ProgramResults` holding `histories` (keyed by shot)
+    and a fresh reader over it, plus an in-memory twin."""
+    writer = ProgramResults()
+    twin = ProgramResults()
+    for i, history in histories.items():
+        writer.add_shot(i, history)
+        twin.add_shot(i, History(history))
+    writer.checkpoint(checkpoint_dir=directory, worker_id=worker_id)
+    return ProgramResults(checkpoint_dir=directory), twin
+
+
+class TestSelectiveCollect:
+    @staticmethod
+    def _counting_full_reads():
+        """Patch `_Opened.read` (the full decode) to count its calls."""
+        return unittest.mock.patch.object(
+            checkpointstore_module._Opened,
+            "read",
+            autospec=True,
+            side_effect=checkpointstore_module._Opened.read,
+        )
+
+    @pytest.mark.parametrize("arrays", [True, False])
+    @pytest.mark.parametrize("worker_id", [None, "w0"])
+    def test_matches_full_decode(self, tmp_path, arrays, worker_id):
+        """A selective collect equals the in-memory one across selections,
+        for an array-holding and an array-free history, canonical and
+        payload files."""
+        histories = {i: _selective_history(i, arrays) for i in range(4)}
+        reader, twin = _selective_reader(tmp_path, histories, worker_id)
+        selections = [
+            dict(key="shot", indices=-1),
+            dict(key="shot", indices=[-1, 0]),
+            dict(key="shot", indices=slice(1, 3)),
+            dict(key="sometimes", indices="all", strip_none_entries=True),
+            dict(key="log", indices=0),
+            dict(key="j", indices="all", frame_filter={"tag": "b"}),
+            dict(key="shot", indices=0, frame_filter={"log": "N/A"}),
+            dict(key="sometimes", indices="all"),
+            dict(key="shot", indices="all"),
+        ]
+        if arrays:
+            selections.append(dict(key="arr", indices=0))
+        for selection in selections:
+            assert _same(
+                reader.collect_shot_data(**selection),
+                twin.collect_shot_data(**selection),
+            ), selection
+        for results in (reader, twin):
+            with pytest.raises(IndexError):
+                results.collect_shot_data("shot", 7)
+
+    def test_copy_and_reference_entries(self, tmp_path):
+        """Entries stored as `copy` stubs (in and out of key order) and as a
+        `reference` collect as the in-memory shots do, without decoding a
+        `History`."""
+        writer = ProgramResults()
+        twin = ProgramResults()
+        shared = _selective_history(0, False)
+        for i in (1, 2, 0):
+            writer.add_shot(i, _selective_history(i % 2, False))
+            twin.add_shot(i, _selective_history(i % 2, False))
+            writer.checkpoint(checkpoint_dir=tmp_path)
+        # The same object under two keys encodes as a `reference`.
+        writer.shot_histories[3] = writer.shot_histories[4] = shared
+        twin.shot_histories[3] = twin.shot_histories[4] = shared
+        writer._unwritten_shots.update({3, 4})
+        writer.checkpoint(checkpoint_dir=tmp_path)
+
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        real_decode = Serializable.decode
+        decoded = []
+
+        def spy(*args, **kwargs):
+            value = real_decode(*args, **kwargs)
+            decoded.append(value)
+            return value
+
+        with unittest.mock.patch.object(
+            Serializable, "decode", side_effect=spy
+        ):
+            data = reader.collect_shot_data("shot", [0, 1])
+        assert data == twin.collect_shot_data("shot", [0, 1])
+        assert not any(isinstance(v, History) for v in decoded)
+
+    def test_stub_to_a_nested_history(self, tmp_path):
+        """A shot stored as a stub of a History that sits inside an earlier
+        entry, not as an entry itself, collects as the in-memory shot."""
+        writer = ProgramResults()
+        twin = ProgramResults()
+        inner = _selective_history(7, False)
+        for results in (writer, twin):
+            outer = _selective_history(0, False)
+            outer.append(Frame({"inner": inner}))
+            results.add_shot(0, outer)
+            results.add_shot(1, inner)
+        writer.checkpoint(checkpoint_dir=tmp_path)
+
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        assert reader.collect_shot_data("shot", 0) == twin.collect_shot_data(
+            "shot", 0
+        )
+
+    def test_falls_back_on_references_and_unknown_layouts(self, tmp_path):
+        """Selecting a cached object (a frame's `"state"`) and a History
+        node of an older version both give the full-decode answer."""
+        writer = ProgramResults()
+        twin = ProgramResults()
+        for i in range(3):
+            for results in (writer, twin):
+                history = History()
+                history.append(Frame({"state": _Marker(i % 2), "shot": i}))
+                results.add_shot(i, history)
+        writer.checkpoint(checkpoint_dir=tmp_path)
+
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        with self._counting_full_reads() as reads:
+            assert reader.collect_shot_data(
+                "state", 0
+            ) == twin.collect_shot_data("state", 0)
+        assert reads.call_count > 0
+
+        h5_path = tmp_path / "results.h5"
+        with h5py.File(h5_path, "r+") as f:
+
+            def lower_version(name, obj):
+                if obj.attrs.get("class") == "History":
+                    obj.attrs["version"] = 1
+
+            f.visititems(lower_version)
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        with self._counting_full_reads() as reads:
+            assert reader.collect_shot_data("shot", 0) == [0, 1, 2]
+        assert reads.call_count == 3
+
+    def test_leaves_decode_cache_untouched(self, tmp_path):
+        """A selective collect of frame 0's `"state"` (a cache source in
+        every shot) takes the selective path and leaves the store's
+        canonical decode cache as it was."""
+        writer = ProgramResults()
+        for i in range(3):
+            history = History()
+            history.append(Frame({"state": _Marker(i)}))
+            writer.add_shot(i, history)
+        writer.checkpoint(checkpoint_dir=tmp_path)
+
+        reader = ProgramResults(checkpoint_dir=tmp_path)
+        store = reader._shot_store()
+        store.get(1)  # builds the canonical decode cache
+        before = set(store._canonical_decode_cache)
+        with unittest.mock.patch.object(
+            checkpointstore_module._Opened,
+            "read",
+            side_effect=AssertionError("fell back to a full decode"),
+        ):
+            data = reader.collect_shot_data("state", 0)
+        assert [m.value for m in data] == [0, 1, 2]
+        assert set(store._canonical_decode_cache) == before
+
+
+def _same(a, b) -> bool:
+    """Equality that also holds for numpy values."""
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+        return bool(np.array_equal(a, b))
+    return a == b

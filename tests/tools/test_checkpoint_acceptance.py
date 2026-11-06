@@ -158,7 +158,7 @@ def test_consolidation_failure_at_every_event_resumes_correctly(
             simulate_process_death()
             run_shot_program(directory, InlineExecutor(), resume=True)
             simulate_process_death()
-            # Default lazy loading: every shot is read back from disk.
+            # Every shot is read back from disk.
             final = run_shot_program(directory, InlineExecutor(), resume=True)
             assert_shot_results_match(final, reference)
         except Exception as exc:
@@ -297,7 +297,7 @@ def test_resume_in_a_fresh_process_reuses_no_cache_id(
     for i in range(num_shots):
         fresh = CheckpointStore(tmp_path, SHOT_LAYOUT)
         assert problems(fresh.get(i)) == (BASE_SEED + i, (True, TAG_NAME))
-    loaded = ProgramResults(lazy_loading=False)
+    loaded = ProgramResults()
     loaded.load_checkpoint(checkpoint_dir=tmp_path)
     for i in range(num_shots):
         assert problems(loaded.shot_histories[i]) == (

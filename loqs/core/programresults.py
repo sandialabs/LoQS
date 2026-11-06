@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+import heapq
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager
+from operator import itemgetter
 from typing import Any, ClassVar
 from pathlib import Path
 import h5py
@@ -38,10 +40,10 @@ from typing import TYPE_CHECKING, Iterable
 
 from loqs.internal.checkpointstore import (
     SHOT_LAYOUT,
-    BaseCheckpointStore,
     BatchReceipt,
     CheckpointStore,
     _NestedStore,
+    _ReadableStore,
 )
 from loqs.internal.streamingmerge import _normalize_decoded_int_keyed_dict
 
@@ -141,7 +143,6 @@ class ProgramResults(Displayable):
         parent_program: "QuantumProgram | str | Path | None" = None,
         checkpoint_enabled: bool = False,
         checkpoint_dir: str | Path | None = None,
-        lazy_loading: bool = True,
         max_memory_shots: int = 100,
         num_shots: int | None = None,
         max_frame_limit: int | None = None,
@@ -224,9 +225,6 @@ class ProgramResults(Displayable):
         self._checkpoint_enabled = checkpoint_enabled
         """Whether checkpointing is enabled."""
 
-        self._lazy_loading = lazy_loading
-        """Whether lazy loading is enabled"""
-
         self._results_filename = results_filename
         """Filename for the canonical results checkpoint file."""
 
@@ -242,8 +240,12 @@ class ProgramResults(Displayable):
         """Persistent `Serializable.encode` cache shared across every `checkpoint()`
         call for this object's lifetime, so an object reused across shots is written
         once and cheaply referenced afterward, instead of re-expanded every time.
-        Its entries carry no object IDs, so a live object reused across batches is
-        written as a `copy` per batch, and read back as one copy per shot."""
+        It is seeded from the snapshot's own encode when this object writes the
+        canonical file, by decoding the file when it already exists at
+        construction, and emptied whenever the store is rebuilt for another
+        directory or filename. Its entries carry no object IDs, so a live object
+        reused across batches is written as a `copy` per batch, and read back as
+        one copy per shot."""
 
         self._shot_store_cache: CheckpointStore | None = None
         """The store `_shot_store()` hands out. Not serialized."""
@@ -253,11 +255,12 @@ class ProgramResults(Displayable):
         from loqs.core import QuantumProgram
 
         if checkpoint_enabled and isinstance(parent_program, QuantumProgram):
-            self._ensure_snapshot()
+            wrote = self._ensure_snapshot()
             self.parent_program = str(self._shot_store().canonical_path)
-            self._checkpoint_encode_cache = (
-                self._shot_store().shared_encode_cache()
-            )
+            if not wrote:
+                self._checkpoint_encode_cache = (
+                    self._shot_store().shared_encode_cache()
+                )
 
     def _set_nested_shot_source(self, view: _NestedStore) -> None:
         """Configure this ProgramResults to read from a nested view.
@@ -333,7 +336,8 @@ class ProgramResults(Displayable):
 
     def _shot_store(self) -> CheckpointStore:
         """The shot-level checkpoint store for this object's directory and
-        canonical filename, rebuilt only when either changes."""
+        canonical filename, rebuilt only when either changes. A rebuild
+        empties `_checkpoint_encode_cache`, whose IDs name the old file."""
         directory = (
             self._checkpoint_dir
             if self._checkpoint_dir is not None
@@ -351,17 +355,20 @@ class ProgramResults(Displayable):
                 canonical_filename=self._results_filename,
             )
             self._shot_store_cache = store
+            self._checkpoint_encode_cache = {}
         return store
 
-    def _ensure_snapshot(self) -> None:
+    def _ensure_snapshot(self) -> bool:
         """Write the canonical file as a shot-free shell of this object if
-        it doesn't exist yet. An existing file is never rewritten, so a
-        resuming call keeps the config it was started with."""
+        it doesn't exist yet, and return whether it was written. An existing
+        file is never rewritten, so a resuming call keeps the config it was
+        started with. A written file also seeds `_checkpoint_encode_cache`
+        from the snapshot's own encode."""
         if self._checkpoint_dir is None:
             self._checkpoint_dir = Path("./checkpoints")
         store = self._shot_store()
         if store.canonical_path.exists():
-            return
+            return False
         shell = ProgramResults(
             name=self.name,
             parent_program=self.parent_program,
@@ -369,7 +376,9 @@ class ProgramResults(Displayable):
             max_frame_limit=self.max_frame_limit,
             results_filename=self._results_filename,
         )
-        store.write_snapshot(shell)
+        self._checkpoint_encode_cache = {}
+        store.write_snapshot(shell, encode_cache=self._checkpoint_encode_cache)
+        return True
 
     def add_shot(
         self,
@@ -428,44 +437,34 @@ class ProgramResults(Displayable):
         list
             List of [](api:History.collect_data) outputs per shot
         """
-        data = [
-            h.collect_data(
+
+        def collect(history: History) -> Any:
+            return history.collect_data(
                 key,
                 indices,
                 strip_none_entries=strip_none_entries,
                 frame_filter=frame_filter,
             )
-            for h in self._iter_histories_in_order()
-        ]
+
+        # In-memory shots and stored ones (read selectively, not in memory)
+        # are each ascending by shot index, and merge on it.
+        pairs: Iterator[tuple[int, Any]] = (
+            (i, collect(self.shot_histories[i]))
+            for i in sorted(self.shot_histories)
+        )
+        reader = self._shot_reader()
+        if reader is not None:
+            stored = reader._iter_collected(
+                collect,
+                keys=[
+                    k for k in reader.keys() if k not in self.shot_histories
+                ],
+            )
+            pairs = heapq.merge(pairs, stored, key=itemgetter(0))
+        data = [value for _, value in pairs]
         return Counter(data) if return_counter else data
 
-    def _iter_histories_in_order(self) -> Iterator[History]:
-        """Yield every available shot's history in ascending shot order.
-
-        The reader (a nested view or the checkpoint directory's store) gives
-        the stored shots not in memory in one pass, one decoded value at a
-        time; without one only the shots in memory are yielded.
-        """
-        in_memory = sorted(self.shot_histories)
-        reader = self._shot_reader()
-        if reader is None:
-            yield from (self.shot_histories[i] for i in in_memory)
-            return
-
-        stored = reader.iter_items(
-            keys=[k for k in reader.keys() if k not in self.shot_histories]
-        )
-        pending = next(stored, None)
-        for idx in in_memory:
-            while pending is not None and pending[0] < idx:
-                yield pending[1]
-                pending = next(stored, None)
-            yield self.shot_histories[idx]
-        while pending is not None:
-            yield pending[1]
-            pending = next(stored, None)
-
-    def _shot_reader(self) -> BaseCheckpointStore | None:
+    def _shot_reader(self) -> _ReadableStore | None:
         """The store shots are read from: the nested view of a lazy proxy,
         else the shot store when a checkpoint directory is set, else
         `None`."""
@@ -609,19 +608,16 @@ class ProgramResults(Displayable):
 
         self.mark_shots_as_written(shots_to_checkpoint)
 
-        # Implement lazy loading: remove written shots from memory
-        if self._lazy_loading:
-            for shot_index in shots_to_checkpoint:
-                if shot_index in self.shot_histories:
-                    del self.shot_histories[shot_index]
+        # Evict written shots from memory; they read back from the store.
+        for shot_index in shots_to_checkpoint:
+            self.shot_histories.pop(shot_index, None)
         return receipt
 
     def mark_shots_checkpointed(self, shot_indices: list[int]) -> None:
         """Record that the given shots are already durably checkpointed
         somewhere else (e.g. by the worker that computed them), without
-        writing anything here. Lets a driver's own `ProgramResults` still
-        honor `lazy_loading` (bounding its own memory) for shots it
-        received from a worker rather than checkpointing itself.
+        writing anything here. Marks the shots written and drops any of
+        them held in memory.
 
         Parameters
         ----------
@@ -629,10 +625,8 @@ class ProgramResults(Displayable):
             Shot indices to mark as already-checkpointed.
         """
         self.mark_shots_as_written(list(shot_indices))
-        if self._lazy_loading:
-            for shot_index in shot_indices:
-                if shot_index in self.shot_histories:
-                    del self.shot_histories[shot_index]
+        for shot_index in shot_indices:
+            self.shot_histories.pop(shot_index, None)
 
     @staticmethod
     def _count_live_done_shots(checkpoint_dir: Path) -> int:
@@ -784,7 +778,8 @@ class ProgramResults(Displayable):
         return store.canonical_path
 
     def get_shot_history(self, shot_index: int) -> History | None:
-        """Get a shot history, loading from checkpoint if lazy loading is on.
+        """Get a shot history, reading it from the checkpoint if it isn't
+        in memory.
 
         Raises `CheckpointReadError` if the store's file for the shot is
         unreadable.
@@ -800,48 +795,40 @@ class ProgramResults(Displayable):
             The requested History object, or None if not found.
         """
         # Check if shot is in memory cache first
-        if hasattr(self, "_lazy_loading") and self._lazy_loading:
-            if shot_index in self._memory_cache:
-                # Move to end of cache order (most recently used)
-                self._cache_order.remove(shot_index)
-                self._cache_order.append(shot_index)
-                return self._memory_cache[shot_index]
+        if shot_index in self._memory_cache:
+            # Move to end of cache order (most recently used)
+            self._cache_order.remove(shot_index)
+            self._cache_order.append(shot_index)
+            return self._memory_cache[shot_index]
 
-            # Check if shot is in shot_histories (for non-checkpointed runs)
-            if shot_index in self.shot_histories:
-                return self.shot_histories[shot_index]
-
-            # Not cached: load from the reader (a missing shot is None; a
-            # corrupt file raises `CheckpointReadError`).
-            # Known and deferred: right after `collect_shot_data` this read
-            # is about 1 ms slower per call than before the checkpoint store
-            # (cold and repeated reads aren't). Probably the collect leaves
-            # no decoded shots for it to hit; keeping them would cost memory.
-            loaded = False
-            reader = self._shot_reader()
-            if reader is not None:
-                try:
-                    history = reader.get(shot_index)
-                except KeyError:
-                    pass
-                else:
-                    self._memory_cache[shot_index] = history
-                    loaded = True
-            if loaded:
-                # Successfully loaded, move to end of cache order
-                self._cache_order.append(shot_index)
-
-                # Check if we need to evict from cache
-                if len(self._cache_order) > self._max_memory_shots:
-                    oldest_shot = self._cache_order.pop(0)
-                    del self._memory_cache[oldest_shot]
-
-                return self._memory_cache[shot_index]
-
-            return None
-        else:
-            # Normal mode: check if shot is in memory
-            if shot_index not in self.shot_histories:
-                return None
-
+        # Then shots not checkpointed, or not yet written
+        if shot_index in self.shot_histories:
             return self.shot_histories[shot_index]
+
+        # Not cached: load from the reader (a missing shot is None; a
+        # corrupt file raises `CheckpointReadError`).
+        # Since #146 `collect_shot_data` reads through the store, not this
+        # method, so it leaves `_memory_cache` empty and a read right after
+        # it decodes from the file; the store keeps no decoded shot.
+        loaded = False
+        reader = self._shot_reader()
+        if reader is not None:
+            try:
+                history = reader.get(shot_index)
+            except KeyError:
+                pass
+            else:
+                self._memory_cache[shot_index] = history
+                loaded = True
+        if loaded:
+            # Successfully loaded, move to end of cache order
+            self._cache_order.append(shot_index)
+
+            # Check if we need to evict from cache
+            if len(self._cache_order) > self._max_memory_shots:
+                oldest_shot = self._cache_order.pop(0)
+                del self._memory_cache[oldest_shot]
+
+            return self._memory_cache[shot_index]
+
+        return None

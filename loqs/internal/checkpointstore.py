@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import itertools
 import json
 import os
 import random
@@ -27,7 +28,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ContextManager
 
@@ -35,6 +36,12 @@ import h5py
 import numpy as np
 
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder, _get_version
+from loqs.internal.historyread import (
+    Unnavigable,
+    _Overlay,
+    _unwrap,
+    lazy_history,
+)
 from loqs.internal.serializable import ResolvingDecodeCache, Serializable
 from loqs.internal.streamingmerge import (
     _decode_group_entry,
@@ -219,12 +226,17 @@ class BaseCheckpointStore(ABC):
 
     @abstractmethod
     def write_snapshot(
-        self, obj: Serializable, *, keep_entries: bool = False
+        self,
+        obj: Serializable,
+        *,
+        keep_entries: bool = False,
+        encode_cache: dict | None = None,
     ) -> None:
         """Atomically write the canonical file from `obj`.
 
         With `keep_entries`, the committed entries of the existing file
-        replace `obj`'s own streamed entries."""
+        replace `obj`'s own streamed entries. `encode_cache` receives the
+        new file's seed (see `CheckpointStore.write_snapshot`)."""
 
     @abstractmethod
     def nested(
@@ -348,6 +360,60 @@ def _dataset_value(values_group: h5py.Group, pos: int) -> Any:
     return value
 
 
+def _minted_id(entry: Any) -> int | None:
+    """The cache ID `entry` (a values-group member) resolves as, or None
+    for a `reference` stub, a node without cache attrs, or an `Unnavigable`
+    wrapper."""
+    try:
+        resolvable = ResolvingDecodeCache._resolvable_id(_unwrap(entry).attrs)
+    except Unnavigable:
+        return None
+    return None if resolvable is None else int(resolvable)
+
+
+def _entry_holding(
+    values_group: h5py.Group, n: int, cache_id: int, memo: dict
+) -> int | None:
+    """The largest position in `0..n-1` whose minted ID is at most
+    `cache_id`, or None; a missing or non-minting position is never returned.
+
+    Cache IDs are minted in pre-order from one rising counter (carried
+    across appends), so entry `p`'s subtree holds no ID outside
+    `[minted(p), minted(p+1))`. The converse doesn't hold: an ID in that
+    range may sit between entries, in another attr's entry, or in a
+    `keep_entries` rewrite's snapshot, so the caller falls back to a wider
+    scan when the entry doesn't hold it. `memo` maps position to minted ID
+    so each position's attrs are read at most once.
+    """
+
+    def minted(p: int) -> int | None:
+        if p not in memo:
+            name = str(p)
+            memo[p] = (
+                _minted_id(values_group[name])
+                if name in values_group
+                else None
+            )
+        return memo[p]
+
+    best = None
+    lo, hi = 0, n - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        q = mid
+        while q >= lo and minted(q) is None:
+            q -= 1
+        found = minted(q) if q >= lo else None
+        if found is None:
+            lo = mid + 1
+        elif found <= cache_id:
+            best = q
+            lo = mid + 1
+        else:
+            hi = q - 1
+    return best
+
+
 @dataclass
 class _Opened:
     """An open store file, ready to read.
@@ -362,6 +428,7 @@ class _Opened:
     path: str
     canonical_names: bool
     require_primary: bool
+    minted: dict = field(default_factory=dict)
 
     def _name(self, streamed: StreamedAttr) -> str:
         return streamed.canonical if self.canonical_names else streamed.name
@@ -428,20 +495,66 @@ class _Opened:
         all_keys = _read_iterable_side(keys_group, fmt, None)
         return [int(k) for k in all_keys[:n]]
 
-    def read(self, streamed: StreamedAttr, pos: int) -> Any:
-        """Decode the value at physical position `pos`."""
+    def read(
+        self,
+        streamed: StreamedAttr,
+        pos: int,
+        transient: list | None = None,
+        by_type: bool = False,
+    ) -> Any:
+        """Decode the value at physical position `pos`.
+
+        When `transient` is given, a `(cache, cache_id)` pair is appended
+        for each key this decode newly added to the cache whose value is
+        the decoded value (or, with `by_type`, has its type). Keys already
+        cached are never listed. `by_type` exists because a `copy` whose
+        source has a higher key resolves that source into the cache by a
+        file scan, so the source's own later read adds no new key.
+        """
         sides = self.sides(streamed)
         assert sides is not None
         values_group = sides[1]
         if values_group.attrs.get("storage_format", "groups") == "dataset":
             return _dataset_value(values_group, pos)
+        before = len(self.cache)
+        memo = self.minted.setdefault(values_group.name, {})
+        count = self.count(streamed)
+
+        def locate(cache_id: int):
+            p = _entry_holding(values_group, count, cache_id, memo)
+            return None if p is None else values_group[str(p)]
+
+        # About half of a cold get is now re-parsing the found entry's
+        # `$collapsed` blob; keeping the last few parsed for one read halved
+        # it for about +5 MB in a measurement, and was left out on purpose.
+        previous = self.cache._locate
+        self.cache._locate = locate
         try:
-            return _decode_group_entry(values_group, pos, self.cache)
+            value = _decode_group_entry(values_group, pos, self.cache)
         except BaseException:
             # A cut-short decode leaves `DeferredRef` placeholders; reset.
             # The cache's fallback still supplies the shared objects.
             self.cache.clear()
             raise
+        finally:
+            self.cache._locate = previous
+        if transient is not None:
+            added = len(self.cache) - before
+            for cache_id in itertools.islice(reversed(self.cache), added):
+                cached = self.cache[cache_id]
+                if (
+                    (type(cached) is type(value))
+                    if by_type
+                    else (cached is value)
+                ):
+                    transient.append((self.cache, cache_id))
+        return value
+
+
+def _drop_transient(transient: list) -> None:
+    """Remove the listed `(cache, cache_id)` entries from their caches."""
+    for cache, cache_id in transient:
+        cache.pop(cache_id, None)
 
 
 @dataclass
@@ -520,13 +633,16 @@ class _ReadableStore(BaseCheckpointStore):
         if key not in index:
             raise KeyError(key)
         source, pos = index[key]
+        transient: list = []
         try:
             with self._opened(source) as opened:
-                return opened.read(streamed, pos)
+                return opened.read(streamed, pos, transient)
         except CheckpointReadError as exc:
             if strict:
                 raise
             raise KeyError(key) from exc
+        finally:
+            _drop_transient(transient)
 
     def iter_items(
         self,
@@ -536,37 +652,140 @@ class _ReadableStore(BaseCheckpointStore):
         strict: bool = True,
     ) -> Iterator[tuple[int, Any]]:
         streamed = self._streamed(attr)
+        return self._iter_entries(
+            streamed,
+            keys,
+            strict,
+            lambda opened, pos, transient: opened.read(
+                streamed, pos, transient, by_type=True
+            ),
+        )
+
+    def _iter_entries(
+        self,
+        streamed: StreamedAttr,
+        keys: Iterable[int] | None,
+        strict: bool,
+        read: Callable[[_Opened, int, list], Any],
+    ) -> Iterator[tuple[int, Any]]:
+        """Yield `(key, read(opened, pos, transient))` in ascending key order."""
         index = self._key_index(streamed, strict)
         if keys is None:
             wanted = sorted(index)
         else:
             wanted = sorted({int(k) for k in keys}.intersection(index))
-        # Only one decoded value is alive at a time, and a source stays
-        # open while consecutive keys come from it.
-        with contextlib.ExitStack() as stack:
-            current: _Source | None = None
-            opened: _Opened | None = None
-            for key in wanted:
-                source, pos = index[key]
+        # One decoded value is alive at a time, a source stays open across
+        # consecutive keys, and what this pass cached is dropped at its end.
+        transient: list = []
+        try:
+            with contextlib.ExitStack() as stack:
+                current: _Source | None = None
+                opened: _Opened | None = None
+                for key in wanted:
+                    source, pos = index[key]
+                    try:
+                        if source is not current:
+                            stack.close()
+                            current = None
+                            opened = stack.enter_context(self._opened(source))
+                            current = source
+                        assert opened is not None
+                        value = read(opened, pos, transient)
+                    except CheckpointReadError:
+                        if strict:
+                            raise
+                        continue
+                    except Exception as exc:
+                        if strict:
+                            raise CheckpointReadError(
+                                source.path, f"{type(exc).__name__}: {exc}"
+                            ) from exc
+                        continue
+                    yield key, value
+        finally:
+            _drop_transient(transient)
+
+    def _iter_collected(  # noqa: C901
+        self,
+        collect: Callable[[Any], Any],
+        *,
+        keys: Iterable[int] | None = None,
+        strict: bool = True,
+    ) -> Iterator[tuple[int, Any]]:
+        """Yield `(key, collect(history))` per primary entry, ascending.
+
+        `collect` only touches what `History.collect_data` does, so each
+        entry is read selectively (see `historyread`); an entry the read
+        can't navigate is fully decoded instead. `collect`'s own errors
+        reach the caller unchanged.
+        """
+        streamed = self.layout.primary
+
+        def locate_for(opened: _Opened, values_group: h5py.Group):
+            memo = opened.minted.setdefault(values_group.name, {})
+            count = opened.count(streamed)
+
+            def locate(ref: int):
+                while True:
+                    p = _entry_holding(values_group, count, ref, memo)
+                    if p is None or memo[p] != ref:
+                        raise Unnavigable(f"history {ref} is not an entry")
+                    attrs = _unwrap(values_group[str(p)]).attrs
+                    if attrs.get("cache_type") != "copy":
+                        return values_group[str(p)]
+                    ref = int(attrs["reference_cache_id"])
+
+            return locate
+
+        def read(opened: _Opened, pos: int, transient: list):
+            sides = opened.sides(streamed)
+            assert sides is not None
+            values_group = sides[1]
+
+            def full() -> Any:
                 try:
-                    if source is not current:
-                        stack.close()
-                        current = None
-                        opened = stack.enter_context(self._opened(source))
-                        current = source
-                    assert opened is not None
-                    value = opened.read(streamed, pos)
+                    return opened.read(streamed, pos, transient, by_type=True)
+                except CheckpointReadError:
+                    raise
+                except Exception as exc:
+                    raise CheckpointReadError(
+                        opened.path, f"{type(exc).__name__}: {exc}"
+                    ) from exc
+
+            try:
+                if values_group.attrs.get("storage_format", "groups") != (
+                    "groups"
+                ):
+                    raise Unnavigable("dataset-format values")
+                return (
+                    lazy_history(
+                        values_group[str(pos)],
+                        _Overlay(opened.cache),
+                        locate_for(opened, values_group),
+                    ),
+                    full,
+                )
+            except Unnavigable:
+                return (
+                    opened.read(streamed, pos, transient, by_type=True),
+                    None,
+                )
+
+        for key, (history, full) in self._iter_entries(
+            streamed, keys, strict, read
+        ):
+            try:
+                value = collect(history)
+            except Unnavigable:
+                assert full is not None
+                try:
+                    decoded = full()
                 except CheckpointReadError:
                     if strict:
                         raise
                     continue
-                except Exception as exc:
-                    if strict:
-                        raise CheckpointReadError(
-                            source.path, f"{type(exc).__name__}: {exc}"
-                        ) from exc
-                    continue
-                yield key, value
+                value = collect(decoded)
+            yield key, value
 
 
 def _working_copy(encode_cache: dict | None) -> dict:
@@ -586,7 +805,9 @@ def _working_copy(encode_cache: dict | None) -> dict:
     }
 
 
-_PAYLOAD_SEED: tuple[tuple[str, tuple[int, int, int]], tuple[dict, int]] | None
+_PAYLOAD_SEED: (
+    tuple[tuple[str, tuple[int, int, int, int]], tuple[dict, int]] | None
+)
 _PAYLOAD_SEED = None
 """The process's one payload seed: `((canonical path, file identity),
 (encode seed, next-ID record))`. Each batch builds a new store, so only a
@@ -799,7 +1020,8 @@ class CheckpointStore(_ReadableStore):
 
     def _init_caches(self) -> None:
         self._canonical_decode_cache: Any = None
-        self._canonical_identity: tuple[int, int, int] | None = None
+        self._canonical_identity: tuple[int, int, int, int] | None = None
+        self._key_indexes: dict[str, tuple[tuple, dict]] = {}
 
     def __getstate__(self) -> dict[str, Any]:
         return {"directory": self.directory, "layout": self.layout}
@@ -887,29 +1109,40 @@ class CheckpointStore(_ReadableStore):
     # -- writing ----------------------------------------------------------
 
     def write_snapshot(
-        self, obj: Serializable, *, keep_entries: bool = False
+        self,
+        obj: Serializable,
+        *,
+        keep_entries: bool = False,
+        encode_cache: dict | None = None,
     ) -> None:
         """Atomically write the canonical file from `obj`.
 
-        Inside the temp file and before the rename, empty groups-format
-        streamed attributes are removed, every fixed-size dataset side is
-        made growable and the commit marker is written from the physical
-        lengths.
+        Before the rename, empty groups-format streamed attributes are
+        removed, fixed-size datasets made growable, and the commit marker
+        and next free cache ID (`NEXT_CACHE_ID_ATTR`) recorded.
 
-        With `keep_entries`, the existing canonical file must exist and be
-        readable. Its committed entries of every streamed attribute are
-        copied into the new file as stored, never decoded, in place of
-        whatever `obj` held. Any tail beyond the old marker is dropped, and
-        the new cache IDs continue above every ID the old file holds.
-        Either way the next free cache ID is recorded in the new file
-        (`NEXT_CACHE_ID_ATTR`).
+        With `keep_entries`, the existing canonical file must be readable;
+        its committed streamed entries (not any tail past its marker) are
+        copied in as stored, replacing `obj`'s, and new cache IDs continue
+        above its own.
+
+        `encode_cache` (pass an empty dict) receives, once the file is in
+        place, an object-ID-free entry per object the new file holds, for
+        canonical appends to reference. A `keep_entries` rewrite adds none.
         """
+        dump_cache: dict = {}
         with contextlib.ExitStack() as stack:
             old: tuple[h5py.Group, dict[str, int], int] | None = None
             if keep_entries:
                 old = self._open_for_rewrite(stack)
             self.directory.mkdir(parents=True, exist_ok=True)
-            self._write_snapshot_file(obj, old, stack)
+            self._write_snapshot_file(obj, old, stack, dump_cache)
+        if encode_cache is not None:
+            encode_cache.update(
+                (h, [(None, e[0][1])])
+                for h, e in dump_cache.items()
+                if e[0][0] != id(obj)
+            )
         self._canonical_decode_cache = None
         self._canonical_identity = None
 
@@ -970,10 +1203,11 @@ class CheckpointStore(_ReadableStore):
         obj: Serializable,
         old: tuple[h5py.Group, dict[str, int], int] | None,
         stack: contextlib.ExitStack,
+        encode_cache: dict,
     ) -> None:
         with atomic_h5_file(self.canonical_path) as f:
             if old is None:
-                obj.dump(f, "hdf5")
+                obj.dump(f, "hdf5", encode_cache=encode_cache)
             else:
                 # Continue above every ID the carried entries may hold.
                 HDF5Encoder.ENCODE_ID = max(HDF5Encoder.ENCODE_ID, old[2])
@@ -1162,7 +1396,10 @@ class CheckpointStore(_ReadableStore):
 
     def _shared_loader(self) -> Callable[[], Mapping[int, Any]] | None:
         """A loader of the shared objects that decodes them at most once,
-        for one store call; None for a layout without a shared attribute."""
+        for one store call; None for a layout without a shared attribute.
+
+        Payload sources of a cached index share one decode of the shared
+        objects for as long as that index stands."""
         if self.layout.shared_attr is None:
             return None
         loaded: dict[int, Any] | None = None
@@ -1209,6 +1446,46 @@ class CheckpointStore(_ReadableStore):
         value = (_invert_shared(cache), floor)
         _PAYLOAD_SEED = ((key, identity), value)
         return value
+
+    def _stamp(self) -> tuple | None:
+        """What the sources look like now, or None if one can't be read.
+
+        The canonical entry carries the file's commit marker next to its
+        identity: the committed canonical keys are fixed by the file's inode
+        and marker, so an index can't go stale on a filesystem with coarse
+        timestamps. Payload files are never changed in place.
+        """
+        try:
+            entries: list[tuple] = []
+            for source in self._sources():
+                if source.path == self.canonical_path:
+                    with open_h5(source.path, "r") as f:
+                        identity = self._identity(
+                            os.fstat(f.id.get_vfd_handle())
+                        )
+                        marker = f.attrs.get(COMMIT_MARKER_ATTR)
+                    entries.append((source.path, identity, marker))
+                else:
+                    entries.append(
+                        (source.path, self._identity(os.stat(source.path)))
+                    )
+            return tuple(entries)
+        except OSError:
+            return None
+
+    def _key_index(
+        self, streamed: StreamedAttr, strict: bool
+    ) -> dict[int, tuple[_Source, int]]:
+        stamp = self._stamp()
+        cached = self._key_indexes.get(streamed.canonical)
+        if stamp is not None and cached is not None and cached[0] == stamp:
+            return cached[1]
+        index = super()._key_index(streamed, strict)
+        # A strict build raises on any unreadable source, so it's complete;
+        # a non-strict one may have skipped a source.
+        if strict and stamp is not None:
+            self._key_indexes[streamed.canonical] = (stamp, index)
+        return index
 
     def _sources(self) -> list[_Source]:
         sources: list[_Source] = []
@@ -1275,8 +1552,8 @@ class CheckpointStore(_ReadableStore):
     # -- canonical appends and consolidation -------------------------------
 
     @staticmethod
-    def _identity(stat: os.stat_result) -> tuple[int, int, int]:
-        return stat.st_dev, stat.st_ino, stat.st_mtime_ns
+    def _identity(stat: os.stat_result) -> tuple[int, int, int, int]:
+        return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size
 
     @contextlib.contextmanager
     def _canonical_writer(self) -> Iterator[_CanonicalWriter]:
@@ -1468,7 +1745,7 @@ class CheckpointStore(_ReadableStore):
         layout: StoreLayout = SHOT_LAYOUT,
     ) -> _NestedStore:
         """A read-only store over the `ProgramResults` held at `key` in
-        `attr`, located afresh on every read."""
+        `attr`, found through this store's cached key index."""
         return _NestedStore(self, key, self._streamed(attr), layout)
 
     def payload_view(self, path: str | os.PathLike) -> _PayloadView:
@@ -1545,27 +1822,15 @@ class _NestedStore(_ReadOnlyStore):
 
     @contextlib.contextmanager
     def _open_nested(self) -> Iterator[_Opened]:
-        # The first source holding the key wins, as in a key index; later
-        # sources are never opened.
+        # The parent's cached key index names the winning source and
+        # position; only that source is opened.
         parent = self._parent
+        index = parent._key_index(self._parent_attr, strict=True)
+        if self._key not in index:
+            raise KeyError(self._key)
+        source, pos = index[self._key]
         with contextlib.ExitStack() as stack:
-            pos = -1
-            for source in parent._sources():
-                outer = stack.enter_context(
-                    parent._opened(source, validate=False)
-                )
-                try:
-                    keys = outer.keys(self._parent_attr)
-                except Exception as exc:
-                    raise CheckpointReadError(
-                        source.path, f"{type(exc).__name__}: {exc}"
-                    ) from exc
-                if self._key in keys:
-                    pos = keys.index(self._key)
-                    break
-                stack.close()
-            if pos < 0:
-                raise KeyError(self._key)
+            outer = stack.enter_context(parent._opened(source, validate=False))
             sides = outer.sides(self._parent_attr)
             assert sides is not None
             group = _resolve_checkpoint_object_group(sides[1][str(pos)])
@@ -1591,21 +1856,24 @@ class _NestedStore(_ReadOnlyStore):
         # One open of the enclosing file serves the lookup and the read.
         # Nothing is validated on open: a cut-short entry fails on its read.
         streamed = self._streamed(attr)
+        transient: list = []
         try:
             with self._opened(self._sources()[0], validate=False) as opened:
                 # A committed entry never changes, so a position found
-                # once stays valid; a miss re-reads the keys.
+                # once stays valid; a miss re-reads this entry's keys.
                 positions = self._positions.setdefault(streamed.name, {})
                 if key not in positions:
                     positions.clear()
                     for pos, k in enumerate(opened.keys(streamed)):
                         positions.setdefault(k, pos)
                 if key in positions:
-                    return opened.read(streamed, positions[key])
+                    return opened.read(streamed, positions[key], transient)
         except CheckpointReadError as exc:
             if strict:
                 raise
             raise KeyError(key) from exc
+        finally:
+            _drop_transient(transient)
         raise KeyError(key)
 
     def read_attrs(
@@ -1713,7 +1981,11 @@ class MemoryCheckpointStore(BaseCheckpointStore):
         return ()
 
     def write_snapshot(
-        self, obj: Serializable, *, keep_entries: bool = False
+        self,
+        obj: Serializable,
+        *,
+        keep_entries: bool = False,
+        encode_cache: dict | None = None,
     ) -> None:
         return None
 

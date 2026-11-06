@@ -42,16 +42,37 @@ def copy_cached_reference(reference_obj):
     this uses that constructor instead of a full recursive
     `copy.deepcopy()`, which would otherwise redundantly re-copy content
     already safe to share (e.g. `Frame`s, whose own `_data` is only ever
-    replaced via `.update()`, never mutated in place). Every other type
-    still gets a full `deepcopy()`, since that safety hasn't been
-    confirmed for them (e.g. a quantum state's own array data is
-    genuinely mutated in place during propagation).
+    replaced via `.update()`, never mutated in place).
+
+    `Instruction` and `QECCode` are shared as they are (immutable after
+    construction but for idempotent memos). `QECCodePatch` and
+    `PatchLayout`, which builders and codepacks mutate in place, copy only
+    the mutated parts: a patch its `data`, a layout its patch dict,
+    patches and relations. Every other type still gets a full
+    `deepcopy()`, since that safety hasn't been confirmed for them (e.g. a
+    quantum state's own array data is mutated in place).
     """
     from loqs.core.history import History
+    from loqs.core.instructions.instruction import Instruction
     from loqs.core.instructions.instructionstack import InstructionStack
+    from loqs.core.qeccode import QECCode
+    from loqs.core.recordables.patchlayout import PatchLayout
+    from loqs.core.recordables.qeccodepatch import QECCodePatch
 
     if isinstance(reference_obj, (History, InstructionStack)):
         return type(reference_obj)(reference_obj)
+    if isinstance(reference_obj, (Instruction, QECCode)):
+        return reference_obj
+    if isinstance(reference_obj, QECCodePatch):
+        return reference_obj.copy()
+    if isinstance(reference_obj, PatchLayout):
+        layout = PatchLayout(
+            {k: p.copy() for k, p in reference_obj.patches.items()}
+        )
+        layout.relations = {
+            k: r.copy() for k, r in reference_obj.relations.items()
+        }
+        return layout
     return copy.deepcopy(reference_obj)
 
 
