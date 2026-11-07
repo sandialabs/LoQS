@@ -1,9 +1,12 @@
 """Tester for loqs.core.history"""
 
+import warnings
+
 import pytest
 
 from loqs.core.frame import Frame
 from loqs.core.history import History
+from loqs.internal.serializable import Serializable
 
 
 class TestHistory:
@@ -78,24 +81,35 @@ class TestHistory:
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_serialization(self, format, make_temp_path):
-        history = History(
-            [
-                Frame(
-                    {
-                        "step": i + 1,
-                        "state": f"state_{i}",
-                        "data": {"nested": {"value": i}},
-                        "index": i,
-                    },
-                    log=f"step_{i}",
-                )
-                for i in range(3)
-            ]
-        )
+        frames = [
+            Frame(
+                {
+                    "step": i + 1,
+                    "state": f"state_{i}",
+                    "data": {"nested": {"value": i}},
+                    "index": i,
+                    "secret": f"secret_{i}",
+                    "private": f"private_{i}",
+                },
+                log=f"step_{i}",
+            )
+            for i in range(3)
+        ]
+        # A mark of the frame's own on a key the history doesn't name
+        frames[1].no_serialize("private")
+        history = History(frames, no_serialize_keys=["secret"])
+        source_hash = Serializable._serial_hash(history)
 
-        with make_temp_path(suffix=f".{format}") as tmp_path:
-            history.write(tmp_path)
-            loaded = History.read(tmp_path)
+        loaded = history
+        for _ in range(3):
+            with make_temp_path(suffix=f".{format}") as tmp_path:
+                loaded.write(tmp_path)
+                loaded = History.read(tmp_path)
+            assert Serializable._serial_hash(loaded) == source_hash
+
+        assert loaded[1]["private"] == "NOT SERIALIZED"
+        assert loaded[0]["private"] == "private_0"
+        assert loaded[2]["secret"] == "NOT SERIALIZED"
 
         assert isinstance(loaded, History)
         assert len(loaded) == 3
@@ -108,6 +122,33 @@ class TestHistory:
         assert isinstance(fdata, dict)
         assert fdata["nested"]["value"] == 0
         assert loaded[2]["index"] == 2
+
+    def test_copy_expires_on_append_and_keeps_source(self):
+        source = History([{"state": 0}, {"state": 1}])
+        copy = History(source)
+        assert copy[1] is not source[1]
+
+        copy.append({"state": 2})
+        with pytest.warns(UserWarning):
+            copy[1]["state"]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            source[1]["state"]
+
+        # Appending to the source has its own expiry locations
+        source.append({"state": 3})
+        with pytest.warns(UserWarning):
+            source[1]["state"]
+
+    def test_rebuild_from_frames_adds_no_duplicate_marks(self):
+        source = History(
+            [{"state": i, "secret": i} for i in range(3)],
+            no_serialize_keys=["secret"],
+        )
+        rebuilt = History(list(source), no_serialize_keys=["secret"])
+        assert Serializable._serial_hash(rebuilt) == Serializable._serial_hash(
+            source
+        )
 
 
 class TestCollectDataFrameFilter:

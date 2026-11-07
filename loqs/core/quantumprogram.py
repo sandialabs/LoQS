@@ -157,7 +157,10 @@ class QuantumProgram(Displayable):
         expiring_state:
             Whether to set `"state"` as an expiring key in the
             [](api:initial_history). Defaults to True, matching the default
-            behavior of [](api:History.expiring_keys).
+            behavior of [](api:History.expiring_keys). A `History` initial
+            history is then treated as if it had always expired `"state"`:
+            its earlier frames' `state` reads as expired, and the run's
+            first new state expires the last one.
 
         global_instructions:
             A list of [](api:Instruction) objects that are not associated
@@ -189,6 +192,15 @@ class QuantumProgram(Displayable):
 
         """
         # Do history before instruction stack in case it already has one
+        if expiring_state and isinstance(initial_history, History):
+            # Rebuild through `append()`, which records `state`'s location and
+            # expires its older copies; a copy would keep the source's (none).
+            initial_history = History(
+                list(initial_history),
+                expiring_keys=list(initial_history.expiring_keys | {"state"}),
+                propagating_keys=list(initial_history.propagating_keys),
+                no_serialize_keys=list(initial_history.no_serialize_keys),
+            )
         self.initial_history = History(initial_history)
         """The initial history that all shots start from."""
 
@@ -218,9 +230,6 @@ class QuantumProgram(Displayable):
         `i` is the index of the shot. This ensures consistent
         RNG even when running shots in parallel.
         """
-
-        if expiring_state:
-            self.initial_history.expiring_keys.add("state")
 
         # Create the instruction stack and add it to the history
         if instruction_stack is not None:
@@ -1321,7 +1330,7 @@ class QuantumProgram(Displayable):
             otherwise it is not included in the dict
 
         Finally, if all sources are exhausted and no object has been found,
-        a `ValueError` will be raised.
+        a `RuntimeError` will be raised.
 
         Parameters
         ----------
@@ -1430,7 +1439,7 @@ class QuantumProgram(Displayable):
                         idxs = int(idx_str)
                     except ValueError:
                         raise ValueError(
-                            "Invalid index spec for history priority for {name}"
+                            f"Invalid index spec for history priority for {name}"
                         )
 
                 # Collect the requested data; out-of-range indices (e.g.

@@ -16,6 +16,7 @@ from typing import ClassVar, Literal, TypeAlias, TypeVar
 from loqs.backends.state.basestate import OutcomeDict
 from loqs.core.recordables.pauliframe import PauliFrame
 from loqs.internal import Displayable
+from loqs.types import Bool, Int
 
 T = TypeVar("T", bound="MeasurementOutcomes")
 
@@ -63,7 +64,9 @@ class MeasurementOutcomes(Mapping[str | int, list[int]], Displayable):
         elif isinstance(outcomes, Mapping):
             self.outcomes = {}
             for k, v in outcomes.items():
-                self.outcomes[k] = [v] if isinstance(v, int) else list(v)
+                self.outcomes[k] = (
+                    [v] if isinstance(v, Int | Bool) else list(v)
+                )
         else:
             raise TypeError(
                 "Must pass dict of qubit keys and outcome/list of outcome values"

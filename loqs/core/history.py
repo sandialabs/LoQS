@@ -90,7 +90,9 @@ class History(Sequence[Frame], Displayable):
 
         This method handles the special case where History needs to reconstruct
         its internal state from serialized data, including the _expiring_key_locs
-        attribute that isn't part of the constructor.
+        attribute that isn't part of the constructor. The frames are
+        restored as stored, not appended again: they already carry their
+        propagated keys, expiry and no-serialize marks.
 
         Parameters
         ----------
@@ -102,15 +104,13 @@ class History(Sequence[Frame], Displayable):
         History
             The reconstructed History object.
         """
-        # Create the History object with constructor parameters
         history_obj = cls(
-            history=attr_dict["_history"],
             expiring_keys=attr_dict["expiring_keys"],
             propagating_keys=attr_dict["propagating_keys"],
             no_serialize_keys=attr_dict["no_serialize_keys"],
         )
 
-        # Set internal attributes that aren't in the constructor
+        history_obj._history = list(attr_dict["_history"])
         history_obj._expiring_key_locs = attr_dict["_expiring_key_locs"]
 
         return history_obj
@@ -134,7 +134,9 @@ class History(Sequence[Frame], Displayable):
         ----------
         history:
             An initial history to use. Defaults to `None`,
-            which initializes an empty list.
+            which initializes an empty list. A [](api:History) is
+            copied with frames of its own (which share the source's
+            values) and with its expiry locations.
 
         expiring_keys:
             Keys that should "expire" when a new [](api:Frame) is added,
@@ -188,7 +190,8 @@ class History(Sequence[Frame], Displayable):
         )
 
         if isinstance(history, History):
-            self._history = history._history.copy()
+            self._history = [frame.update() for frame in history._history]
+            self._expiring_key_locs = dict(history._expiring_key_locs)
         elif isinstance(history, Sequence):
             # append() itself already avoids re-wrapping (and thus
             # redundantly deep-copying) an item that's already a Frame --
@@ -265,7 +268,7 @@ class History(Sequence[Frame], Displayable):
 
                 if old_loc is not None:
                     # Expire old location
-                    self._history[old_loc]._expired_keys.append(exp_key)
+                    self._history[old_loc].expire(exp_key)
 
                 # Update location of expiring key
                 self._expiring_key_locs[exp_key] = len(self._history)

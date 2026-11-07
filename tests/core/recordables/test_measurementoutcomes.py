@@ -1,5 +1,6 @@
 """Tester for loqs.core.recordables.measurementoutcomes"""
 
+import numpy as np
 import pytest
 
 from loqs.core.recordables import MeasurementOutcomes
@@ -14,8 +15,13 @@ class TestMeasurementOutcomes:
             assert v == outcomes[k]
 
     def test_init(self):
-        outcomes = {"Q0": [0, 1], "Q1": 1}
-        expected = {"Q0": [0, 1], "Q1": [1]}
+        outcomes = {
+            "Q0": [0, 1],
+            "Q1": 1,
+            "Q2": np.int64(1),
+            "Q3": np.bool_(True),
+        }
+        expected = {"Q0": [0, 1], "Q1": [1], "Q2": [1], "Q3": [1]}
         m = MeasurementOutcomes(outcomes)  # type: ignore
         self._check(m, expected)
 

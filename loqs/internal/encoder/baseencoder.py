@@ -41,8 +41,10 @@ def copy_cached_reference(reference_obj):
     "wrap an existing instance" constructor for exactly this reason --
     this uses that constructor instead of a full recursive
     `copy.deepcopy()`, which would otherwise redundantly re-copy content
-    already safe to share (e.g. `Frame`s, whose own `_data` is only ever
-    replaced via `.update()`, never mutated in place).
+    already safe to share. `History`'s constructor gives the copy shallow
+    copies of its `Frame`s (whose own `_data` is only ever replaced via
+    `.update()`, never mutated in place), not shared `Frame`s.
+    `InstructionStack` shares its nested content.
 
     `Instruction` and `QECCode` are shared as they are (immutable after
     construction but for idempotent memos). `QECCodePatch` and

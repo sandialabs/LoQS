@@ -446,10 +446,9 @@ class TestSerializableNestedData:
     ):
         """A regression test for the "copy" cache-type reconstruction
         using the cheap wrap-constructors of `History` and
-        `InstructionStack` (sharing element identity) instead of a full
-        `copy.deepcopy()`. Two independently decoded containers built
-        from identical content share their elements by identity, but
-        never the same underlying list: `History.append` mutates in
+        `InstructionStack` instead of a full `copy.deepcopy()`. Two
+        independently decoded containers built from identical content
+        never share the same underlying list: `History.append` mutates in
         place, so sharing it would silently corrupt the other."""
         from loqs.core.history import History
         from loqs.core.instructions.instructionstack import InstructionStack
@@ -484,7 +483,7 @@ class TestSerializableNestedData:
         ]:
             assert first is not second
             assert len(first) == len(second) == 1
-            assert first[0] is second[0]
+        assert decoded_sa[0] is decoded_sb[0]
 
         decoded_ha.append(Frame({"y": 2}))
         assert len(decoded_ha) == 2
