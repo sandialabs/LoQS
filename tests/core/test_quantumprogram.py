@@ -196,21 +196,50 @@ class TestQuantumProgram:
         assert len(program_results.shot_histories) == 1
         assert len(program_results.shot_histories[0]) > 0
 
-    def test_history_initial_history_expires_initial_state(self):
-        initial = History([Frame({"state": QSimQuantumState(1, ["Q0"])})])
+    @pytest.mark.parametrize(
+        "make_initial",
+        [
+            lambda frames: History(frames),
+            lambda frames: History(
+                frames,
+                expiring_keys=["model"],
+                propagating_keys=["state", "patches", "x"],
+                no_serialize_keys=["x"],
+            ),
+            lambda frames: History(
+                History(frames, expiring_keys=["model"]),
+                expiring_keys=["model", "state"],
+            ),
+        ],
+        ids=["default_keys", "model_keys", "copied_with_state"],
+    )
+    def test_history_initial_history_expires_initial_state(self, make_initial):
+        frames = [
+            Frame({"state": QSimQuantumState(1, ["Q0"])}),
+            Frame({"x": 1}),
+        ]
+        initial = make_initial(frames)
         program = _build_state_program(
             "History initial history", initial_history=initial
+        )
+        # The rebuild keeps the caller's own keys
+        kept = program.initial_history
+        assert kept.expiring_keys == initial.expiring_keys | {"state"}
+        assert (kept.propagating_keys, kept.no_serialize_keys) == (
+            initial.propagating_keys,
+            initial.no_serialize_keys,
         )
 
         results = program.run()
 
         shot_history = results.shot_histories[0]
-        with pytest.warns(UserWarning):
-            shot_history[0]["state"]
+        for idx in (0, 1):
+            with pytest.warns(UserWarning):
+                shot_history[idx]["state"]
         # The run leaves the caller's initial history untouched
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            initial[0]["state"]
+            initial[-1]["state"]
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_program_serialization_parameterized(self, format, make_temp_path):
