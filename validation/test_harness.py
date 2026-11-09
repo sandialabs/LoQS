@@ -189,7 +189,7 @@ def test_check_shot():
         (
             "steane.default.ft.ft.prep-own+none-FT_Logical_Z_Measure"
             "-none-clean",
-            {"gadget": "prep", "faults": 78, "discarded": 36},
+            {"gadget": "prep", "faults": 123, "discarded": 62},
         ),
     ],
     ids=["gate-H", "prep"],
@@ -199,6 +199,15 @@ def test_sweep_tally(cid, expected):
     tally: dict = {}
     assert run_ft(case, DECLARATIONS["steane"], tally) == {}
     assert tally == {**expected, "uncorrected": 0}
+
+
+@pytest.mark.parametrize("after", ["Gh", "Imrz"])
+def test_fault_classes_refuse_gate_after_measure(after):
+    circuit = ListPhysicalCircuit(
+        [[("Imrz", "q0")], [(after, "q0")]], qubit_labels=["q0"]
+    )
+    with pytest.raises(ValueError):
+        engine.fault_classes(circuit)
 
 
 # Reintroduced historical bugs: each mutation edits the built code
@@ -331,7 +340,7 @@ MUTATIONS: dict[str, Mutation] = {
         {
             _WORD.format("S"): ("outcome", "O3"),
             _WORD.format("Sdag"): ("outcome", "O3"),
-            _FT + "FT_Logical_Z_Measure-WS-clean": ("outcome",),
+            _FT + "FT_Logical_X_Measure-S.S-clean": ("outcome",),
         },
         code_hook=_s_bare_circuit,
     ),

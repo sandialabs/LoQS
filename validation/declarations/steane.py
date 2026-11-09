@@ -145,7 +145,7 @@ def _sweeps():
                 f"check-{check}",
                 ((key, "L0"), (f"Flagged {feed} Feed-Forward", "L0")),
                 key,
-                suffix=True,
+                exrec=True,
             )
         )
     for basis in "ZX":
@@ -175,17 +175,15 @@ def _sweeps():
                 script=(logical.Gate(clifford, one),),
             )
         )
-    for name, twoq in (("cx-w1", False), ("cx-w2", True)):
-        out.append(
-            Sweep(
-                name,
-                build_cx_sweep,
-                "Transversal Logical CX (physical circuit)",
-                post_twoq=twoq,
-                script=(logical.Gate("CX", ("ctrl", "tgt")),),
-                roles=("ctrl", "tgt"),
-            )
+    out.append(
+        Sweep(
+            "cx",
+            build_cx_sweep,
+            "Transversal Logical CX (physical circuit)",
+            script=(logical.Gate("CX", ("ctrl", "tgt")),),
+            roles=("ctrl", "tgt"),
         )
+    )
     return tuple(out)
 
 
@@ -306,15 +304,23 @@ DECLARATION = CodepackDeclaration(
     sweeps=_sweeps(),
     error_pair=((0, "X"), (1, "X")),
     # The two tracked-error cases of 549cb89: input H, X pairs, S or Sdag
-    # word, measure Z; and its four fault cases: a flagged check, then the
-    # W(S) or W(Sdag) word, measure Z.
+    # word, measure Z; and its fault cases: a flagged check with S or Sdag
+    # then QEC after it (H before the S1-S5-S6 check, measure Z; S or Sdag
+    # on both sides of the S2-S3-S4 check, measure X).
     reproducers={
-        f"ft-{c}-{g}": (
-            f"steane.default.ft.ft.check-{c}-FT_Zero_Prep+H-"
-            f"FT_Logical_Z_Measure-W{g}-clean",
+        f"ft-S1-S5-S6-{g}": (
+            "steane.default.ft.ft.check-S1-S5-S6-FT_Zero_Prep+H-"
+            f"FT_Logical_Z_Measure-H.{g}-clean",
             ("outcome",),
         )
-        for c in ("S1-S5-S6", "S2-S3-S4")
+        for g in ("S", "Sdag")
+    }
+    | {
+        f"ft-S2-S3-S4-{g}": (
+            "steane.default.ft.ft.check-S2-S3-S4-FT_Zero_Prep+H-"
+            f"FT_Logical_X_Measure-{g}.{g}-clean",
+            ("outcome",),
+        )
         for g in ("S", "Sdag")
     }
     | {

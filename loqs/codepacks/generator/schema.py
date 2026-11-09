@@ -78,11 +78,16 @@ class Tracking:
     """Where a codepack keeps its tracking data.
 
     `logical_frame` is the patch-data key of the logical Pauli frame, and
-    `syndrome` the key holding one stored bit per stabilizer.
+    `syndrome` the key holding one stored bit per stabilizer. `non_css`
+    is the patch-data key (int `1` or absent) that a gate whose logical
+    action isn't CSS-preserving toggles, and that every other gate with
+    bookkeeping clears. A prep clears it too, and the decoder reads it.
+    An empty key means none.
     """
 
     logical_frame: str = "logical_pauli_frame"
     syndrome: tuple[str, ...] = ("latest_syndrome",)
+    non_css: str = ""
 
 
 @dataclass(frozen=True)
@@ -253,7 +258,10 @@ class LookupTable:
     `kind="data"`: each row is `(syndrome_diff,)`, a syndrome change over
     one check type that flips the logical. `kind="flag"`: each row is
     `(flag_diff, syndrome_diff)`, a hook pattern that changes the data
-    table's correction. `apply_fn_keys` names the custom apply functions'
+    table's correction. `kind="non_css"`: each row is
+    `(flagged_diff, unflagged_diff)` over every stabilizer, an observation
+    on which the decoder flips its correction while `Tracking.non_css` is
+    set. `apply_fn_keys` names the custom apply functions'
     data keys the table feeds (`key.data_key`)."""
 
     name: str

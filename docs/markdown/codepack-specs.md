@@ -73,7 +73,9 @@ The file's header repeats this summary. `GENERATED["tables"]` holds:
   `frame_map` and `syndrome_map` are matrices over GF(2) that update the logical
   frame and the stored syndrome, and `per_qubit` is the rule each data qubit's
   Pauli frame entry follows. `trivial` means both maps are the identity, so no
-  bookkeeping step runs.
+  bookkeeping step runs. `css_preserving` is true when the declared action
+  sends every logical `X` and `Z` to a Pauli of one type only (all `X` or all
+  `Z`).
 - `syndrome_index[circuit]`: for each auxiliary qubit a check circuit measures,
   the index of the stabilizer its reading gives.
 - `support`, `logical_support`: the data-qubit indices each stabilizer and
@@ -109,6 +111,18 @@ to sign, so `S` and `Sdag` share one rule.
 
 The generator derives each map, checks that the circuit preserves the code, and
 refuses the spec when the circuit's action differs from the declared `logical`.
+
+**The non-CSS flag.** A gate whose declared action isn't CSS-preserving (`S`,
+`Sdag`) can turn an error that a CSS decoder corrects into one it doesn't: a
+pending `X_j Z_k` becomes `Y_j Z_k`. When a spec sets `Tracking.non_css`, it
+names a patch-data key for this. Each such gate toggles the key (absent becomes
+`1`, present is removed, so `S` then `Sdag` leaves none), every other gate with
+bookkeeping clears it (`css_preserving` is true, as for `H` and the CX), and a
+prep clears it too. Gates without bookkeeping, such as the Paulis, leave it
+alone. The decoder reads the key. Steane's `S-aware table` is the example: while
+`s_since_round` is set, the decoder looks up the observation (flagged and
+unflagged syndrome difference) in that table and flips its logical correction
+on a match. The table covers one `S` or `Sdag` right before a QEC round.
 
 **Reading the support tables.** `support[S1]` lists the data qubits (by index in
 the spec's `data` order) that check `S1` acts on, and `syndrome_index[circuit]`

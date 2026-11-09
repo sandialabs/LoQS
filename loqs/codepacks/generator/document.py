@@ -163,6 +163,35 @@ def _bits(items: list[tuple[str, list[str]]]) -> list[str]:
     return out
 
 
+def _non_css_line(facts: Any, css_preserving: bool) -> list[str]:
+    """The tracking-list line on `Tracking.non_css`: toggled or cleared,
+    and why. Empty when the spec sets no such key."""
+    key = facts.tracking.non_css
+    if not key:
+        return []
+    if css_preserving:
+        return [
+            f"- clears `{key}`, since its declared logical action is "
+            "CSS-preserving"
+        ]
+    return [
+        f"- toggles `{key}`, since its declared logical action isn't "
+        "CSS-preserving"
+    ]
+
+
+def _non_css_fact(facts: Any) -> list[str]:
+    """The facts' line on `Tracking.non_css`, empty when it's unset."""
+    key = facts.tracking.non_css
+    if not key:
+        return []
+    return [
+        f"- Non-CSS flag: the patch-data key `{key}` is toggled by gates "
+        "whose logical action isn't CSS-preserving, cleared by every other "
+        "gate with bookkeeping and by every prep, and read by the decoder."
+    ]
+
+
 def _fn_link(fn: str) -> str:
     module, _, qual = fn.partition(":")
     return f"[`{qual}`](api:{module}.{qual})"
@@ -461,6 +490,7 @@ def document(
         f"`{', '.join(f.tracking.syndrome)}`, one bit per stabilizer in the "
         "order above."
     )
+    out += _non_css_fact(f)
     if f.conventions_src:
         out.append(f"- Conventions: {_src_line(f.conventions_src)}")
     out += _paper_figure(f.src, spec)
@@ -510,6 +540,7 @@ def document(
                 f"- each data qubit's Pauli frame entry maps {rule} "
                 "(up to sign)"
             ]
+            out += _non_css_line(f, t["css_preserving"])
             out += [f"- bookkeeping instruction: `{it.update_key}`"]
 
     out += ["", "## Lookup tables"]
@@ -545,6 +576,7 @@ def document(
         out += ["", "**LoQS joint tracking updates** (derived):", ""]
         out += _bits(_terms(t["frame_map"], fn))
         out += _bits(_terms(t["syndrome_map"], sn))
+        out += _non_css_line(f, t["css_preserving"])
 
     return "\n".join(out) + "\n", figures
 

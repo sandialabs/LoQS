@@ -247,6 +247,31 @@ class TestTransversalCx:
         assert cx == loaded
         assert cx != make_cx(q1, q0)
 
+    def test_bookkeeping_clears_s_flag(self):
+        """The CX's bookkeeping drops `s_since_round` on both patches."""
+        qubits = steane_qubits
+        geometry = PatchGeometry(
+            patches={
+                "ctrl": ("L0", qubits("_0")),
+                "tgt": ("L1", qubits("_1")),
+            },
+            layout="7_1_3",
+        )
+        codepack = SteaneCodepack(circuit_backend=ListPhysicalCircuit)
+        code = codepack.create_qec_code()
+        layout = PatchLayout(
+            {
+                "L0": code.create_patch(qubits("_0")),
+                "L1": code.create_patch(qubits("_1")),
+            }
+        )
+        for label in ("L0", "L1"):
+            layout[label].data = {"s_since_round": 1}
+        cx = codepack.build_two_patch("Transversal CX", geometry)
+        book = cx.data["instructions"][1]
+        new = book.apply_fn(patches=layout, **book.data)["patches"]
+        assert all("s_since_round" not in new[p].data for p in ("L0", "L1"))
+
     def test_x_on_control(self):
         """X_L|0>|0> -> CX -> |1>|1>: X_L copies to the target patch."""
         stack, all_q = two_patch_cx_stack(

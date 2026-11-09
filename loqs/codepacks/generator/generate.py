@@ -148,6 +148,7 @@ def _gate_tables(
             "syndrome_map": _ints(smap),
             "per_qubit": next(iter(rules.values())),
             "trivial": trivial,
+            "css_preserving": derive.css_preserving(declared),
         }
         if it.update_key:
             maps = (entry["frame_map"], entry["syndrome_map"])
@@ -286,6 +287,7 @@ def derive_two_patch(spec: CodeSpec, g: TwoPatchGate) -> dict[str, Any]:
     return {
         "logical": g.logical,
         "roles": list(g.roles),
+        "css_preserving": derive.css_preserving(declared),
         "frame_map": _ints(fmap),
         "syndrome_map": _ints(smap),
         "qubit_frame_map": _ints(qmap),
@@ -306,6 +308,8 @@ How to read `GENERATED["tables"]` (each map acts on a bit column, mod 2):
   data qubit's Pauli frame entry follows. Frames track Paulis up to sign,
   so S and Sdag share one rule (S X S^dag = Y, S^dag X S = -Y).
   `trivial`: both maps are the identity, so no bookkeeping step runs.
+  `css_preserving`: the declared action maps X and Z to all-X or all-Z
+  Paulis, so the gate clears `Tracking.non_css` and others toggle it.
 - `syndrome_index[circuit]`: each auxiliary qubit the circuit measures,
   to the index of the stabilizer its reading gives.
 - `support`, `logical_support`: the data-qubit indices each stabilizer

@@ -818,13 +818,9 @@ def _sweep_cases(decl, config, sweep) -> list[Case]:
     q = decl.qec[0]
     roles = _LABELS[: len(sweep.roles)]
     step = Op("sweep", sweep.name, (), roles)
-    suffixes: list[tuple[str, tuple]] = [("none", ())]
-    if sweep.suffix:
-        suffixes += [
-            (f"W{g.key}", gate_word(decl, g.key))
-            for g in decl.gates
-            if not _is_pauli(g)
-        ]
+    gates: list[tuple[str, tuple]] = [("none", ())]
+    if sweep.exrec:
+        gates += [(g.key, (g.key,)) for g in decl.gates if not _is_pauli(g)]
     seeds: list[tuple[str, list[Op]]] = [("clean", [])]
     if decl.error_pair and not own:
         errs = [
@@ -836,23 +832,28 @@ def _sweep_cases(decl, config, sweep) -> list[Case]:
     cases = []
     for tag, head, post in _ft_inputs(decl, sweep, own):
         for tname, tail in _ft_tails(decl, sweep, has_meas):
-            for sname, word in suffixes:
-                for seed, seeding in seeds:
-                    ops = head + seeding + [step] + post
-                    ops += _gates_qec(word, q) + tail
-                    if not deterministic_outcome(decl, ops):
-                        continue
-                    detail = "-".join([sweep.name, tag, tname, sname, seed])
-                    cases.append(
-                        _case(
-                            decl,
-                            config.name,
-                            "ft",
-                            "ft",
-                            detail,
-                            ops=tuple(ops),
+            for bname, before in gates:
+                for aname, after in gates:
+                    for seed, seeding in seeds:
+                        ops = head + seeding
+                        ops += [Op("gate", g) for g in before]
+                        ops += [step] + post + _gates_qec(after, q) + tail
+                        if not deterministic_outcome(decl, ops):
+                            continue
+                        sname = f"{bname}.{aname}" if sweep.exrec else "none"
+                        detail = "-".join(
+                            [sweep.name, tag, tname, sname, seed]
                         )
-                    )
+                        cases.append(
+                            _case(
+                                decl,
+                                config.name,
+                                "ft",
+                                "ft",
+                                detail,
+                                ops=tuple(ops),
+                            )
+                        )
     return cases
 
 

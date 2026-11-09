@@ -109,7 +109,12 @@ def build_discrete_error_injection_program_for_combo(
 # `build_discrete_error_injection_programs` behavior below.
 # ---------------------------------------------------------------------------
 
-PAULI_PROPAGATION_GATE_MAP: dict[str, str] = {"Gh": "H", "Gcnot": "CX"}
+PAULI_PROPAGATION_GATE_MAP: dict[str, str] = {
+    "Gh": "H",
+    "Gcnot": "CX",
+    "Gzpi2": "S",
+    "Gzmpi2": "S_DAG",
+}
 """LoQS gate name -> STIM gate name, for gates this propagation utility
 knows how to conjugate a Pauli through. Extend as needed for other
 Clifford gates; anything not here or in

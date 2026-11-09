@@ -44,6 +44,18 @@ KNOWN_BUGS: dict[str, str] = {
         "during each prep attempt's reset. Class: static (`idle-padding`). "
         "Severity: M. Fixed in stage 8, by generation."
     ),
+    "steane-6": (
+        "A Steane logical S or Sdag right before an `Adaptive QEC` has a "
+        "first-order logical error. In the flagged S2-S3-S4 check, the XZ "
+        "fault after `Gcnot(A1, D2)` or after `Gcnot(A2, A0)` leaves an "
+        "undetected X_j Z_k; a logical S or Sdag turns it into Y_j Z_k, "
+        "which the next `Adaptive QEC` decodes into a logical Z: about "
+        "(2/15)p per S, at first order. Cases: "
+        "`steane.default.ft.ft.check-S2-S3-S4-FT_Zero_Prep+H-"
+        "FT_Logical_X_Measure-S*.S*` (S or Sdag before and after the round, "
+        "`clean` and `tracked`; outcome). Class: ft. Severity: B. Fixed in "
+        "stage 15, in the decoder and a generator rule."
+    ),
     "five-1": (
         "The 5-qubit H's `raw_syndrome` remap is wrong: Z on D0, Unflagged "
         "QEC, H leaves stored (0,1,1,0) where the true syndrome is "

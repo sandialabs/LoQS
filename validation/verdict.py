@@ -120,7 +120,7 @@ def verdict_lines(codepack: str, classes: Mapping[str, Any]) -> list[str]:
             )
             notes.append(
                 f"ft faults: {faults['gadgets']} gadgets, "
-                f"{faults['distinct']} distinct single faults, "
+                f"{faults['distinct']} fault classes, "
                 f"{faults['runs']} runs, {faults['discarded']} discarded, "
                 f"{end}"
             )

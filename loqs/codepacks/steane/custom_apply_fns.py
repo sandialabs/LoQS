@@ -36,7 +36,9 @@ def flagged_feedforward(
     stack: InstructionStack,
 ) -> Frame:
     """PRX Sec II.A.3 steps 1a and 1b: diff the flagged readings against
-    the stored syndrome; on a change run the unflagged checks and decode."""
+    the stored syndrome; on a change run the unflagged checks and decode.
+    With no change in the last check, the round ends here and clears the
+    patch's `s_since_round` flag with its scratch diff."""
     patch = patches[patch_label]
     last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
     flag_syndrome_diff = list(patch.data.get("flagged_syndrome_diff", [0] * 6))
@@ -67,6 +69,7 @@ def flagged_feedforward(
     else:
         new_stack = stack
         new_patch.data.pop("flagged_syndrome_diff", None)
+        new_patch.data.pop("s_since_round", None)
 
     new_patches = patches.copy()
     new_patches[patch_label] = new_patch
@@ -88,10 +91,15 @@ def qec_decoder(
     Z_qubits: list[str],
     data_lut: list[list[int]],
     hook_lut: list[list[list[int]]],
+    s_lut: list[list[list[int]]],
 ) -> Frame:
     """PRX Sec II.A.3 step 2: Table 1 on the unflagged diff, Table 2 on
-    the (flagged diff, unflagged diff) pair, per check type."""
+    the (flagged diff, unflagged diff) pair, per check type. While the
+    patch's `s_since_round` flag is set (a logical S or Sdag ran since its
+    last round), the S-aware table on the six-bit (flagged diff, unflagged
+    diff) pair also flips the Z correction. Without the flag it is unused."""
     patch = patches[patch_label]
+    s_since_round = patch.data.get("s_since_round")
     last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
     logical_pauli_frame = list(patch.data.get("logical_pauli_frame", [0, 0]))
     flagged_syndrome_diff = patch.data.get("flagged_syndrome_diff", [None] * 6)
@@ -109,11 +117,21 @@ def qec_decoder(
             logical_pauli_frame[pf_idx] ^= 1
         if [fsd, sd] in hook_lut:
             logical_pauli_frame[pf_idx] ^= 1
+    if (
+        s_since_round
+        and [
+            list(flagged_syndrome_diff),
+            unflagged_syndrome_diff,
+        ]
+        in s_lut
+    ):
+        logical_pauli_frame[0] ^= 1
 
     new_patch = patch.copy()
     new_patch.data["latest_syndrome"] = unflagged_syndrome
     new_patch.data["logical_pauli_frame"] = logical_pauli_frame
     new_patch.data.pop("flagged_syndrome_diff", None)
+    new_patch.data.pop("s_since_round", None)
     new_patches = patches.copy()
     new_patches[patch_label] = new_patch
     return Frame(

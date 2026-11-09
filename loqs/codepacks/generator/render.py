@@ -65,6 +65,7 @@ def update_tracking(
     frame_map: Sequence[Sequence[int]],
     syndrome_map: Sequence[Sequence[int]],
     qubit_frame_map: Sequence[Sequence[int]] | None = None,
+    css_preserving: bool = True,
 ) -> tuple[PatchLayout, list[int]]:
     """Apply a derived tracking update to one patch or several.
 
@@ -73,10 +74,19 @@ def update_tracking(
     written) take the linear maps. With `qubit_frame_map`, each patch's
     per-qubit frame takes the symplectic map over `[x..., z...]`. Returns
     a new layout, leaving `patches` untouched, and the new logical frame
-    (all patches, concatenated).
+    (all patches, concatenated). When `tracking` names a `non_css` key,
+    each patch clears it for a CSS-preserving gate and toggles it (absent
+    becomes `1`, present is dropped) otherwise.
     """
     nl = len(labels)
     new_data = {lbl: dict(patches[lbl].data) for lbl in labels}
+    flag = tracking.get("non_css")
+    if flag:
+        for lbl in labels:
+            if css_preserving or flag in new_data[lbl]:
+                new_data[lbl].pop(flag, None)
+            else:
+                new_data[lbl][flag] = 1
 
     lf = tracking["logical_frame"]
     nf = len(frame_map) // nl
@@ -124,10 +134,16 @@ def apply_bookkeeping(
     frame_map: list[list[int]],
     syndrome_map: list[list[int]],
     tracking: dict[str, Any],
+    css_preserving: bool = True,
 ) -> Frame:
     """A one-patch gate's derived logical-frame and syndrome update."""
     new_patches, new_f = update_tracking(
-        patches, [patch_label], tracking, frame_map, syndrome_map
+        patches,
+        [patch_label],
+        tracking,
+        frame_map,
+        syndrome_map,
+        css_preserving=css_preserving,
     )
     return Frame({"patches": new_patches, "new_logical_pauli_frame": new_f})
 
@@ -139,6 +155,7 @@ def apply_joint_bookkeeping(
     syndrome_map: list[list[int]],
     qubit_frame_map: list[list[int]],
     tracking: dict[str, Any],
+    css_preserving: bool = True,
 ) -> Frame:
     """The joint-system update of a multi-patch gate, split per patch."""
     new_patches, _ = update_tracking(
@@ -148,6 +165,7 @@ def apply_joint_bookkeeping(
         frame_map,
         syndrome_map,
         qubit_frame_map=qubit_frame_map,
+        css_preserving=css_preserving,
     )
     return Frame({"patches": new_patches})
 
@@ -206,7 +224,11 @@ def _listify(v: Any) -> Any:
 
 def _tracking_dict(f: Facts) -> dict[str, Any]:
     t = f.tracking
-    return {"logical_frame": t.logical_frame, "syndrome": list(t.syndrome)}
+    return {
+        "logical_frame": t.logical_frame,
+        "syndrome": list(t.syndrome),
+        "non_css": t.non_css,
+    }
 
 
 def _resolve_ref(spec: CodeSpec, tables: Mapping[str, Any], ref: str) -> Any:
@@ -280,6 +302,8 @@ def render(
     custom = [it for it in spec.items if isinstance(it, CustomApplyFn)]
     scratch = sorted({k for it in custom for k in it.scratch})
     tracking_keys = [f.tracking.logical_frame, *f.tracking.syndrome, *scratch]
+    if f.tracking.non_css:
+        tracking_keys.append(f.tracking.non_css)
     clear = Instruction(
         apply_clear_tracking,
         data={"tracking_keys": tracking_keys},
@@ -321,6 +345,7 @@ def render(
                         "frame_map": g["frame_map"],
                         "syndrome_map": g["syndrome_map"],
                         "tracking": tracking,
+                        "css_preserving": g["css_preserving"],
                     },
                     name=it.update_name or it.update_key,
                 )
@@ -427,6 +452,7 @@ def render_two_patch(
             "syndrome_map": g["syndrome_map"],
             "qubit_frame_map": g["qubit_frame_map"],
             "tracking": _tracking_dict(f),
+            "css_preserving": g["css_preserving"],
         },
         map_qubits_fn=map_patch_labels,
         name=f"{name} (bookkeeping)",

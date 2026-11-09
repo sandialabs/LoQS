@@ -339,6 +339,90 @@ class TestSteaneCodepack:
                 for frame in results.shot_histories[shot]
             )
 
+    def _run_ops(self, ops):
+        """Run `ops` after the Init instructions on STIM, Dict, List."""
+        init = [
+            {
+                "instruction": "Init State",
+                "state": len(self.qubits),
+                "qubit_labels": self.qubits,
+            },
+            {
+                "instruction": "Init Patch Steane",
+                "new_patch_label": "L0",
+                "qubits": self.qubits,
+            },
+        ]
+        ref_program = self._create_program(
+            ListPhysicalCircuit, DictNoiseModel, STIMQuantumState
+        )
+        program = QuantumProgram.from_quantum_program(
+            ref_program, InstructionStack(init + ops), name="S flag"
+        )
+        return program.run(num_shots=1)
+
+    @pytest.mark.parametrize(
+        "ops, flag_set",
+        [
+            ([("S", "L0")], True),
+            ([("S", "L0"), ("S", "L0")], False),
+            ([("S", "L0"), ("Adaptive QEC", "L0")], False),
+            (
+                [
+                    ("S", "L0"),
+                    {
+                        "instruction": "Flagged Parallel S1-S5-S6 Check",
+                        "patch_label": "L0",
+                        "error_injections": [(4, "Gxpi", 0)],
+                    },
+                    ("Flagged S1-S5-S6 Feed-Forward", "L0"),
+                ],
+                False,
+            ),
+            ([("S", "L0"), ("H", "L0")], False),
+            ([("S", "L0"), ("FT Zero Prep", "L0")], False),
+        ],
+        ids=[
+            "S",
+            "S, S",
+            "S, Adaptive QEC",
+            "S, faulted round",
+            "S, H",
+            "S, FT Zero Prep",
+        ],
+    )
+    def test_s_flag_lifetime(self, ops, flag_set):
+        results = self._run_ops([("FT Zero Prep", "L0")] + ops)
+        data = results.collect_shot_data("patches", -1)[0]["L0"].data
+        assert ("s_since_round" in data) == flag_set
+        if len(ops) == 3:
+            # The decoder ran, so its clear (not the no-decode one) fired.
+            assert any(
+                "new_logical_pauli_frame" in frame
+                for frame in results.shot_histories[0]
+            )
+
+    def test_s_table_needs_flag(self):
+        """A correctable weight-2 error shows the S-aware table's first
+        row's observation with no S, which must not flip the decode."""
+        results = self._run_ops(
+            [
+                ("FT Zero Prep", "L0"),
+                ("H", "L0"),
+                {
+                    "instruction": "I",
+                    "patch_label": "L0",
+                    "error_injections": [(0, "Gxpi", 4), (0, "Gzpi", 9)],
+                },
+                ("Adaptive QEC", "L0"),
+                ("FT Logical X Measure", "L0"),
+            ]
+        )
+        outcomes = results.collect_shot_data(
+            "logical_measurement", "all", strip_none_entries=True
+        )
+        assert outcomes[0] == [0]
+
 
 class TestDeprecatedWrappers:
     """The old functions warn and build what the class builds."""

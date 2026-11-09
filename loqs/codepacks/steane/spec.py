@@ -30,6 +30,7 @@ from loqs.codepacks.generator.schema import (
     Parallel,
     RepeatUntilSuccess,
     Role,
+    Tracking,
     TwoPatchGate,
     ours,
     paper,
@@ -59,9 +60,11 @@ FACTS = Facts(
     logicals=(("IIIIXXX", "IIIIZZZ"),),
     src=paper(FIG1, figures=("fig1.png",)),
     frame_layout=("Z", "X"),
+    tracking=Tracking(non_css="s_since_round"),
     conventions_src=ours(
         "the frame's bit order and the syndrome's stabilizer order are the "
-        "ones existing LoQS scripts read"
+        "ones existing LoQS scripts read; s_since_round is the S-aware "
+        "decoder's flag"
     ),
 )
 
@@ -320,6 +323,7 @@ ITEMS: tuple[Item, ...] = (
         f"{_CUSTOM}:qec_decoder",
         paper(
             PRX + " Sec II.A.3, Tables I and II, Fig 17, Fig 11",
+            "the S-aware table is ours, not the paper's",
             figures=("fig17-decode.png", "fig11.png"),
         ),
         derived=(
@@ -327,6 +331,7 @@ ITEMS: tuple[Item, ...] = (
             ("Z_qubits", "aux_order:Unflagged Parallel S4-S5-S6 Check"),
             ("data_lut", "lut:Table 1"),
             ("hook_lut", "lut:Table 2"),
+            ("s_lut", "lut:S-aware table"),
         ),
         qubit_data=("X_qubits", "Z_qubits"),
         param_priorities=(
@@ -425,6 +430,32 @@ TABLES = (
         src=paper(
             PRX + " Table II (= Fig 22 decoder_flag_update), rows as bits",
             figures=("table2.png", "fig22.png"),
+        ),
+    ),
+    LookupTable(
+        "S-aware table",
+        "non_css",
+        rows=(
+            ((0, 0, 0, 0, 1, 0), (0, 0, 1, 1, 1, 0)),
+            ((1, 0, 0, 0, 1, 1), (1, 0, 0, 0, 1, 1)),
+        ),
+        src=ours(
+            "each row is a single-fault observation found by enumeration, "
+            "not taken from the paper: the XZ fault after Gcnot(A1, D2) "
+            "(first row) or after Gcnot(A2, A0) (second row) of the "
+            "S2-S3-S4 check, left as X_j Z_k and turned into Y_j Z_k by a "
+            "logical S or Sdag. It applies only while an S or Sdag ran "
+            "since the patch's last round. It covers one S or Sdag right "
+            "before a QEC round: other gates between the S and the round, "
+            "whose combined action isn't CSS-preserving, keep a "
+            "first-order failure. The flagged protocol is proven fault "
+            "tolerant for CSS-preserving gates only. To regenerate it, "
+            "empty the table and run Steane's "
+            "check-S2-S3-S4-...-S*.S* fault-tolerance cases: each failing "
+            "fault's (flagged diff, unflagged diff) at the next QEC "
+            "Decoder call is a row, kept when flipping the Z correction "
+            "there corrects it.",
+            cite="[@reichardt_fault-tolerant_2020]",
         ),
     ),
 )

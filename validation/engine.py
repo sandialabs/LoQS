@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from loqs.backends import ListPhysicalCircuit
+from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.core import InstructionStack, PatchGeometry, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.tools import fttools
@@ -495,6 +496,55 @@ def _target(entries, target: str, code):
     raise ValueError(f"sweep target {target!r} is not among its entries")
 
 
+def fault_classes(circuit) -> list[list[tuple[int, str, int]]]:
+    """One representative fault per Pauli-propagation class of a circuit.
+
+    Weight 1 before each gate (each of `_ERROR_LABELS`) and each of the
+    15 two-qubit Paulis after each two-qubit gate, in `error_injections`
+    format, weight 1 first, each in location order. The first fault of a
+    class is kept. Raises `ValueError` for a gate after a measurement on
+    its qubit, where equal signatures need not mean equal faults.
+    """
+    pc = PyGSTiPhysicalCircuit(
+        circuit, qubit_labels=list(circuit.qubit_labels)
+    )
+    measured: set = set()
+    for lidx in range(pc.depth):
+        for comp in pc.circuit._layer_components(lidx):
+            if measured.intersection(comp.qubits):
+                raise ValueError(
+                    f"gate {comp.name!r} acts on a measured qubit; "
+                    "fault classes would merge faults the reset separates"
+                )
+            if comp.name == "Imrz":
+                measured.update(comp.qubits)
+    paulis = [None, *_ERROR_LABELS]
+    combos: list[list[tuple[int, str, int]]] = []
+    for layer, qubit in circuit.get_possible_discrete_error_locations(False):
+        combos += [[(layer, lbl, qubit)] for lbl in _ERROR_LABELS]
+    for layer, pair in circuit.get_possible_discrete_error_locations(True):
+        for p1 in paulis:
+            for p2 in paulis:
+                if p1 is None and p2 is None:
+                    continue
+                combos.append(
+                    [
+                        (layer, lbl, q)
+                        for lbl, q in zip((p1, p2), pair)
+                        if lbl is not None
+                    ]
+                )
+    seen: set = set()
+    kept = []
+    for combo in combos:
+        seed = {q: fttools._PAULI_LABEL_TO_CHAR[lbl] for _, lbl, q in combo}
+        sig = fttools.propagate_pauli_signature(pc, combo[0][0], seed)
+        if sig not in seen:
+            seen.add(sig)
+            kept.append(combo)
+    return kept
+
+
 def run_sweep(
     decl: CodepackDeclaration,
     config: Config,
@@ -504,7 +554,8 @@ def run_sweep(
     seed: int = 0,
     tally: dict | None = None,
 ) -> dict[str, str]:
-    """Inject every fault of a word's one `sweep` step and judge each run.
+    """Inject one fault per class into a word's one `sweep` step and judge
+    each run (see `fault_classes`).
 
     Each fault program runs for one shot and is judged by the word's
     logical script, unless the sweep's `discard` drops it. The `outcome`
@@ -530,13 +581,12 @@ def run_sweep(
         entries += new
     assert target is not None, "a sweep word needs a sweep step"
     base = build_program(decl, code, model, backend, qubits, register, entries)
-    programs = fttools.build_discrete_error_injection_programs(
-        base,
-        target[1],
-        target[0],
-        _ERROR_LABELS,
-        post_twoq_gates=declared.post_twoq,
-    )
+    programs = [
+        fttools.build_discrete_error_injection_program_for_combo(
+            base, target[0], combo
+        )
+        for combo in fault_classes(target[1].data["circuit"])
+    ]
     if not programs:
         raise RuntimeError("the sweep injected no faults")
     failures, discarded = [], 0

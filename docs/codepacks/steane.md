@@ -33,7 +33,8 @@ The badge shows whether this codepack's latest validation run in CI passed on th
 - Logical `X_L` = `IIIIXXX`, `Z_L` = `IIIIZZZ`
 - Source: From the paper: [@ryananderson_realizing_2021] Fig 1
 - Tracking: the logical Pauli frame is `logical_pauli_frame`, holding the bits `Z`, `X` in that order; the stored syndrome is `latest_syndrome`, one bit per stabilizer in the order above.
-- Conventions: Ours: the frame's bit order and the syndrome's stabilizer order are the ones existing LoQS scripts read
+- Non-CSS flag: the patch-data key `s_since_round` is toggled by gates whose logical action isn't CSS-preserving, cleared by every other gate with bookkeeping and by every prep, and read by the decoder.
+- Conventions: Ours: the frame's bit order and the syndrome's stabilizer order are the ones existing LoQS scripts read; s_since_round is the S-aware decoder's flag
 
 **Paper:**
 
@@ -144,6 +145,7 @@ From the paper: [@ryananderson_realizing_2021] Fig 1
 - new `S5` = old `S2`
 - new `S6` = old `S3`
 - each data qubit's Pauli frame entry maps `I`→`I`, `X`→`Z`, `Y`→`Y`, `Z`→`X` (up to sign)
+- clears `s_since_round`, since its declared logical action is CSS-preserving
 - bookkeeping instruction: `H Frame Update`
 
 ### S
@@ -169,6 +171,7 @@ From the paper: [@ryananderson_realizing_2021] Fig 1: logical S is S-dagger on e
 - new `S2` = old `S2` ^ `S5`
 - new `S3` = old `S3` ^ `S6`
 - each data qubit's Pauli frame entry maps `I`→`I`, `X`→`Y`, `Y`→`X`, `Z`→`Z` (up to sign)
+- toggles `s_since_round`, since its declared logical action isn't CSS-preserving
 - bookkeeping instruction: `S Frame Update`
 
 ### Sdag
@@ -188,6 +191,7 @@ Ours: the inverse of Fig 1's logical S; Fig 1 lists no S-dagger
 - new `S2` = old `S2` ^ `S5`
 - new `S3` = old `S3` ^ `S6`
 - each data qubit's Pauli frame entry maps `I`→`I`, `X`→`Y`, `Y`→`X`, `Z`→`Z` (up to sign)
+- toggles `s_since_round`, since its declared logical action isn't CSS-preserving
 - bookkeeping instruction: `S Frame Update`
 
 ### I
@@ -318,7 +322,9 @@ def flagged_feedforward(
     stack: InstructionStack,
 ) -> Frame:
     """PRX Sec II.A.3 steps 1a and 1b: diff the flagged readings against
-    the stored syndrome; on a change run the unflagged checks and decode."""
+    the stored syndrome; on a change run the unflagged checks and decode.
+    With no change in the last check, the round ends here and clears the
+    patch's `s_since_round` flag with its scratch diff."""
     patch = patches[patch_label]
     last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
     flag_syndrome_diff = list(patch.data.get("flagged_syndrome_diff", [0] * 6))
@@ -349,6 +355,7 @@ def flagged_feedforward(
     else:
         new_stack = stack
         new_patch.data.pop("flagged_syndrome_diff", None)
+        new_patch.data.pop("s_since_round", None)
 
     new_patches = patches.copy()
     new_patches[patch_label] = new_patch
@@ -409,7 +416,9 @@ def flagged_feedforward(
     stack: InstructionStack,
 ) -> Frame:
     """PRX Sec II.A.3 steps 1a and 1b: diff the flagged readings against
-    the stored syndrome; on a change run the unflagged checks and decode."""
+    the stored syndrome; on a change run the unflagged checks and decode.
+    With no change in the last check, the round ends here and clears the
+    patch's `s_since_round` flag with its scratch diff."""
     patch = patches[patch_label]
     last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
     flag_syndrome_diff = list(patch.data.get("flagged_syndrome_diff", [0] * 6))
@@ -440,6 +449,7 @@ def flagged_feedforward(
     else:
         new_stack = stack
         new_patch.data.pop("flagged_syndrome_diff", None)
+        new_patch.data.pop("s_since_round", None)
 
     new_patches = patches.copy()
     new_patches[patch_label] = new_patch
@@ -462,10 +472,10 @@ def flagged_feedforward(
 
 A hand-written apply function, [`qec_decoder`](api:loqs.codepacks.steane.custom_apply_fns.qec_decoder):
 
-- reads the generated tables `aux_order:Unflagged Parallel S1-S2-S3 Check`, `aux_order:Unflagged Parallel S4-S5-S6 Check`, `lut:Table 1`, `lut:Table 2`
+- reads the generated tables `aux_order:Unflagged Parallel S1-S2-S3 Check`, `aux_order:Unflagged Parallel S4-S5-S6 Check`, `lut:Table 1`, `lut:Table 2`, `lut:S-aware table`
 - writes `flagged_syndrome_diff`, which a prep clears
 
-From the paper: [@ryananderson_realizing_2021] Sec II.A.3, Tables I and II, Fig 17, Fig 11
+From the paper: [@ryananderson_realizing_2021] Sec II.A.3, Tables I and II, Fig 17, Fig 11. The S-aware table is ours, not the paper's
 
 <details markdown="1">
 <summary><b>LoQS source:</b> <code>qec_decoder</code></summary>
@@ -480,10 +490,15 @@ def qec_decoder(
     Z_qubits: list[str],
     data_lut: list[list[int]],
     hook_lut: list[list[list[int]]],
+    s_lut: list[list[list[int]]],
 ) -> Frame:
     """PRX Sec II.A.3 step 2: Table 1 on the unflagged diff, Table 2 on
-    the (flagged diff, unflagged diff) pair, per check type."""
+    the (flagged diff, unflagged diff) pair, per check type. While the
+    patch's `s_since_round` flag is set (a logical S or Sdag ran since its
+    last round), the S-aware table on the six-bit (flagged diff, unflagged
+    diff) pair also flips the Z correction. Without the flag it is unused."""
     patch = patches[patch_label]
+    s_since_round = patch.data.get("s_since_round")
     last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
     logical_pauli_frame = list(patch.data.get("logical_pauli_frame", [0, 0]))
     flagged_syndrome_diff = patch.data.get("flagged_syndrome_diff", [None] * 6)
@@ -501,11 +516,21 @@ def qec_decoder(
             logical_pauli_frame[pf_idx] ^= 1
         if [fsd, sd] in hook_lut:
             logical_pauli_frame[pf_idx] ^= 1
+    if (
+        s_since_round
+        and [
+            list(flagged_syndrome_diff),
+            unflagged_syndrome_diff,
+        ]
+        in s_lut
+    ):
+        logical_pauli_frame[0] ^= 1
 
     new_patch = patch.copy()
     new_patch.data["latest_syndrome"] = unflagged_syndrome
     new_patch.data["logical_pauli_frame"] = logical_pauli_frame
     new_patch.data.pop("flagged_syndrome_diff", None)
+    new_patch.data.pop("s_since_round", None)
     new_patches = patches.copy()
     new_patches[patch_label] = new_patch
     return Frame(
@@ -792,6 +817,15 @@ A flag table of 3 rows. From the paper: [@ryananderson_realizing_2021] Table II 
 
 ![Table II (= Fig 22 decoder_flag_update), rows as bits](steane/paper/fig22.png)
 
+### S-aware table
+
+A non_css table of 2 rows. Ours: each row is a single-fault observation found by enumeration, not taken from the paper: the XZ fault after Gcnot(A1, D2) (first row) or after Gcnot(A2, A0) (second row) of the S2-S3-S4 check, left as X_j Z_k and turned into Y_j Z_k by a logical S or Sdag. It applies only while an S or Sdag ran since the patch's last round. It covers one S or Sdag right before a QEC round: other gates between the S and the round, whose combined action isn't CSS-preserving, keep a first-order failure. The flagged protocol is proven fault tolerant for CSS-preserving gates only. To regenerate it, empty the table and run Steane's check-S2-S3-S4-...-S*.S* fault-tolerance cases: each failing fault's (flagged diff, unflagged diff) at the next QEC Decoder call is a row, kept when flipping the Z correction there corrects it. (see [@reichardt_fault-tolerant_2020])
+
+**LoQS rows:**
+
+- `[[0, 0, 0, 0, 1, 0], [0, 0, 1, 1, 1, 0]]`
+- `[[1, 0, 0, 0, 1, 1], [1, 0, 0, 0, 1, 1]]`
+
 ## Two-patch gates
 
 ### Transversal CX
@@ -814,3 +848,4 @@ Ours: the textbook transversal CNOT; the paper has no logical two-qubit gate (se
 - new `tgt.S4` = old `ctrl.S4` ^ `tgt.S4`
 - new `tgt.S5` = old `ctrl.S5` ^ `tgt.S5`
 - new `tgt.S6` = old `ctrl.S6` ^ `tgt.S6`
+- clears `s_since_round`, since its declared logical action is CSS-preserving

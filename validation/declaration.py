@@ -111,20 +111,22 @@ class Sweep:
     them, as for ops) over the patch labels `roles`; `target` is the key or
     instruction name of the leaf circuit among them. `script` is their
     logical action (a `Prep` makes the sweep its own prep, a `Meas` its own
-    measure), `discard(history)` drops a shot (a flagged attempt) and
-    `suffix` lets gate words follow it. Faults run weight 1 before each
-    gate, or weight 2 after each two-qubit gate with `post_twoq`.
+    measure) and `discard(history)` drops a shot (a flagged attempt).
+    A sweep runs every first-order fault of its target, weight 1 before
+    each gate and each two-qubit Pauli after each two-qubit gate, one
+    fault per Pauli-propagation class. `exrec` marks a target that is a
+    QEC round: its cases put nothing or one non-Pauli gate before it and
+    nothing or one non-Pauli gate then a QEC round after it.
     """
 
     name: str
     entries: Sequence[Any] | Callable[..., Sequence[Any]]
     target: str
-    post_twoq: bool = False
     discard: Callable[..., bool] | None = None
     allowed: int = 0
     script: Sequence[Any] = ()
     roles: Sequence[str] = ("L0",)
-    suffix: bool = False
+    exrec: bool = False
 
 
 @dataclass(frozen=True)

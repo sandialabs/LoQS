@@ -15,9 +15,9 @@ python -m pytest validation/test_static.py validation/test_programs.py -k <codep
 
 `<codepack>` is the declaration's name (`steane`, `five_qubit`, `surface` or
 `trivial_counter`); `-k` selects by case id (see "Reading a case id" below).
-Cases not marked `big` run 32 qubits or fewer. As collected, Steane has 1,416
+Cases not marked `big` run 32 qubits or fewer. As collected, Steane has 1,480
 of them, the 5-qubit code 2,190, Surface 3,541 and the trivial counter 5.
-Steane takes about 8 minutes on 4 workers (`-n 4`, which `-n auto` gives on a
+Steane takes about 10 minutes on 4 workers (`-n 4`, which `-n auto` gives on a
 4-core machine), and Surface's program cases about 22 minutes.
 
 - `--fail-on-known` fails a run that passed only because cases failed as
@@ -40,7 +40,7 @@ steane        cases  passed  known  failed  seconds
 ------------  -----  ------  -----  ------  -------
 truth         16     16      0      0       3.4
 ft            4      4       0      0       0.9
-ft faults: 2 gadgets, 42 distinct single faults, 84 runs, 0 discarded, all corrected
+ft faults: 2 gadgets, 42 fault classes, 84 runs, 0 discarded, all corrected
 ```
 
 - `cases`: cases that ran. `passed`: cases that failed no check and declare
@@ -51,10 +51,12 @@ ft faults: 2 gadgets, 42 distinct single faults, 84 runs, 0 discarded, all corre
 - A line under the table names each class's known bugs with their case
   counts.
 - The `ft faults` line counts what the fault-tolerance cases injected. A gadget
-  is a declared sweep in a config; a distinct single fault is one fault
-  location and Pauli of that sweep's target (a weight-2 Pauli after a
-  two-qubit gate under `post_twoq`); a run is one fault injected into one
-  case's program, so a gadget's faults repeat across its cases. `discarded` is
+  is a declared sweep in a config; a fault class is a set of first-order
+  faults of that sweep's target that leave the same Pauli at its end: a
+  weight-1 Pauli before each gate and each of the 15 two-qubit Paulis after
+  each two-qubit gate, one fault per class, so a gadget's classes count each
+  class once; a run is one fault injected into one case's program, so a
+  gadget's faults repeat across its cases. `discarded` is
   runs the sweep dropped. It ends `all corrected` when no run failed, else the
   count of uncorrected runs.
 
@@ -66,7 +68,7 @@ ft faults: 2 gadgets, 42 distinct single faults, 84 runs, 0 discarded, all corre
 | `truth` | Each declared word on the backends, checked against the logical script's measured outcomes (`truth`, `mp-truth`) and between backends (`agreement`) | The measured logical outcome matches the ideal one, and the backends agree | `five-5` (`agreement`), `five-12`, `surface-1`, `surface-2`, `surface-3`, `surface-4` | `s-sdag-swapped`, `x-wrong-support` |
 | `tracking` | Words with injected errors, the oracle observing between steps (`gate`, `idle`, `reuse`, `word`, `mp-track`, `mp-reuse`) | The tracked Pauli frame, syndrome and logical state stay right under errors | `steane-1`, `steane-2`, `five-1` to `five-5`, `five-10`, `surface-1`, `surface-3` (O4), `surface-4`, `surface-6`, `surface-7` | `s-bare-circuit`, `h-no-syndrome-swap`, `x-measure-uses-h`, `cx-frame-only`, `surface-cnot-xor-dropped` |
 | `independence` | Two logical words on two patches with an error on one | An error on one patch leaves the other patch's results alone | `steane-2`, `five-8`, `surface-1`, `surface-3` | none |
-| `ft` | Every single fault of a declared sweep, injected into a gadget between a prep and a measure | One fault anywhere in the gadget is corrected | none yet: `five-6` and `five-7` were found by reading and research runs, and the 5-qubit sweeps that would check them aren't declared yet | `s-bare-circuit` (one `ft` case) |
+| `ft` | Every first-order fault of a declared sweep (weight 1 before each gate, the 15 two-qubit Paulis after each two-qubit gate, one per propagation class), injected into a gadget between a prep and a measure. A sweep over a QEC round runs as an exRec on each side: nothing or one non-Pauli gate before the round, nothing or one then QEC after it, so a fault in a round is checked with the gate before it and the gate after it. The limit: one gate between rounds | One fault anywhere in the gadget is corrected | `steane-6`; `five-6` and `five-7` were found by reading and research runs, and the 5-qubit sweeps that would check them aren't declared yet | `s-bare-circuit` (one `ft` case) |
 
 The static class has these families:
 
@@ -120,7 +122,7 @@ One example per class, with the detail's fields:
 | `truth` | `steane.default.truth.truth.FT_Zero_Prep-H+H-FT_Logical_X_Measure-Adaptive_QEC` | prep, gate word (`+` joins gates), measure, QEC key |
 | `tracking` | `steane.default.tracking.gate.FT_Zero_Prep-H-H-egq-Adaptive_QEC-FT_Logical_Z_Measure` | prep, input gates, tested gate, order (`egq`: error, gate, QEC; `eqgq` adds a QEC after the error), QEC key, measure |
 | `independence` | `steane.default.independence.independence.errL0-FT_Zero_Prep+H+H-FT_Zero_Prep+X-blocks` | the patch with the error, each patch's prep and gate (`prep+gate`), schedule (`blocks` or `interleaved`) |
-| `ft` | `steane.default.ft.ft.check-S1-S5-S6-FT_Zero_Prep+H-FT_Logical_X_Measure-none-clean` | sweep, input (prep and gates), measure, suffix word, seed (`clean` or `tracked`) |
+| `ft` | `steane.default.ft.ft.check-S1-S5-S6-FT_Zero_Prep+H-FT_Logical_X_Measure-none.none-clean` | sweep, input (prep and gates), measure, the gates before and after the round (`none` or a gate key, `before.after`; `none` for a sweep that isn't over a QEC round), seed (`clean` or `tracked`) |
 
 ## Where a codepack lives
 

@@ -11,6 +11,8 @@ How to read `GENERATED["tables"]` (each map acts on a bit column, mod 2):
   data qubit's Pauli frame entry follows. Frames track Paulis up to sign,
   so S and Sdag share one rule (S X S^dag = Y, S^dag X S = -Y).
   `trivial`: both maps are the identity, so no bookkeeping step runs.
+  `css_preserving`: the declared action maps X and Z to all-X or all-Z
+  Paulis, so the gate clears `Tracking.non_css` and others toggle it.
 - `syndrome_index[circuit]`: each auxiliary qubit the circuit measures,
   to the index of the stabilizer its reading gives.
 - `support`, `logical_support`: the data-qubit indices each stabilizer
@@ -26,10 +28,10 @@ How to read `GENERATED["tables"]` (each map acts on a bit column, mod 2):
 
 from typing import Any
 
-INPUT_HASH = '9860684bd66644a2e630fe8f5f03f2b0617ddc5344e4964d36795f098c490ee3'
+INPUT_HASH = '3899e056cfb2711472e060af7a9f4412e96be2b7cd8c019a078a31fa74482c47'
 GENERATOR_VERSION = 1
 STIM_VERSION = '1.16.0'
-TABLES_HASH = 'e631d046b1b40452bd31bec07eee518a696532ce415b78645e9479556478bbf7'
+TABLES_HASH = '8a21b2c1d184d2d09df46bab2c7a98f4dc6cc625e493d9ea469f883bd7224b87'
 
 GENERATED: dict[str, Any] = {
     'checks': {
@@ -40,6 +42,7 @@ GENERATED: dict[str, Any] = {
     'tables': {
         'gates': {
             'H': {
+                'css_preserving': True,
                 'frame_map': [[0, 1], [1, 0]],
                 'logical': 'H',
                 'per_qubit': {'I': 'I', 'X': 'Z', 'Y': 'Y', 'Z': 'X'},
@@ -54,6 +57,7 @@ GENERATED: dict[str, Any] = {
                 'trivial': False,
             },
             'I': {
+                'css_preserving': True,
                 'frame_map': [[1, 0], [0, 1]],
                 'logical': 'I',
                 'per_qubit': {'I': 'I', 'X': 'X', 'Y': 'Y', 'Z': 'Z'},
@@ -68,6 +72,7 @@ GENERATED: dict[str, Any] = {
                 'trivial': True,
             },
             'S': {
+                'css_preserving': False,
                 'frame_map': [[1, 1], [0, 1]],
                 'logical': 'S',
                 'per_qubit': {'I': 'I', 'X': 'Y', 'Y': 'X', 'Z': 'Z'},
@@ -82,6 +87,7 @@ GENERATED: dict[str, Any] = {
                 'trivial': False,
             },
             'Sdag': {
+                'css_preserving': False,
                 'frame_map': [[1, 1], [0, 1]],
                 'logical': 'S_DAG',
                 'per_qubit': {'I': 'I', 'X': 'Y', 'Y': 'X', 'Z': 'Z'},
@@ -96,6 +102,7 @@ GENERATED: dict[str, Any] = {
                 'trivial': False,
             },
             'X': {
+                'css_preserving': True,
                 'frame_map': [[1, 0], [0, 1]],
                 'logical': 'X',
                 'per_qubit': {'I': 'I', 'X': 'X', 'Y': 'Y', 'Z': 'Z'},
@@ -110,6 +117,7 @@ GENERATED: dict[str, Any] = {
                 'trivial': True,
             },
             'Y': {
+                'css_preserving': True,
                 'frame_map': [[1, 0], [0, 1]],
                 'logical': 'Y',
                 'per_qubit': {'I': 'I', 'X': 'X', 'Y': 'Y', 'Z': 'Z'},
@@ -124,6 +132,7 @@ GENERATED: dict[str, Any] = {
                 'trivial': True,
             },
             'Z': {
+                'css_preserving': True,
                 'frame_map': [[1, 0], [0, 1]],
                 'logical': 'Z',
                 'per_qubit': {'I': 'I', 'X': 'X', 'Y': 'Y', 'Z': 'Z'},
@@ -140,6 +149,10 @@ GENERATED: dict[str, Any] = {
         },
         'logical_support': {'X': [4, 5, 6], 'Z': [4, 5, 6]},
         'lut': {
+            'S-aware table': [
+                [[0, 0, 0, 0, 1, 0], [0, 0, 1, 1, 1, 0]],
+                [[1, 0, 0, 0, 1, 1], [1, 0, 0, 0, 1, 1]],
+            ],
             'Table 1': [[0, 0, 1], [0, 1, 0], [0, 1, 1]],
             'Table 2': [
                 [[1, 0, 0], [0, 1, 0]],
@@ -170,6 +183,7 @@ GENERATED: dict[str, Any] = {
         },
         'two_patch': {
             'Transversal CX': {
+                'css_preserving': True,
                 'frame_map': [
                     [1, 0, 1, 0],
                     [0, 1, 0, 0],

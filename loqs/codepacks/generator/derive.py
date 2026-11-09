@@ -313,6 +313,20 @@ def gate_bookkeeping(
     return fmap, smap
 
 
+def css_preserving(declared: stim.Tableau) -> bool:
+    """True when the declared logical action maps every logical X and Z
+    to a Pauli string whose non-identity letters are all X or all Z."""
+    for k in range(len(declared)):
+        for letter in "XZ":
+            lp = stim.PauliString(len(declared))
+            lp[k] = letter
+            img = declared(lp)
+            letters = {"_XYZ"[img[q]] for q in range(len(img))} - {"_"}
+            if len(letters) > 1 or "Y" in letters:
+                return False
+    return True
+
+
 def per_qubit_rules(
     layers: list[Layer], data: tuple[str, ...]
 ) -> dict[str, dict[str, str]] | None:
