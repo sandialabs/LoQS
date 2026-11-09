@@ -24,6 +24,9 @@ from loqs.core import QuantumProgram
 from loqs.core.instructions import InstructionLabel
 from loqs.core.instructions.builders import build_physical_circuit_instruction
 from loqs.tools.stimtools import (
+    _label_order,
+    _stim_decoder_apply_fn,
+    _stim_decoder_batch,
     build_stim_decoder_instruction,
     build_stim_model,
     stim_record_from_outcomes,
@@ -267,6 +270,37 @@ class TestDecoderInstruction:
             "detectors", "all", strip_none_entries=True
         )
         assert all(any(d[-1]) for d in dets)
+
+    def test_batch_matches_per_shot(self):
+        noise = dict(
+            after_clifford_depolarization=0.005,
+            after_reset_flip_probability=0.005,
+            before_measure_flip_probability=0.005,
+        )
+        task = "surface_code:rotated_memory_z"
+        ideal = stim.Circuit.generated(task, distance=3, rounds=3)
+        noisy = stim.Circuit.generated(task, distance=3, rounds=3, **noise)
+        inst = build_stim_decoder_instruction(
+            ideal, dem=noisy.detector_error_model(decompose_errors=True)
+        )
+        data = inst.data
+        order = _label_order(data["circuit_str"], tuple(data["qubit_labels"]))
+        shots = noisy.compile_sampler(seed=5).sample(200)
+
+        batch = _stim_decoder_batch(shots, order, **data)
+        assert batch is not None
+        for i, row in enumerate(shots):
+            outcomes: dict = {}
+            for label, bit in zip(order, row):
+                outcomes.setdefault(label, []).append(int(bit))
+            frame = _stim_decoder_apply_fn(
+                measurement_outcomes=outcomes, **data
+            )
+            assert set(frame) == set(batch)
+            for key in frame:
+                assert np.array_equal(frame[key], batch[key][i])
+
+        assert _stim_decoder_batch(shots, order[::-1], **data) is None
 
     def test_noiseless_circuit_without_dem_refused(self):
         ideal = stim.Circuit.generated(

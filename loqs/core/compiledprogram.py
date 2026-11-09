@@ -25,7 +25,7 @@ class CompiledProgram(Displayable):
     index, closure or live object, and is keyed by the measurement
     record, which is the concatenation of the steps' outcome bits.
 
-    Each entry of [](api:steps) is a `dict` with four keys:
+    Each entry of [](api:steps) is a `dict` with five keys:
 
     - `name` and `type`: those of the instruction that ran.
     - `outcome_labels`: the qubit labels behind the record bits the step
@@ -34,9 +34,13 @@ class CompiledProgram(Displayable):
       that target, so one step can carry several targets. The `"stim"`
       target holds the STIM text the step ran, and a step that emits
       nothing has an empty `dict`.
+    - `reads`: a sorted list of the indices of earlier steps whose output
+      the step collects, which records feed-forward as data flow. It is an
+      over-approximation: every earlier step that set a key the step
+      collects counts, and an in-place change to shared data isn't seen.
 
     A step may gain keys later, so read a step by key and never assume
-    these four are all there is.
+    these five are all there is.
     """
 
     _SERIALIZE_ATTRS = ["qubit_labels", "steps"]

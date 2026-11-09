@@ -282,6 +282,41 @@ class History(Sequence[Frame], Displayable):
         # Finally append
         self._history.append(item)
 
+    def _select(
+        self,
+        indices: HistoryCollectDataIndexTypes,
+        frame_filter: Mapping[str, object] | None,
+    ) -> list[int]:
+        """The positions in this history that `collect_data` reads."""
+        if frame_filter is None:
+            candidates: Sequence[int] = range(len(self._history))
+        else:
+            candidates = [
+                pos
+                for pos, frame in enumerate(self._history)
+                if all(
+                    frame.get(field) == value
+                    for field, value in frame_filter.items()
+                )
+            ]
+
+        if isinstance(indices, int):
+            iter_indices: list[int] | slice = [indices]
+        elif indices == "all":
+            iter_indices = slice(len(candidates))
+        elif isinstance(indices, slice):
+            iter_indices = indices
+        elif isinstance(indices, Sequence):
+            assert indices != "all"
+            iter_indices = list(indices)
+        else:
+            raise ValueError("Invalid type for indices")
+
+        if isinstance(iter_indices, slice):
+            iter_indices = list(range(len(candidates))[iter_indices])
+
+        return [candidates[i] for i in iter_indices]
+
     def collect_data(
         self,
         key: str,
@@ -329,34 +364,8 @@ class History(Sequence[Frame], Displayable):
         [10, 30]
         """
 
-        if frame_filter is None:
-            candidates: Sequence[Frame] = self._history
-        else:
-            candidates = [
-                frame
-                for frame in self._history
-                if all(
-                    frame.get(field) == value
-                    for field, value in frame_filter.items()
-                )
-            ]
-
-        if isinstance(indices, int):
-            iter_indices: list[int] | slice = [indices]
-        elif indices == "all":
-            iter_indices = slice(len(candidates))
-        elif isinstance(indices, slice):
-            iter_indices = indices
-        elif isinstance(indices, Sequence):
-            assert indices != "all"
-            iter_indices = list(indices)
-        else:
-            raise ValueError("Invalid type for indices")
-
-        if isinstance(iter_indices, slice):
-            iter_indices = list(range(len(candidates))[iter_indices])
-
-        data = [candidates[i].get(key, None) for i in iter_indices]
+        positions = self._select(indices, frame_filter)
+        data = [self._history[i].get(key, None) for i in positions]
 
         if isinstance(indices, int):
             # If we only requested one entry, return bare object

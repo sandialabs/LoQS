@@ -942,6 +942,44 @@ def build_patch_permute_instruction(
     )
 
 
+def _pauli_frame_updated(
+    patches: PatchLayout | None,
+    patch_label: Any,
+    pauli_frame_update: Any,
+) -> PatchLayout:
+    """A copy of `patches` with `patch_label`'s Pauli frame updated."""
+    if patches is None:
+        raise ValueError(
+            "A Pauli frame update needs a PatchLayout, but none was "
+            "found in the history or the instruction's data"
+        )
+    patch = patches[patch_label]
+
+    if isinstance(pauli_frame_update, dict):
+        new_pauli_frame = patch.pauli_frame.map_frame(pauli_frame_update)
+    elif isinstance(pauli_frame_update, str):
+        if pauli_frame_update.lower() == "reset":
+            # Reset back to trivial frame
+            new_pauli_frame = PauliFrame(patch.qubits)
+        else:
+            new_pauli_frame = (
+                patch.pauli_frame.update_from_transversal_clifford(
+                    pauli_frame_update
+                )
+            )
+    elif isinstance(pauli_frame_update, Sequence):
+        new_pauli_frame = patch.pauli_frame.update_from_clifford_conjugation(
+            pauli_frame_update
+        )
+    else:
+        raise ValueError("Invalid pauli frame mapping")
+
+    # Update patches
+    new_patches = patches.copy()
+    new_patches[patch_label] = patch.copy(pauli_frame=new_pauli_frame)
+    return new_patches
+
+
 def build_physical_circuit_instruction(
     circuit: BasePhysicalCircuit,
     inplace: bool = True,
@@ -1109,41 +1147,9 @@ def build_physical_circuit_instruction(
 
         # Update pauli frame, if needed
         if pauli_frame_update is not None:
-            if patches is None:
-                raise ValueError(
-                    "A Pauli frame update needs a PatchLayout, but none was "
-                    "found in the history or the instruction's data"
-                )
-            patch = patches[patch_label]
-
-            if isinstance(pauli_frame_update, dict):
-                new_pauli_frame = patch.pauli_frame.map_frame(
-                    pauli_frame_update
-                )
-            elif isinstance(pauli_frame_update, str):
-                if pauli_frame_update.lower() == "reset":
-                    # Reset back to trivial frame
-                    new_pauli_frame = PauliFrame(patch.qubits)
-                else:
-                    new_pauli_frame = (
-                        patch.pauli_frame.update_from_transversal_clifford(
-                            pauli_frame_update
-                        )
-                    )
-            elif isinstance(pauli_frame_update, Sequence):
-                new_pauli_frame = (
-                    patch.pauli_frame.update_from_clifford_conjugation(
-                        pauli_frame_update
-                    )
-                )
-            else:
-                raise ValueError("Invalid pauli frame mapping")
-
-            # Update patches
-            new_patches = patches.copy()
-            new_patches[patch_label] = patch.copy(pauli_frame=new_pauli_frame)
-
-            data["patches"] = new_patches
+            data["patches"] = _pauli_frame_updated(
+                patches, patch_label, pauli_frame_update
+            )
 
         if isinstance(model, TimeDependentBaseNoiseModel):
             data["current_model_time"] = model.current_time

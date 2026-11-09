@@ -8,7 +8,7 @@ from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.recordables import MeasurementOutcomes, PatchLayout
+from loqs.core.recordables import MeasurementOutcomes, PatchLayout, PauliFrame
 
 
 def _leaf_apply_needing_model(model, patch_label=None):
@@ -205,6 +205,41 @@ class TestRepeatUntilSuccessInstruction:
         )
         new = inst.map_qubits({"Q0": "Q1"})
         assert new.data["expected"] == mapped
+
+
+class TestPauliFrameUpdated:
+    """`_pauli_frame_updated` routes each form of update to its
+    `PauliFrame` method, on a copied layout."""
+
+    QUBITS = ["D0", "D1", "D2"]
+
+    @pytest.mark.parametrize(
+        "update, expected",
+        [
+            ("H", lambda f: f.update_from_transversal_clifford("H")),
+            (
+                ["H", "S", "I"],
+                lambda f: f.update_from_clifford_conjugation(["H", "S", "I"]),
+            ),
+            (
+                {"I": "I", "X": "Z", "Y": "Y", "Z": "X"},
+                lambda f: f.map_frame(
+                    {"I": "I", "X": "Z", "Y": "Y", "Z": "X"}
+                ),
+            ),
+            ("reset", lambda f: PauliFrame(TestPauliFrameUpdated.QUBITS)),
+        ],
+        ids=["transversal", "conjugation", "map", "reset"],
+    )
+    def test_matches_pauli_frame_method(self, update, expected):
+        code = QECCode({}, self.QUBITS, self.QUBITS)
+        frame = PauliFrame(self.QUBITS, ["X", "Z", "I"])
+        layout = PatchLayout({"L0": code.create_patch(self.QUBITS, frame)})
+
+        new = builders._pauli_frame_updated(layout, "L0", update)
+
+        assert new["L0"].pauli_frame.pauli_frame == expected(frame).pauli_frame
+        assert layout["L0"].pauli_frame.pauli_frame == ["X", "Z", "I"]
 
 
 class TestLookupDecoderInstruction:

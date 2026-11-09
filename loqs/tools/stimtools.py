@@ -369,6 +369,35 @@ def _stim_decoder_apply_fn(
     )
 
 
+def _stim_decoder_batch(
+    measurements: NDArray,
+    record_labels: Sequence,
+    circuit_str: str,
+    qubit_labels: Sequence,
+    dem_str: str,
+) -> dict | None:
+    """Decode many shots' records at once, as `_stim_decoder_apply_fn` does.
+
+    `measurements` is `(shots, n)` and `record_labels` the qubit label
+    behind each column. Returns `None` when the labels aren't the
+    circuit's record order, so the caller falls back to decoding per shot.
+    """
+    order = _label_order(circuit_str, tuple(qubit_labels))
+    if tuple(record_labels) != order:
+        return None
+    detectors, observables = _m2d_converter(circuit_str).convert(
+        measurements=measurements, separate_observables=True
+    )
+    predicted = _matching(dem_str).decode_batch(detectors)
+    observed = observables.astype(np.uint8)
+    return {
+        "detectors": detectors.astype(np.uint8),
+        "observables": observed,
+        "predicted_observables": predicted.astype(np.uint8),
+        "logical_error": np.any(predicted != observed, axis=1),
+    }
+
+
 def build_stim_decoder_instruction(
     circuit: STIMPhysicalCircuit | stim.Circuit,
     dem: stim.DetectorErrorModel | None = None,
@@ -440,4 +469,5 @@ def build_stim_decoder_instruction(
         },
         param_priorities={"measurement_outcomes": ["history[all]"]},
         name=name,
+        type="STIM DEM decoder",
     )
