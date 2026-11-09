@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence, Mapping
 from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 
@@ -184,7 +185,9 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             q: qubit_mapping.get(q, q) for q in self.circuit.line_labels
         }
 
-        self.circuit.map_state_space_labels_inplace(complete_mapping)
+        self._circuit = self._map_circuit_labels(
+            self._circuit, complete_mapping
+        )
 
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
         other_circuit: _Circuit = PyGSTiPhysicalCircuit(circuit).circuit
@@ -319,6 +322,46 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         }
         return gatename_pygsti_safe_renames(names)
 
+    @staticmethod
+    def _map_circuit_labels(circuit: _Circuit, mapping: dict) -> _Circuit:
+        """Rebuild `circuit` with its qubit labels replaced per `mapping`.
+
+        Unlike pyGSTi's in-place map, this keeps gate arguments and times,
+        and builds without pyGSTi's label check. A gate with no qubits
+        (a `str` label) is kept as it is.
+        """
+        layers = [
+            (
+                lbl
+                if isinstance(lbl, str)
+                else lbl.map_state_space_labels(mapping)
+            )
+            for lbl in circuit.layertup
+        ]
+        return _Circuit(
+            layers,
+            line_labels=[mapping[q] for q in circuit.line_labels],
+            editable=True,
+            check=False,
+        )
+
+    @staticmethod
+    def _swap_labels_for_safe_names(body: str, qubit_strs: list[str]) -> str:
+        """Replace each qubit label in the circuit string `body` with
+        `Q<i>`, its index in `qubit_strs`, which pyGSTi's parser accepts.
+
+        A label always follows a ":" (`Gx:D1`, `Gcnot:D1:D10`), so only
+        text there is swapped and gate names are left alone. Labels are
+        tried longest first, so `D1` can't match the start of `D10`.
+        """
+        if not qubit_strs:
+            return body
+        safe_names = {s: f"Q{i}" for i, s in enumerate(qubit_strs)}
+        longest_first = sorted(qubit_strs, key=len, reverse=True)
+        alternatives = "|".join(re.escape(s) for s in longest_first)
+        label_after_colon = re.compile(f"(?<=:)({alternatives})")
+        return label_after_colon.sub(lambda m: safe_names[m.group(1)], body)
+
     @classmethod
     def _deserialize_circuit(
         cls,
@@ -338,27 +381,22 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         # For pyGSTi circuit, we can load from string rep
         # (minus leading "Circuit(" and trailing ")" )
         assert isinstance(serial_circuit, str)
-        cstr = serial_circuit[8:-1]
-        line_labels = cstr.split("@")[1][1:-1].split(",")
+        body, _, label_list = serial_circuit[8:-1].rpartition("@")
+        label_list = label_list[1:-1]
+        line_labels = label_list.split(",") if label_list else []
 
         if qubit_labels is None:
             qubit_labels = line_labels
-        else:
-            assert set(line_labels) == set(qubit_labels)
+        qubit_strs = [str(q) for q in qubit_labels]
+        if set(line_labels) != set(qubit_strs):
+            raise ValueError(
+                f"Line labels {line_labels} of circuit string "
+                f"{serial_circuit} don't match qubit labels {qubit_strs}"
+            )
 
-        # However, qubit labels must be ints or start with "Q"
-        # First, lets map our string to have Q labels
-        # Do this through temp in case some of them already have Q labels
-        # (common convention)
-        old_to_temp = {lbl: f"TEMP{i}" for i, lbl in enumerate(qubit_labels)}
-        temp_to_new = {f"TEMP{i}": f"Q{i}" for i in range(len(qubit_labels))}
+        cstr = cls._swap_labels_for_safe_names(body, qubit_strs)
+        cstr += "@(" + ",".join(f"Q{i}" for i in range(len(qubit_strs))) + ")"
 
-        for k, v in old_to_temp.items():
-            cstr = cstr.replace(k, v)
-        for k, v in temp_to_new.items():
-            cstr = cstr.replace(k, v)
-
-        # Now let the parser at it
         try:
             circ = _Circuit(cstr, editable=True)
         except ValueError as e:
@@ -366,16 +404,11 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
                 f"Failed to parse circuit string {serial_circuit}"
             ) from e
 
-        # And convert state space labels back
-        circ.map_state_space_labels_inplace(
-            {v: k for k, v in temp_to_new.items()}
+        # Map back to the original labels, which may be ones the parser
+        # (and pyGSTi's label check) would reject
+        return cls._map_circuit_labels(
+            circ, {f"Q{i}": q for i, q in enumerate(qubit_labels)}
         )
-        circ.map_state_space_labels_inplace(
-            {v: k for k, v in old_to_temp.items()}
-        )
-        circ.line_labels = qubit_labels
-
-        return circ
 
     def _serialize_circuit(self) -> str | list | dict:
         # For pyGSTi circuit, we use the string rep -- but that only
