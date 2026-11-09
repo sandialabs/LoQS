@@ -46,6 +46,50 @@ class TestRewriteRenames:
             "import loqs.core\nx = loqs.core.PatchLayout()\n"
         )
 
+    @pytest.mark.parametrize(
+        "src, expected",
+        [
+            pytest.param(
+                "import loqs.core as lc\nx = lc.PatchDict()\n",
+                "import loqs.core as lc\nx = lc.PatchLayout()\n",
+                id="module_alias",
+            ),
+            pytest.param(
+                "import loqs.core as lc\nfrom loqs.core import PatchDict\n"
+                "x = lc.PatchDict()\ny = PatchDict()\n",
+                "import loqs.core as lc\nfrom loqs.core import PatchLayout\n"
+                "x = lc.PatchLayout()\ny = PatchLayout()\n",
+                id="module_alias_and_from_import",
+            ),
+            pytest.param(
+                "from loqs.core import PatchDict as PD\nx = PD()\n",
+                "from loqs.core import PatchLayout as PD\nx = PD()\n",
+                id="from_import_as",
+            ),
+            pytest.param(
+                "import loqs.core.recordables.patchdict as pd\n"
+                "from loqs.core.recordables.patchdict import PatchDict\n"
+                "x = pd.PatchDict\ny = PatchDict\n",
+                "import loqs.core.recordables.patchlayout\n"
+                "from loqs.core.recordables.patchlayout import PatchLayout\n"
+                "x = loqs.core.recordables.patchlayout.PatchLayout\n"
+                "y = PatchLayout\n",
+                id="module_import_and_from_import_new_module",
+            ),
+        ],
+    )
+    def test_alias_and_mixed_imports(self, src, expected, request):
+        """Same-module renames keep the user's alias and `as` name, and a
+        module-changing rename keeps its from-import when the old module
+        is also imported."""
+        result = rewrite_renames(src)
+        if request.node.callspec.id.endswith("new_module"):
+            # `RenameCommand`'s spacing after the imports it adds.
+            result_lines = [ln for ln in result.source.splitlines() if ln]
+            assert result_lines == expected.splitlines()
+        else:
+            assert result.source == expected
+
     def test_deleted_name_flagged_not_guessed(self):
         src = FIXTURES.joinpath("deleted_name_before.py").read_text(
             encoding="utf-8"
