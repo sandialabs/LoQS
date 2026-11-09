@@ -84,10 +84,12 @@ def apply_fn(
         expected_str = """
 from loqs.core.instructions.instructionlabel import (
     InstructionLabel,
-    InstructionLabelLike)
+    InstructionLabelLike,
+)
 from loqs.core.instructions.instructionstack import (
     InstructionStack,
-    InstructionStackLike)
+    InstructionStackLike,
+)
 def apply_fn(
     instructions: InstructionStackLike,
 ) -> None:

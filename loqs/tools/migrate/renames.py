@@ -39,15 +39,27 @@ either rewriting or hard-erroring is the honest outcome here.
 
 [](api:Serializable._update_imports) is a thin wrapper around this same
 function, so frozen function source and whole user source files share one
-rewrite mechanism, built on `libcst`'s `RenameCommand`
-(`libcst.codemod.commands.rename`). `RenameCommand` resolves real code
-references via `QualifiedNameProvider`, so it can tell an actual usage of
-a renamed class apart from the same text appearing in a docstring,
-comment, or unrelated identifier, and updates both the import statement
-and every usage site together.
+rewrite mechanism. Both rewrite passes resolve real code references via
+`libcst`'s `QualifiedNameProvider`, so they can tell an actual usage of a
+renamed class apart from the same text appearing in a docstring,
+comment, or unrelated identifier, and update both the import statement
+and every usage site together. Neither rewrites or flags a name inside
+a quoted annotation (`x: "PatchDict"`), which keeps its old name.
 
-A few real `RenameCommand` behaviors worth knowing about before trusting
-this pass blindly:
+Same-module renames (the `*CastableTypes` -> `*Like` renames, the
+instrument-rep rename and the `PatchDict` re-exports) go through LoQS's
+own pass, which keeps the user's import style: module aliases, `as`
+names and import placement. `RenameCommand` writes such a rename reached
+through `import a.b as x` as `a.b.New` without binding `a` (#161), and
+drops the from-import when the file also has `import a.b`. Module-changing
+renames use `libcst`'s `RenameCommand`
+(`libcst.codemod.commands.rename`); LoQS adds the from-import it drops
+when the file has both `import <old module>` and a from-import of the
+old name.
+
+A few real `RenameCommand` behaviors, which now apply only to
+module-changing renames, worth knowing about before trusting this pass
+blindly:
 
 1. It always adds the new import at module scope, even when the old one
    was function-local (e.g. a lazy import used to avoid a circular
@@ -77,6 +89,7 @@ from collections.abc import Mapping
 import libcst as cst
 from libcst.codemod import CodemodContext
 from libcst.codemod.commands.rename import RenameCommand
+from libcst.codemod.visitors import AddImportsVisitor
 from libcst.helpers import get_full_name_for_node
 from libcst.metadata import (
     MetadataWrapper,
@@ -152,9 +165,20 @@ class _QualifiedNameFinder(cst.CSTVisitor):
         self._name = name
         self._qualified_name = f"{module}.{name}"
         self.lines: list[int] = []
+        # Whether the file has `import <module>` (any `as`) and a
+        # `from <module> import <name>`, respectively.
+        self.has_module_import = False
+        self.has_from_import = False
 
     def _line(self, node: cst.CSTNode) -> int:
         return self.get_metadata(PositionProvider, node).start.line
+
+    def visit_Import(self, node: cst.Import) -> None:
+        if any(
+            get_full_name_for_node(alias.name) == self._module
+            for alias in node.names
+        ):
+            self.has_module_import = True
 
     def visit_ImportFrom(self, node: cst.ImportFrom) -> None:
         if node.module is None:  # a relative `from . import x`
@@ -165,6 +189,7 @@ class _QualifiedNameFinder(cst.CSTVisitor):
             return
         for alias in node.names:
             if get_full_name_for_node(alias.name) == self._name:
+                self.has_from_import = True
                 self.lines.append(self._line(alias.name))
 
     def visit_Name(self, node: cst.Name | cst.Attribute) -> None:
@@ -176,6 +201,60 @@ class _QualifiedNameFinder(cst.CSTVisitor):
             self.lines.append(self._line(node))
 
     visit_Attribute = visit_Name
+
+
+class _SameModuleRenamer(cst.CSTTransformer):
+    """Rename names that stay in their module, keeping the user's import
+    style. `table` maps `"<module>.<old_name>"` to the new name. Renames
+    the name in `from <module> import <old_name> [as y]` (keeping `as y`),
+    each `Name` resolving to a table entry whose text is the old name, and
+    the `attr` of each `Attribute` resolving to one (`lc.PatchDict`)."""
+
+    METADATA_DEPENDENCIES = (QualifiedNameProvider,)
+
+    def __init__(self, table: Mapping[str, str]) -> None:
+        self._table = table
+
+    def leave_ImportFrom(
+        self, original_node: cst.ImportFrom, updated_node: cst.ImportFrom
+    ) -> cst.ImportFrom:
+        if original_node.module is None:
+            return updated_node
+        if isinstance(updated_node.names, cst.ImportStar):
+            return updated_node
+        module = get_full_name_for_node(original_node.module)
+        names = [
+            (
+                alias.with_changes(name=cst.Name(self._table[key]))
+                if isinstance(alias.name, cst.Name)
+                and (key := f"{module}.{alias.name.value}") in self._table
+                else alias
+            )
+            for alias in updated_node.names
+        ]
+        return updated_node.with_changes(names=names)
+
+    def _new_name(
+        self, node: cst.Name | cst.Attribute, text: str
+    ) -> str | None:
+        for qn in self.get_metadata(QualifiedNameProvider, node, set()):
+            if qn.name.rsplit(".", 1)[-1] == text and qn.name in self._table:
+                return self._table[qn.name]
+        return None
+
+    def leave_Name(
+        self, original_node: cst.Name, updated_node: cst.Name
+    ) -> cst.Name:
+        new = self._new_name(original_node, original_node.value)
+        return updated_node.with_changes(value=new) if new else updated_node
+
+    def leave_Attribute(
+        self, original_node: cst.Attribute, updated_node: cst.Attribute
+    ) -> cst.Attribute:
+        new = self._new_name(original_node, original_node.attr.value)
+        if new is None:
+            return updated_node
+        return updated_node.with_changes(attr=cst.Name(new))
 
 
 def rewrite_renames(
@@ -220,6 +299,8 @@ def rewrite_renames(
     # (module-level line counts can shift, e.g. a new import added).
     original_wrapper = MetadataWrapper(module)
     rewrite_items: list[RewriteItem] = []
+    same_module: dict[str, str] = {}
+    module_changing: list[tuple[str, str, str, str, bool]] = []
     for (old_module, old_name), new_loc in applicable_renames.items():
         if new_loc is None:
             continue
@@ -232,7 +313,23 @@ def rewrite_renames(
         )
         if not finder.lines:
             continue
+        if new_module == old_module:
+            same_module[f"{old_module}.{old_name}"] = new_name
+        else:
+            # `RenameCommand` drops the from-import when the file also
+            # has `import <old_module>`, so it's re-added below.
+            both = finder.has_module_import and finder.has_from_import
+            module_changing.append(
+                (old_module, old_name, new_module, new_name, both)
+            )
+
+    if same_module:
+        # Visits `original_wrapper`, reusing the finders' metadata.
+        module = original_wrapper.visit(_SameModuleRenamer(same_module))
+    for old_module, old_name, new_module, new_name, both in module_changing:
         context = CodemodContext()
+        if both:
+            AddImportsVisitor.add_needed_import(context, new_module, new_name)
         command = RenameCommand(
             context,
             f"{old_module}.{old_name}",

@@ -95,6 +95,65 @@ def test_round_trip_equal_with_unsorted_parallel_layer(make_temp_path):
     assert hash(loaded) == hash(circ)
 
 
+def _label_kinds_circuit():
+    return Circuit(
+        [
+            Label("Gidle"),
+            Label("Gzr", "S0", args=(0.5,)),
+            Label("Gx", "D1", time=1.5),
+        ],
+        line_labels=["S0", "D1"],
+        check=False,
+    )  # type: ignore
+
+
+@pytest.mark.parametrize(
+    "layers,labels",
+    [
+        pytest.param([[("Gxpi2", 1), ("Gypi2", 0)]], [0, 1], id="int_labels"),
+        pytest.param(
+            [[("Gxpi2", "A0")]],
+            ["X", "A"] + [f"B{i}" for i in range(9)] + ["A0"],
+            id="prefix_label",
+        ),
+        pytest.param(_label_kinds_circuit(), ["S0", "D1"], id="label_kinds"),
+    ],
+)
+def test_round_trip_qubit_labels(layers, labels, make_temp_path):
+    if isinstance(layers, Circuit):
+        circ = PhysCirc(layers)
+    else:
+        circ = PhysCirc(layers, labels)
+    assert list(circ.qubit_labels) == labels
+
+    with make_temp_path(suffix=".json") as tmp_path:
+        circ.write(tmp_path)
+        loaded = PhysCirc.read(tmp_path)
+
+    assert loaded == circ
+    # pyGSTi's equality ignores gate times; the string form keeps them
+    assert loaded.circuit.str == circ.circuit.str
+    assert list(loaded.qubit_labels) == labels
+
+
+def test_map_qubit_labels_keeps_args_and_time():
+    circ = Circuit(
+        [Label("Gzr", "Q0", args=(0.5,)), Label("Gx", "Q1", time=1.5)],
+        line_labels=["Q0", "Q1"],
+    )  # type: ignore
+    pc = PhysCirc(circ)
+    pc.map_qubit_labels_inplace({"Q0": "Q2"})
+
+    expected = Circuit(
+        [Label("Gzr", "Q2", args=(0.5,)), Label("Gx", "Q1", time=1.5)],
+        line_labels=["Q2", "Q1"],
+        check=False,
+    )  # type: ignore
+    assert pc.circuit.layertup == expected.layertup
+    assert [lbl.time for lbl in pc.circuit.layertup] == [0.0, 1.5]
+    assert list(pc.qubit_labels) == ["Q2", "Q1"]
+
+
 def test_serialization_gatename_alias_collision_raises():
     # "GiMCM" and "Gimcm" both alias to the same pyGSTi-safe name --
     # serializing both in one circuit can't be reversed unambiguously.
