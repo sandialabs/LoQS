@@ -1350,11 +1350,12 @@ def build_repeat_until_success_instruction(
             )
             for instruction in instructions
         ]
-        # Often expected will be a MeasurementOutcomes, so we want to map that as well
-        # TODO: Is it always?
-        new_kwargs["expected"] = new_kwargs["expected"].map_qubits(
-            qubit_mapping
-        )
+        # Map expected only when it is a MeasurementOutcomes; any other
+        # value (e.g. a bool) passes through unchanged
+        if isinstance(new_kwargs["expected"], MeasurementOutcomes):
+            new_kwargs["expected"] = new_kwargs["expected"].map_qubits(
+                qubit_mapping
+            )
         return new_kwargs
 
     # The success argument is being collected from the previous frame by alias

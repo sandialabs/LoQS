@@ -118,7 +118,7 @@ class QSimQuantumState(BaseQuantumState):
             Optional RNG seed. If not provided, default NumPy RNG behavior applies.
         """
         if isinstance(state, QSimQuantumState):
-            self._state = state._state.copy()
+            self._state = deepcopy(state._state)
         elif isinstance(state, _SparseDM):
             self._state = state
         elif isinstance(state, Int):

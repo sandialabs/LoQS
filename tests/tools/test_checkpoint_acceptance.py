@@ -376,10 +376,8 @@ def test_shot_payloads_do_not_reembed_the_parent_program(
         ]
 
     def data_digests(history: History | None) -> list[int]:
-        # A stored frame decodes with its expired keys listed twice, so
-        # compare the frames' data rather than their whole encodings.
         assert history is not None
-        return [Serializable._serial_hash(f._data) for f in history]
+        return [Serializable._serial_hash(history)]
 
     for i in range(num_shots):
         assert data_digests(results.get_shot_history(i)) == data_digests(

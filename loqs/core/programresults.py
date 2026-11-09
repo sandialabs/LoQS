@@ -184,7 +184,15 @@ class ProgramResults(Displayable):
         results_filename:
             Filename to use for the canonical results checkpoint file.
             Defaults to "results.h5".
+
+        max_memory_shots:
+            How many lazily read shots stay in memory at once. A value
+            below 1 raises a `ValueError`.
         """
+        if max_memory_shots < 1:
+            raise ValueError(
+                f"max_memory_shots must be >= 1, got {max_memory_shots}"
+            )
         self.shot_histories = (
             shot_histories if shot_histories is not None else {}
         )
@@ -400,6 +408,10 @@ class ProgramResults(Displayable):
             `shot_wall_clock_times`.
         """
         history = History(history)
+        # Drop any lazily read copy of the shot being replaced
+        if shot_index in self._memory_cache:
+            del self._memory_cache[shot_index]
+            self._cache_order.remove(shot_index)
         self.shot_histories[shot_index] = history
         self._unwritten_shots.add(shot_index)
         if wall_clock_time is not None:

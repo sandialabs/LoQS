@@ -155,7 +155,8 @@ class Frame(Mapping[str, object], Displayable):
         key:
             The key to not serialize
         """
-        self._no_serialize_keys.append(key)
+        if key not in self._no_serialize_keys:
+            self._no_serialize_keys.append(key)
 
     def update(
         self,
@@ -201,6 +202,7 @@ class Frame(Mapping[str, object], Displayable):
 
         f = Frame(data, new_log)
         f._expired_keys = self._expired_keys.copy()
+        f._no_serialize_keys = self._no_serialize_keys.copy()
 
         return f
 
