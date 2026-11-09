@@ -418,7 +418,7 @@ class TestMultiProgramRunnerParallel:
         self, tmp_path, inline, ledgers
     ):
         """A resumed parallel run rebuilds only the items not already done.
-        With `blank_ledgers` the two readers of ledger contents report
+        With `blank_ledgers` the ledger reader reports
         nothing done, as lost or reordered ledger writes on a share without
         POSIX write ordering would; results still come from the payloads."""
         import dataclasses
@@ -463,12 +463,6 @@ class TestMultiProgramRunnerParallel:
                 stack.enter_context(
                     unittest.mock.patch.object(
                         mpr, "read_swmr_ledger_status", blank_status
-                    )
-                )
-                stack.enter_context(
-                    unittest.mock.patch(
-                        "loqs.core.programresults.read_swmr_ledger_done_union",
-                        lambda *args, **kwargs: set(),
                     )
                 )
             results = runner2.run()
@@ -582,73 +576,6 @@ class _ShotProgressTestRunner(MultiProgramRunner):
         return [result for _, result in ordered_results]
 
 
-class _CustomFilenameProbeRunner(MultiProgramRunner):
-    """Mirrors _ShotProgressTestRunner, but item index 1's shots each run a
-    real Sleep instruction, so that item stays in flight shot by shot."""
-
-    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
-        "items",
-        "num_shots",
-    ]
-
-    SLOW_SHOT_SECONDS = 0.3
-
-    def __init__(self, items, num_shots=5, on_item_done=None, **kwargs):
-        super().__init__(**kwargs)
-        self.items = items
-        self.num_shots = num_shots
-        self._on_item_done = on_item_done
-
-    def build_program(self, index):
-        item = self.items[index]
-        sign = 1 if item >= 0 else -1
-        trivial_code = trivial_codepack.create_qec_code()
-        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
-        stack = [
-            {
-                "instruction": "Init Patch Trivial",
-                "new_patch_label": "L0",
-                "qubits": ["Q0"],
-            },
-            {
-                "instruction": "Init Counter",
-                "patch_label": "L0",
-                "initial_value": 0,
-            },
-        ]
-        if index == 1:
-            stack.append(
-                {
-                    "instruction": "Sleep",
-                    "patch_label": "L0",
-                    "duration": self.SLOW_SHOT_SECONDS,
-                }
-            )
-        for _ in range(abs(item)):
-            stack.append(
-                {
-                    "instruction": "Increment",
-                    "patch_label": "L0",
-                    "increment_by": 2 * sign,
-                }
-            )
-        return QuantumProgram(
-            stack,
-            default_noise_model=ideal_model,
-            patch_types={"Trivial": trivial_code},
-            name="Custom filename probe program",
-        )
-
-    def reduce_program_outcomes(self, program_results):
-        return program_results.collect_shot_data("counter", -1)[0]
-
-    def _build_output(self, ordered_results):
-        return [result for _, result in ordered_results]
-
-    def _make_on_item_done(self):
-        return self._on_item_done
-
-
 class TestParallelDispatchAndPollingRegressions:
     """Regression tests for parallel dispatch and polling correctness."""
 
@@ -754,6 +681,7 @@ class TestParallelDispatchAndPollingRegressions:
                 {0: "item_0"},
                 lambda *args: calls.append(args),
                 None,
+                in_flight_shots={},
             )
             assert consumed == 0
             assert calls == []
@@ -1717,106 +1645,15 @@ class TestKeepShotResults:
             data = pr.collect_shot_data("counter", -1)
             assert len(data) == 3
 
-    def test_shots_pbar_advances_with_custom_results_filename(self, tmp_path):
-        """Shots progress bar advances correctly with custom results_filename in parallel.
-
-        Uses one item per loky worker (n_program_chunks == len(items)). The
-        second item's shots each run a real Sleep instruction and, at 5
-        shots, each is its own checkpoint batch, so that item stays in
-        flight while its ledger records its shots one by one. The bar must
-        never exceed the true total and must end at it under the custom
-        filename.
-
-        The live count must read only SWMR shot ledgers: every driver-side
-        open of a file under the shot checkpoint directory has to be a
-        `worker_*_checkpoint.h5` opened with `swmr=True`, never
-        `results_filename` or a payload file, which workers write without
-        SWMR.
-        """
-        import fnmatch
-        from unittest.mock import patch
-        from loqs.internal.checkpointstore import SHOT_LAYOUT, CheckpointStore
-        from loqs.tools import multiprogramrunner as mpr_module
-
-        loky = pytest.importorskip("loky")
-
-        custom_filename = "my_results.h5"
-        item_checkpoint_dir = tmp_path / "item_ckpt"
-        shot_checkpoint_dir = tmp_path / "shot_ckpt"
-        resolved_shot_dir = shot_checkpoint_dir.resolve()
-        ledger_glob = (
-            CheckpointStore(shot_checkpoint_dir, SHOT_LAYOUT)
-            .ledger_path("*")
-            .name
-        )
-
-        # Every driver-side open under the shot checkpoint directory, as
-        # (file name, swmr flag).
-        shot_dir_opens = []
-        real_h5_file = h5py.File
-
-        class RecordingFile(real_h5_file):
-            def __init__(self, name, *args, **kwargs):
-                path = Path(name).resolve()
-                if resolved_shot_dir in path.parents:
-                    shot_dir_opens.append(
-                        (path.name, kwargs.get("swmr", False))
-                    )
-                super().__init__(name, *args, **kwargs)
-
-        shots_bar_values = []
-
-        def record_shots_bar_value(desc, value):
-            if desc == "Shots":
-                shots_bar_values.append(value)
-
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        with (
-            patch.object(
-                mpr_module,
-                "tqdm",
-                side_effect=_make_tqdm_spy(on_set_n=record_shots_bar_value),
-            ),
-            patch.object(h5py, "File", RecordingFile),
-        ):
-            runner = _CustomFilenameProbeRunner(
-                [1, 2],
-                num_shots=5,
-                parallel_strategy=strategy,
-                config=CheckpointConfig(
-                    item_checkpoint_dir=item_checkpoint_dir,
-                    shot_checkpoint_dir=shot_checkpoint_dir,
-                    show_progress=True,
-                    poll_interval=0.05,
-                    results_filename=custom_filename,
-                ),
-            )
-            runner.run()
-
-        assert shot_dir_opens
-        for name, swmr in shot_dir_opens:
-            assert fnmatch.fnmatch(name, ledger_glob)
-            assert swmr
-
-        assert shots_bar_values
-
-        # True total is len(items) * num_shots = 2 * 5 = 10. The bar must
-        # never exceed it, and must end there.
-        assert max(shots_bar_values) <= 10
-        assert shots_bar_values[-1] == 10
-
     @pytest.mark.slow
     def test_keep_shot_results_parallel_forces_checkpoint_read_write_race(
         self, tmp_path
     ):
-        """With `poll_interval=0.0`, the driver polls shot progress as fast
-        as it can while workers flush shot checkpoints. Checkpoint opens are
-        never retried, so any lock collision would surface as
-        `BlockingIOError`. The driver reads only SWMR shot ledgers while
-        workers write, so the run completes with every shot kept."""
+        """With `poll_interval=0.0`, the driver polls as fast as it can
+        while workers flush shot checkpoints. Checkpoint opens are never
+        retried, so any lock collision would surface as `BlockingIOError`.
+        The driver reads only SWMR item ledgers while workers write, so the
+        run completes with every shot kept."""
         loky = pytest.importorskip("loky")
 
         item_checkpoint_dir = tmp_path / "item_ckpt"
@@ -1852,53 +1689,16 @@ class TestKeepShotResults:
 class TestShotProgressBar:
     """Tests for shot-level progress bar."""
 
-    def test_read_worker_current_indices_tolerates_missing_files(
-        self, tmp_path
-    ):
-        """Verify _read_worker_current_indices handles missing/unreadable files."""
-        from loqs.internal.swmrledger import (
-            open_swmr_writer,
-            update_ledger_in_flight,
-        )
-        from loqs.tools.multiprogramrunner import (
-            _ITEM_LEDGER_FIELDS,
-            _read_worker_current_indices,
-        )
-
-        store = CheckpointStore(tmp_path / "checkpoint", ITEM_LAYOUT)
-        store.directory.mkdir()
-
-        # No workers yet, should return empty set
-        assert _read_worker_current_indices(store) == set()
-
-        handles = []
-        try:
-            for worker, index in (("test", 5), ("test2", 7)):
-                handle = open_swmr_writer(
-                    store.ledger_path(worker), fields=_ITEM_LEDGER_FIELDS
-                )
-                handles.append(handle)
-                update_ledger_in_flight(handle[1], index)
-                expected = {5} if index == 5 else {5, 7}
-                assert _read_worker_current_indices(store) == expected
-
-            # A non-HDF5 file at a ledger name is skipped.
-            store.ledger_path("junk").write_bytes(b"not hdf5")
-            assert _read_worker_current_indices(store) == {5, 7}
-        finally:
-            for handle in handles:
-                handle[0].close()
-
     @pytest.mark.parametrize(
-        "checkpoint_dirs, show_progress, prints_notice",
+        "item_dir, show_progress, shows_bar, prints_notice",
         [
-            ("none", True, True),
-            ("both", False, False),
-            ("none", False, False),
+            (True, True, True, False),
+            (False, True, False, True),
+            (True, False, False, False),
         ],
         ids=[
-            "prints_once_parallel_without_shot_checkpoint",
-            "silent_when_show_progress_false_fully_configured",
+            "item_checkpoint_only_shows_bar",
+            "notice_without_item_checkpoint",
             "silent_when_show_progress_false",
         ],
     )
@@ -1907,24 +1707,23 @@ class TestShotProgressBar:
         tmp_path,
         inline,
         capsys,
-        checkpoint_dirs,
+        item_dir,
         show_progress,
+        shows_bar,
         prints_notice,
     ):
-        """Parallel dispatch with a missing checkpoint setting prints the
-        shot-level progress notice only with show_progress=True, and no
-        shots bar is ever created in these configurations: the shots bar
-        must respect the same show_progress opt-out as the plain items bar,
-        and on_poll never touches it unless checkpointing is fully set up,
-        so it would otherwise freeze."""
+        """A Shots bar needs only show_progress, parallel dispatch, item
+        checkpointing and a known shot count (no shot checkpointing). The
+        notice prints only when show_progress is on and item checkpointing
+        is missing. With the bar on it ends at the run's total shots."""
         from unittest.mock import patch
 
         config_kwargs = {"show_progress": show_progress}
-        if checkpoint_dirs == "both":
+        if item_dir:
             config_kwargs["item_checkpoint_dir"] = tmp_path / "item_ckpt"
-            config_kwargs["shot_checkpoint_dir"] = tmp_path / "shot_ckpt"
 
         tqdm_descs = []
+        shots_values = []
         runner = _ShotProgressTestRunner(
             [1, 2, 3],
             num_shots=5,
@@ -1936,13 +1735,18 @@ class TestShotProgressBar:
         with patch(
             "loqs.tools.multiprogramrunner.tqdm",
             side_effect=_make_tqdm_spy(
-                on_init=lambda tqdm_obj, desc: tqdm_descs.append(desc)
+                on_init=lambda tqdm_obj, desc: tqdm_descs.append(desc),
+                on_set_n=lambda desc, value: (
+                    shots_values.append(value) if desc == "Shots" else None
+                ),
             ),
         ):
             runner.run()
 
-        assert "Shots" not in tqdm_descs
+        assert ("Shots" in tqdm_descs) is shows_bar
         assert (capsys.readouterr().out != "") is prints_notice
+        if shows_bar:
+            assert shots_values[-1] == 15
 
     def test_shots_bar_total_correct_on_resumed_run(self, tmp_path, inline):
         """Regression test: shots bar total is sized correctly even on resumed run.
@@ -2015,6 +1819,173 @@ class TestShotProgressBar:
         # initial should be len(done) * num_shots = 2 * 5 = 10
         # (indices 0 and 2 were pre-done)
         assert shots_init["initial"] == 10
+
+    def test_resumed_item_shots_show_from_first_poll(self, tmp_path, inline):
+        """A resumed item's already-done shots show on the bar from the
+        first poll, even when they sit only in a consolidated shot
+        checkpoint. A bar counting only finished items and live shot
+        ledgers would start low and jump when the item finishes."""
+        from loqs.internal.checkpointstore import SHOT_LAYOUT
+        from loqs.tools import multiprogramrunner as mpr
+
+        num_shots = 4
+        item_dir = tmp_path / "item"
+        shot_dir = tmp_path / "shot"
+
+        class _Stop(KeyboardInterrupt):
+            pass
+
+        def stop_at_three(shots_done, total):
+            if shots_done == 3:
+                raise _Stop
+
+        def make_runner(resume, run_kwargs):
+            return _ShotProgressTestRunner(
+                [1, 2],
+                num_shots=num_shots,
+                parallel_strategy=ParallelStrategy(
+                    program_executor=InlineExecutor(), n_program_chunks=1
+                ),
+                config=CheckpointConfig(
+                    item_checkpoint_dir=item_dir,
+                    shot_checkpoint_dir=shot_dir,
+                    show_progress=resume,
+                    resume=resume,
+                ),
+                run_kwargs=run_kwargs,
+            )
+
+        with pytest.raises(_Stop):
+            make_runner(
+                False,
+                {
+                    "checkpoint_batch_size": 1,
+                    "progress_callback": stop_at_three,
+                },
+            ).run()
+
+        # Leave item 0's done shots only in results.h5.
+        item0_dir = shot_dir / "item_0"
+        ProgramResults().consolidate_checkpoints(checkpoint_dir=item0_dir)
+        k = len(CheckpointStore(item0_dir, SHOT_LAYOUT).keys())
+        assert k > 0
+
+        captured = {}
+        real_dispatch = ParallelStrategy.dispatch
+        real_make_callback = mpr._make_ledger_progress_callback
+
+        def dispatch(self, worker, chunks, **kwargs):
+            captured["on_poll"] = kwargs["on_poll"]
+            return real_dispatch(self, worker, chunks, **kwargs)
+
+        def make_callback(*args, **kwargs):
+            callback = real_make_callback(*args, **kwargs)
+
+            def polling_callback(shots_done, total):
+                callback(shots_done, total)
+                captured["on_poll"]()
+
+            return polling_callback
+
+        values = []
+        with (
+            unittest.mock.patch.object(ParallelStrategy, "dispatch", dispatch),
+            unittest.mock.patch.object(
+                mpr, "_make_ledger_progress_callback", make_callback
+            ),
+            unittest.mock.patch.object(
+                mpr,
+                "tqdm",
+                side_effect=_make_tqdm_spy(
+                    on_set_n=lambda desc, value: (
+                        values.append(value) if desc == "Shots" else None
+                    )
+                ),
+            ),
+        ):
+            make_runner(True, {"checkpoint_batch_size": 1}).run()
+
+        assert values[0] == k
+        assert values == sorted(values)
+        assert values[-1] == 2 * num_shots
+
+    @pytest.mark.parametrize("scenario", ["torn_read", "leftover_ledger"])
+    def test_shots_bar_never_decreases(self, tmp_path, scenario):
+        """The Shots bar holds through a torn ledger read (a worker's
+        `done` refreshed before its `item_shots_done` reset), counts a done
+        item once, and takes the per-item max across ledgers rather than a
+        sum, with no shot checkpointing. A bar assigned each poll's raw
+        total would dip on the torn read or add a leftover ledger's count."""
+        from _shared_checkpoint_test_helpers import write_item_ledger
+        from loqs.tools.multiprogramrunner import _run_parallel
+
+        values = []
+        spy = _make_tqdm_spy(on_set_n=lambda desc, value: values.append(value))
+
+        def ledger(**kwargs):
+            return lambda: write_item_ledger(tmp_path, shots_total=4, **kwargs)
+
+        if scenario == "torn_read":
+            n_items, already_done = 2, set()
+            steps = [
+                ledger(current_item=0, shots_done=3),
+                ledger(current_item=0, shots_done=0),
+                ledger(payloads={0: "r0"}, current_item=1, shots_done=1),
+                ledger(payloads={1: "r1"}, current_item=1, shots_done=4),
+            ]
+            expected = [3, 3, 5, 8, 8]
+        else:
+            n_items, already_done = 3, {0}
+            write_item_ledger(
+                tmp_path,
+                pid=999,
+                payloads={0: "r0"},
+                current_item=1,
+                shots_done=3,
+                shots_total=4,
+            )
+            steps = [
+                ledger(current_item=1, shots_done=0),
+                ledger(current_item=1, shots_done=2),
+                ledger(payloads={1: "r1"}, current_item=2, shots_done=1),
+                ledger(payloads={2: "r2"}, current_item=2, shots_done=4),
+            ]
+            expected = [7, 7, 9, 12, 12]
+        shots_pbar = spy(total=n_items * 4, desc="Shots", disable=True)
+
+        class _ScriptedStrategy:
+            shot_executor = None
+            n_shot_batches = None
+
+            def make_chunks(self, remaining):
+                return []
+
+            def dispatch(
+                self, worker, chunks, *, desc, on_poll, poll_interval
+            ):
+                for step in steps:
+                    step()
+                    on_poll()
+                return []
+
+        items = [(i, f"item{i}") for i in range(n_items)]
+        _run_parallel(
+            remaining=[(i, x) for i, x in items if i not in already_done],
+            process_item=None,
+            static_kwargs={},
+            item_store=CheckpointStore(tmp_path, ITEM_LAYOUT),
+            on_item_done=None,
+            items_with_index=items,
+            parallel_strategy=_ScriptedStrategy(),
+            pbar=None,
+            poll_interval=0.0,
+            already_done_indices=already_done,
+            shot_checkpoint_subdir=None,
+            shots_pbar=shots_pbar,
+            num_shots_for_progress=4,
+        )
+
+        assert values == expected
 
 
 class TestWorkerFileConsolidation:
@@ -2930,7 +2901,14 @@ class TestDriverLiveItemReads:
 
         store = CheckpointStore(tmp_path, ITEM_LAYOUT)
         count = mpr._poll_one_new_format_worker_file(
-            store, worker_file, 0, observed, items_map, on_item_done, None
+            store,
+            worker_file,
+            0,
+            observed,
+            items_map,
+            on_item_done,
+            None,
+            in_flight_shots={},
         )
         assert sorted(opened) == [
             f"{prefix}_item_0_payload.h5",
@@ -2946,7 +2924,14 @@ class TestDriverLiveItemReads:
         opened.clear()
         notified.clear()
         again = mpr._poll_one_new_format_worker_file(
-            store, worker_file, count, observed, items_map, on_item_done, None
+            store,
+            worker_file,
+            count,
+            observed,
+            items_map,
+            on_item_done,
+            None,
+            in_flight_shots={},
         )
         assert opened == []
         assert notified == []

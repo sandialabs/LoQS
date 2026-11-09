@@ -26,7 +26,11 @@ from loqs.internal.checkpointstore import (
 from loqs.internal.streamingmerge import (
     _resolve_checkpoint_object_group,
 )
-from loqs.internal.swmrledger import mark_ledger_item_done, open_swmr_writer
+from loqs.internal.swmrledger import (
+    mark_ledger_item_done,
+    open_swmr_writer,
+    read_swmr_ledger_done_union,
+)
 from loqs.core.history import History
 from loqs.core import Frame, QuantumProgram
 from loqs.internal.serializable import Serializable
@@ -668,7 +672,14 @@ class TestShotCheckpointBatchWithLedger:
                 )
 
         assert sorted(results.get_unwritten_shots()) == [0, 1, 2]
-        assert ProgramResults._count_live_done_shots(checkpoint_dir) == 0
+        assert (
+            len(
+                read_swmr_ledger_done_union(
+                    _shot_store(checkpoint_dir).ledger_paths()
+                )
+            )
+            == 0
+        )
 
         real_mark = programresults_module.mark_ledger_item_done
         marked: list[int] = []
@@ -689,7 +700,14 @@ class TestShotCheckpointBatchWithLedger:
         results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id=worker)
 
         assert marked == [0, 1, 2]
-        assert ProgramResults._count_live_done_shots(checkpoint_dir) == 3
+        assert (
+            len(
+                read_swmr_ledger_done_union(
+                    _shot_store(checkpoint_dir).ledger_paths()
+                )
+            )
+            == 3
+        )
         payloads = CheckpointStore(checkpoint_dir, SHOT_LAYOUT).payload_paths()
         assert len(payloads) == (0 if worker is None else 1)
 
@@ -967,7 +985,14 @@ class TestMixedFormatShotCheckpoints:
 
         assert ledger_path not in _open_hdf5_file_paths()
         assert swmrledger_module._HELD_WRITERS == {}
-        assert ProgramResults._count_live_done_shots(checkpoint_dir) == 4
+        assert (
+            len(
+                read_swmr_ledger_done_union(
+                    _shot_store(checkpoint_dir).ledger_paths()
+                )
+            )
+            == 4
+        )
 
     def test_consolidate_warns_and_keeps_file_when_delete_fails(
         self, tmp_path
@@ -1008,74 +1033,6 @@ class TestMixedFormatShotCheckpoints:
         assert not ledger_path.exists() and not payload_path.exists()
         with h5py.File(checkpoint_dir / "results.h5", "r") as f:
             assert len(get_dict_attr_keys(f, "shot_histories")) == 2
-
-
-class TestLiveShotCount:
-    """The live shot count reads only SWMR ledgers, never `results.h5` or a
-    payload file, so polling it can't collide with a writer's non-SWMR
-    writes."""
-
-    def test_count_live_done_shots_reads_only_ledgers(self, tmp_path):
-        """The count is the union of every ledger's `done` bits, and every
-        file it opens is ledger-named and opened with `swmr=True`."""
-        import fnmatch
-
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-
-        def shots(indices) -> ProgramResults:
-            pr = ProgramResults()
-            for i in indices:
-                history = History()
-                history.append(Frame({"shot_id": i}))
-                pr.add_shot(i, history)
-            return pr
-
-        # results.h5 with shots 10-11, left by consolidating a writer.
-        shots((10, 11)).checkpoint(
-            checkpoint_dir=checkpoint_dir, worker_id="old"
-        )
-        ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
-        assert (checkpoint_dir / "results.h5").exists()
-
-        # A ledger written and closed by a `checkpoint()` call (done 0-2),
-        # plus its payload with shots 0-2.
-        shots((0, 1, 2)).checkpoint(
-            checkpoint_dir=checkpoint_dir, worker_id="live"
-        )
-        assert (checkpoint_dir / "worker_live_shots_0_payload.h5").exists()
-
-        # A closed ledger whose done bits (2-3) overlap the live one's.
-        closed_file, closed_group = open_swmr_writer(
-            checkpoint_dir / "worker_closed_checkpoint.h5",
-            fields=["done", "wall_clock_times"],
-        )
-        for i in (2, 3):
-            mark_ledger_item_done(closed_group, i, float("nan"))
-        closed_file.close()
-
-        ledger_glob = _shot_store(checkpoint_dir).ledger_path("*").name
-        opens: list[tuple[str, bool]] = []
-        real_file = h5py.File
-
-        class RecordingFile(real_file):
-            def __init__(self, name, *args, **kwargs):
-                opens.append((Path(name).name, kwargs.get("swmr", False)))
-                super().__init__(name, *args, **kwargs)
-
-        with unittest.mock.patch.object(h5py, "File", RecordingFile):
-            count = ProgramResults._count_live_done_shots(checkpoint_dir)
-
-        assert count == 4
-        assert opens
-        opened_names = {name for name, _ in opens}
-        assert {
-            "worker_live_checkpoint.h5",
-            "worker_closed_checkpoint.h5",
-        } <= opened_names
-        for name, swmr in opens:
-            assert fnmatch.fnmatch(name, ledger_glob)
-            assert swmr
 
 
 class TestConcurrentCheckpointing:

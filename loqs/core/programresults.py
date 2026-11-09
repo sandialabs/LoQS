@@ -27,7 +27,6 @@ from loqs.internal import (
 from loqs.internal.swmrledger import (
     held_swmr_writer,
     mark_ledger_item_done,
-    read_swmr_ledger_done_union,
 )
 from loqs.core.history import (
     History,
@@ -639,29 +638,6 @@ class ProgramResults(Displayable):
         self.mark_shots_as_written(list(shot_indices))
         for shot_index in shot_indices:
             self.shot_histories.pop(shot_index, None)
-
-    @staticmethod
-    def _count_live_done_shots(checkpoint_dir: Path) -> int:
-        """Count the shots marked done in a directory's SWMR shot ledgers.
-
-        Safe to poll while writers are running: it opens only
-        `worker_*_checkpoint.h5` files, each in SWMR read mode, and never
-        `results.h5` or a payload file. Shots that exist only in
-        `results.h5` (e.g. from an earlier run) are not counted, and a
-        pre-fix data file at the ledger name is skipped.
-
-        Parameters
-        ----------
-        checkpoint_dir : Path
-            Directory holding the shot ledgers.
-
-        Returns
-        -------
-        int
-            Number of unique shot indices marked done across the ledgers.
-        """
-        store = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
-        return len(read_swmr_ledger_done_union(store.ledger_paths()))
 
     def load_checkpoint(
         self,
