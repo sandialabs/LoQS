@@ -1508,10 +1508,11 @@ class TestKeepShotResults:
         self, tmp_path, parallel, results_filename
     ):
         """_program_results contains lazy handles that can resolve shot
-        content on demand, with the runner's `num_shots` and
-        `max_frame_limit` forwarded and the parent program and name resolved
-        from the nested source. The custom filename catches a hard-coded
-        one; the real loky run has another process write the kept results.
+        content on demand, with each item's `num_shots` and
+        `max_frame_limit` (set per item in `run_kwargs`) and the parent
+        program and name resolved from the nested source. The custom filename
+        catches a hard-coded one; the real loky run has another process write
+        the kept results.
         """
         config_kwargs = {}
         if results_filename is not None:
@@ -1527,10 +1528,11 @@ class TestKeepShotResults:
             ),
             parallel_strategy=_loky_strategy() if parallel else None,
         )
-        # Per-runner metadata forwarded to lazy ProgramResults (set as
-        # attributes; the constructor doesn't accept them)
+        # The runner's own `num_shots` differs from what each item runs
+        # (2, 3 and 4 shots), so kept results must read the item's values.
         runner.num_shots = 5
-        runner.run_kwargs["max_frame_limit"] = 200
+        runner.run_kwargs["num_shots"] = _shots_for_item
+        runner.run_kwargs["max_frame_limit"] = _frame_limit_for_item
         result = runner.run()
         assert result == [2, 4, 6]
 
@@ -1559,10 +1561,10 @@ class TestKeepShotResults:
             shot = pr.get_shot_history(0)
             assert shot is not None
             data = pr.collect_shot_data("counter", -1)
-            assert len(data) == 5
+            assert len(data) == index + 2
             assert all(frame_val == (index + 1) * 2 for frame_val in data)
-            assert pr.num_shots == 5
-            assert pr.max_frame_limit == 200
+            assert pr.num_shots == index + 2
+            assert pr.max_frame_limit == 201 + index
             assert pr.parent_program is not None
             assert pr.name == f"Results for Item {index}"
 
@@ -1688,6 +1690,10 @@ class TestKeepShotResults:
 
 def _shots_for_item(item):
     return item + 1
+
+
+def _frame_limit_for_item(item):
+    return 200 + item
 
 
 class TestShotProgressBar:

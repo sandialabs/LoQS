@@ -218,8 +218,8 @@ class ProgramResults(Displayable):
         self._name_value: Any = name
         """Backing field for the `name` property."""
 
-        self.num_shots = num_shots
-        """Total number of shots for this run (for resume detection)."""
+        self._num_shots_value: Any = num_shots
+        """Backing field for the `num_shots` property."""
 
         self._max_frame_limit_value: int | None = max_frame_limit
         """Backing field for the `max_frame_limit` property."""
@@ -274,7 +274,8 @@ class ProgramResults(Displayable):
 
         The view is a store's `nested(index)` over an entry of another
         object's `_program_results`. Shots are read through it, and `name`,
-        `parent_program` and `max_frame_limit` resolve from it on first use.
+        `parent_program`, `num_shots` and `max_frame_limit` resolve from it on
+        first use.
 
         Parameters
         ----------
@@ -284,8 +285,23 @@ class ProgramResults(Displayable):
         self._nested_store = view
         self._name_value = _UNRESOLVED
         self._parent_program_value = _UNRESOLVED
+        if self._num_shots_value is None:
+            self._num_shots_value = _UNRESOLVED
         if self._max_frame_limit_value is None:
             self._max_frame_limit_value = _UNRESOLVED
+
+    @property
+    def num_shots(self) -> Any:
+        """Total number of shots for this run (for resume detection).
+        Resolves lazily from the nested source on first access if this is a
+        lazy nested-source proxy that hasn't resolved it yet."""
+        if self._num_shots_value is _UNRESOLVED:
+            self._num_shots_value = self._resolve_nested_attr("num_shots")
+        return self._num_shots_value
+
+    @num_shots.setter
+    def num_shots(self, value: Any) -> None:
+        self._num_shots_value = value
 
     @property
     def name(self) -> str:
@@ -333,10 +349,10 @@ class ProgramResults(Displayable):
         self._max_frame_limit_value = value
 
     def _resolve_nested_attr(self, attr_name: str) -> Any:
-        """Read one non-streamed attribute (`name`, `parent_program` or
-        `max_frame_limit`) from this proxy's nested entry, without decoding
-        its shots. Errors propagate, so a damaged entry is never hidden by
-        a default.
+        """Read one non-streamed attribute (`name`, `parent_program`,
+        `num_shots` or `max_frame_limit`) from this proxy's nested entry,
+        without decoding its shots. Errors propagate, so a damaged entry is
+        never hidden by a default.
         """
         assert self._nested_store is not None
         return self._nested_store.read_attrs((attr_name,))[attr_name]

@@ -1449,13 +1449,14 @@ class TestResumeCheckpointing:
             name="RealName",
             parent_program="RealProgram",
             max_frame_limit=max_frame_limit,
+            num_shots=20,
         )
         return _write_nested_source(Path(temp_dir), {index: pr})
 
     def test_lazy_attrs_from_nested_source(self, tmp_path):
-        """A lazy nested-source proxy resolves `.name`, `.parent_program` and
-        a `None` `.max_frame_limit` to the stored values, and never
-        overwrites a value the caller set."""
+        """A lazy nested-source proxy resolves `.name`, `.parent_program`, a
+        `None` `.num_shots` and a `None` `.max_frame_limit` to the stored
+        values, and never overwrites a value the caller set."""
         store = self._build_nested_source_with_name_and_parent(
             tmp_path, max_frame_limit=17
         )
@@ -1465,6 +1466,7 @@ class TestResumeCheckpointing:
         assert resolved.name == "RealName"
         assert resolved.parent_program == "RealProgram"
         assert resolved.max_frame_limit == 17
+        assert resolved.num_shots == 20
 
         preset_limit = ProgramResults(max_frame_limit=99)
         preset_limit._set_nested_shot_source(store.nested(0))

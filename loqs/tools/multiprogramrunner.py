@@ -776,14 +776,10 @@ class MultiProgramRunner(Serializable, Generic[T]):
 
         Creates a ProgramResults configured to load shots through the
         store's nested view of the `_program_results` entry at `index`.
-        `num_shots`/`max_frame_limit` are forwarded from
-        this runner (genuine per-runner scalars), and `shot_wall_clock_times`
-        is forwarded from this runner's own already-populated per-item timing
-        data; `parent_program`/`name` are genuinely per-item, so they aren't
-        set here directly -- instead, `_set_nested_shot_source` marks them
-        unresolved, and `ProgramResults`' own `name`/`parent_program`
-        properties lazily resolve each one from this same nested source the
-        first time a caller actually reads it.
+        Only `shot_wall_clock_times` comes from this runner. `num_shots`,
+        `max_frame_limit`, `name` and `parent_program` are per item, so
+        `_set_nested_shot_source` marks them unresolved and each resolves
+        from the nested entry on first read.
 
         Parameters
         ----------
@@ -800,8 +796,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
         from loqs.core.programresults import ProgramResults
 
         pr = ProgramResults(
-            num_shots=getattr(self, "num_shots", None),
-            max_frame_limit=self.run_kwargs.get("max_frame_limit"),
             shot_wall_clock_times=dict(
                 self.shot_wall_clock_times.get(index, {})
             ),
