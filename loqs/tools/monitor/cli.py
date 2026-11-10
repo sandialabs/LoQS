@@ -59,7 +59,7 @@ HOST_COLUMNS = (
     "idle",
     "stale",
     "items done",
-    "shots",
+    "active shots done/total",
     "no update in",
 )
 
@@ -263,10 +263,12 @@ def format_summary(
     ]
     if hosts_total is not None:
         lines.append(f"Showing {len(t.hosts)} of {hosts_total} hosts")
-    lines += [
-        f"Items done: {t.items_done}",
-        f"Shots done/total: {t.shots_done}/{t.shots_total}",
-    ]
+    if snapshot.run_shots is None:
+        run_line = "Run shots done/total (all items): total unknown"
+    else:
+        done, total = snapshot.run_shots
+        run_line = f"Run shots done/total (all items): {done}/{total}"
+    lines += [f"Items done: {t.items_done}", run_line]
     return lines
 
 

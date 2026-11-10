@@ -456,8 +456,10 @@ batch's first shot, so concurrent workers never open the same file), marks
 those shots done in its own progress ledger, and only then returns. The
 ledger is an HDF5 single-writer/multiple-reader (SWMR) file, so
 `MultiProgramRunner` can poll it for live shot progress while the worker
-keeps writing. Once every dispatched batch is confirmed done, `run()` runs
-one race-free, driver-side pass that streams every payload into the same
+keeps writing. (`MultiProgramRunner`'s Shots bar itself reads in-flight
+shots from each worker's item ledger, so it needs item checkpointing only,
+not shot checkpointing.) Once every dispatched batch is confirmed done,
+`run()` runs one race-free, driver-side pass that streams every payload into the same
 canonical `results.h5` a serial run would have written directly, then
 deletes the payloads and ledgers -- callers never need to touch the
 per-worker files themselves. Each payload references the parent program
@@ -582,15 +584,17 @@ Directory: /scratch/run/item_checkpoints
 Workers: 1 starting, 1 running, 1 idle, 0 stale
 Hosts: 2
 Items done: 7
-Shots done/total: 300/1000
+Run shots done/total (all items): 740/1000
 
 host    pid    state     current item  items done  shots done/total  no update in
-node01  41233  running   8             4           300/1000          2s
+node01  41233  running   7             4           40/100            2s
 node01  41234  idle      -             3           -                 5s
 node02  9912   starting  -             0           -                 -
 ```
 
-On a many-host run, `--by-host` collapses the table to one row per host (worker counts per state, items done, shots, and the longest time since a running or stale worker reported), and `--host PATTERN` limits the view to hosts matching a shell-style glob. `--host` can be repeated, and both flags work in live and `--once` modes and combine. Matching is case-sensitive, so `--host 'NODE*'` does not match `node01`. With `--host`, the summary adds a `Showing N of M hosts` line.
+The run-level shots line counts the shots of all the run's items, finished plus in flight, out of the run's total. It never drops as a worker finishes an item and moves on in live mode, and `--host` doesn't narrow it. It shows "total unknown" when the run was started by an older LoQS, when the runner has no fixed shot count per item (no `num_shots`, or `num_shots` set in `run_kwargs`), or when no worker ledgers are present (not started yet, or finished). `Items done` is separate: it sums the done items over the worker ledgers shown.
+
+On a many-host run, `--by-host` collapses the table to one row per host (worker counts per state, items done, the active shots column, and the longest time since a running or stale worker reported). The active shots column covers only that host's in-flight items. `--host PATTERN` limits the view to hosts matching a shell-style glob. `--host` can be repeated, and both flags work in live and `--once` modes and combine. Matching is case-sensitive, so `--host 'NODE*'` does not match `node01`. With `--host`, the summary adds a `Showing N of M hosts` line.
 
 ```bash
 loqs-monitor --once --by-host --host 'node0*' --host gpu01 /scratch/run/item_checkpoints
@@ -599,6 +603,8 @@ loqs-monitor --once --by-host --host 'node0*' --host gpu01 /scratch/run/item_che
 The monitor needs item checkpointing, turned on by `CheckpointConfig(item_checkpoint_dir=...)`, and must run where that directory is visible, e.g. on a login node of the shared file system. It may be started before the run creates the directory; live mode then shows a note and keeps polling.
 
 Each worker writes one SWMR ledger, `worker_<host>_<pid>_<suffix>_runner.h5`, in `item_checkpoint_dir` (the name is the worker identity, `hostname_pid_suffix`). It holds the current item index, the done item indices, `item_shots_done`/`item_shots_total` and `last_heartbeat`, written at most once per second. The ledgers are consolidated away when the run ends, so a finished run shows no workers.
+
+The run also writes a small `run_progress.json` in the same directory at dispatch start (the number of items already done, the items it will compute and the shots per item), and removes it after a successful run. It is for display only, and it is what gives the run-level shots line its total.
 
 A worker is *starting* before it has begun an item, *running* while it works on one, *idle* between items, and *stale* when it is running but has made no progress for longer than `--stale-after` (default 120 seconds; stale rows are shown in red in the live table). The options are:
 
@@ -611,7 +617,7 @@ Some caveats on reading the output:
 - The heartbeat advances only at item start and when shots complete (once per completed batch under a `shot_executor`, and at most once per second). A healthy worker therefore shows a growing "no update in" without being dead while it is inside one very long shot or batch, and also while it builds the program, loads a resumed checkpoint, consolidates after its last shot, reduces, and writes its payload. `--stale-after` must exceed the longest of these gaps, not only the longest gap between shot or batch completions.
 - `--once` has no poll history, so its ages come from heartbeats and can be off by the clock difference between the worker's node and the monitor's. Live mode measures age on the monitor's own clock once it has seen a change.
 - Shot counts are shots computed, not shots durably checkpointed.
-- Worker ledgers are consolidated and deleted only after a dispatch succeeds. When you resume an interrupted run, the interrupted run's ledgers stay in the directory for the whole resumed run. The monitor shows those workers as stale (if they were killed mid-item) or idle, with hours-old ages, counts them in the worker and shot totals, and `--by-host` highlights their hosts. Their pids and ages tell them apart from the resumed run's workers.
+- Worker ledgers are consolidated and deleted only after a dispatch succeeds. When you resume an interrupted run, the interrupted run's ledgers stay in the directory for the whole resumed run. The monitor shows those workers as stale (if they were killed mid-item) or idle, with hours-old ages, counts them in the worker totals, and `--by-host` highlights their hosts. Their pids and ages tell them apart from the resumed run's workers. A killed worker's done items count once in the run-level shots line, and the item it was on shows its last shot count until a live worker passes it.
 - With item checkpointing on, a user `progress_callback` in `run_kwargs` must be a module-level `def`, not a builtin such as `print`, a `functools.partial` or a callable instance. Those are rejected before dispatch. A local `lambda` passes that check, but it is serialized as its call-site source line, so it may not survive `Runner.read()`, and under parallel dispatch the callback runs in the item worker, so driver-side side effects are lost.
 
 ## Performance profiling

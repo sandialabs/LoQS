@@ -1909,6 +1909,82 @@ class TestShotProgressBar:
         assert values == sorted(values)
         assert values[-1] == 2 * num_shots
 
+    def test_monitor_run_shots_on_resume_with_added_item(
+        self, tmp_path, inline
+    ):
+        """The monitor reads the run's shots from the driver's run plan
+        across a resume that adds an item."""
+        from loqs.tools import multiprogramrunner as mpr
+        from loqs.tools.monitor import read_snapshot
+
+        item_dir = tmp_path / "item"
+
+        def make_runner(items, resume):
+            return _ShotProgressTestRunner(
+                items,
+                num_shots=4,
+                parallel_strategy=ParallelStrategy(
+                    program_executor=InlineExecutor(), n_program_chunks=1
+                ),
+                config=CheckpointConfig(
+                    item_checkpoint_dir=item_dir,
+                    show_progress=False,
+                    resume=resume,
+                ),
+            )
+
+        make_runner([1], False).run()
+
+        values = []
+        real_make_callback = mpr._make_ledger_progress_callback
+
+        def make_callback(*args, **kwargs):
+            callback = real_make_callback(*args, **kwargs)
+
+            def recording_callback(shots_done, total):
+                callback(shots_done, total)
+                values.append(read_snapshot(item_dir).run_shots)
+
+            return recording_callback
+
+        with unittest.mock.patch.object(
+            mpr, "_make_ledger_progress_callback", make_callback
+        ):
+            make_runner([1, 2], True).run()
+
+        assert values[0] == (4, 8)
+        assert values[-1] == (8, 8)
+        assert all(value[1] == 8 for value in values)
+        dones = [value[0] for value in values]
+        assert dones == sorted(dones)
+
+    def test_run_plan_has_no_shot_count_when_run_kwargs_sets_num_shots(
+        self, tmp_path, inline
+    ):
+        """A `num_shots` in `run_kwargs` leaves the run plan's shot count
+        unknown."""
+        from loqs.tools import multiprogramrunner as mpr
+
+        plans = []
+        with unittest.mock.patch.object(
+            mpr, "write_run_plan", lambda directory, plan: plans.append(plan)
+        ):
+            _ShotProgressTestRunner(
+                [1],
+                num_shots=4,
+                parallel_strategy=ParallelStrategy(
+                    program_executor=InlineExecutor(), n_program_chunks=1
+                ),
+                config=CheckpointConfig(
+                    item_checkpoint_dir=tmp_path / "item",
+                    show_progress=False,
+                ),
+                run_kwargs={"num_shots": 2, "max_frame_limit": 1_000_000},
+            ).run()
+
+        assert len(plans) == 1
+        assert plans[0].shots_per_item is None
+
     @pytest.mark.parametrize("scenario", ["torn_read", "leftover_ledger"])
     def test_shots_bar_never_decreases(self, tmp_path, scenario):
         """The Shots bar holds through a torn ledger read (a worker's

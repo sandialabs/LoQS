@@ -6,6 +6,7 @@ import pytest
 from _shared_checkpoint_test_helpers import write_item_ledger
 
 from loqs.tools.monitor import cli
+from loqs.tools.monitor.state import RunPlan, write_run_plan
 
 
 def test_once_smoke_two_workers(tmp_path, capsys):
@@ -30,6 +31,8 @@ def test_once_smoke_two_workers(tmp_path, capsys):
         heartbeat=now,
     )
 
+    write_run_plan(tmp_path, RunPlan(100, 0, frozenset(range(10))))
+
     assert cli.main(["--once", str(tmp_path)]) == 0
 
     out = capsys.readouterr().out
@@ -38,6 +41,7 @@ def test_once_smoke_two_workers(tmp_path, capsys):
     assert "running" in out
     assert "idle" in out
     assert "40/100" in out
+    assert "340/1000" in out
 
 
 def test_once_missing_directory_returns_2(tmp_path):
@@ -173,5 +177,7 @@ def test_once_by_host_smoke(tmp_path, capsys):
 
     assert rc == 0
     lines = capsys.readouterr().out.splitlines()
+    (header,) = [ln for ln in lines if ln.lstrip().startswith("host ")]
+    assert "active shots" in header
     for host, n_rows in (("hostA", 1), ("hostB", 0), ("hostC", 1)):
         assert sum(ln.startswith(host) for ln in lines) == n_rows

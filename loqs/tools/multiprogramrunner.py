@@ -15,6 +15,7 @@ import contextlib
 import copy
 import functools
 import h5py
+import numbers
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -48,6 +49,11 @@ from loqs.internal.swmrledger import (
     read_swmr_ledger_status,
     update_ledger_heartbeat,
     update_ledger_in_flight,
+)
+from loqs.tools.monitor.state import (
+    RunPlan,
+    remove_run_plan,
+    write_run_plan,
 )
 from loqs.tools.paralleltools import (
     ParallelStrategy,
@@ -630,6 +636,23 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 " showing item-level progress only."
             )
 
+        # Display only, for loqs-monitor. A num_shots in run_kwargs
+        # overrides the per-item count, which is then unknown.
+        if item_store is not None and remaining:
+            plan_shots: int | None = None
+            if "num_shots" not in self.run_kwargs and isinstance(
+                num_shots_for_progress, numbers.Integral
+            ):
+                plan_shots = int(num_shots_for_progress)
+            write_run_plan(
+                item_store.directory,
+                RunPlan(
+                    shots_per_item=plan_shots,
+                    items_done_at_start=len(items_with_index) - len(remaining),
+                    pending_items=frozenset(index for index, _ in remaining),
+                ),
+            )
+
         try:
             # Dispatch
             newly_computed: dict[int, dict[str, Any]] = {}
@@ -691,6 +714,9 @@ class MultiProgramRunner(Serializable, Generic[T]):
             self._assemble_from_store(
                 final_store, [index for index, _ in items_with_index]
             )
+            if item_store is not None:
+                # Display-only file for loqs-monitor; the run is done.
+                remove_run_plan(item_store.directory)
 
         finally:
             if pbar is not None:
