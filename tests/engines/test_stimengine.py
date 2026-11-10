@@ -1005,14 +1005,13 @@ class TestFastPath:
     @pytest.mark.parametrize(
         "pack, damped, gate",
         [
-            ("steane", None, None),
-            ("five-qubit", "Gh", None),
-            ("five-qubit", None, "K"),
-        ],
-        ids=[
-            "steane-ft",
-            "five-qubit-flagged-damped",
-            "five-qubit-frame-update",
+            pytest.param("steane", None, None, id="steane-ft"),
+            pytest.param(
+                "five-qubit", "Gh", None, id="five-qubit-flagged-damped"
+            ),
+            pytest.param(
+                "five-qubit", None, "K", id="five-qubit-frame-update"
+            ),
         ],
     )
     def test_codepack_shot_for_shot(self, pack, damped, gate):

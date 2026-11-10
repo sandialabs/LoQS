@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## [Unreleased Changes]
+
+### New
+- **Batched STIM runs with `StimEngine` (#175, @sserita):** `StimEngine().run(program, num_shots, outputs=...)` runs a program on `STIMQuantumState` many shots at a time and returns an `OutputResults` of per-shot arrays (measurements, detectors, observables and the outputs you declare) instead of a `History` per shot. Results agree with `QuantumProgram.run` in distribution, not shot for shot, and the same seed gives the same arrays. Includes a new tutorial, `docs/notebooks/batchedstim.md`.
+  - **Batched path (no-branching):** One shot is traced and uses Stim's sampling to generate every shot at once. On a distance-3 surface-code memory program it is over 2,000× faster per shot than `QuantumProgram.run`.
+  - **Per-shot fast path (branching):** A program with branching falls back to one shot at a time but on a fast path without LoQS overhead. It is over 60× faster on the Steane codepack's FT program. Its results hold measurement records of varying length and no detectors or observables.
+- **`OutputResults` and `CompiledProgram` (#175, @sserita):** `OutputResults` holds declared per-shot outputs only, i.e. equivalent to `ProgramResults.collect_shot_data()` output. `CompiledProgram` is a traced `QuantumProgram` with plain, serializable steps keyed by the measurement record. Both remove LoQS overhead related to general `Instruction` and `History` handling during `QuantumProgram.run()`, underpin the new `StimEngine`, and lay the groundwork for [#81](https://github.com/sandialabs/LoQS/issues/81).
+- **STIM migration helpers (#175, @sserita):**
+  - `build_stim_model` builds the ideal or `generated`-style Pauli-noisy model of a STIM circuit,
+  - `stim_record_from_outcomes` rebuilds stim's measurement record, detectors and observables from LoQS outcomes,
+  - `build_stim_decoder_instruction` builds a PyMatching DEM decoder instruction that survives a save and read.
+
+### Changed
+- **STIM measurement arguments and patch-free circuits (@sserita):**
+  - **`M(p)`-style measurement arguments:** They are applied on `STIMQuantumState` and refused on the dense states, instead of being dropped with a warning.
+  - **No `PatchLayout` needed:** A physical-circuit instruction runs without patches unless it updates a Pauli frame.
+  - **stim floor:** The `stim` extra requires `stim>=1.12`.
+
+### Fixed
+- **`applied_stim_circuit_str` fixes (@sserita):** A physical-circuit instruction's `applied_stim_circuit_str` now holds its own circuit whether or not the state is updated in place, includes `ZBasis*` measurements, and is no longer wiped by an instrument's pre and post operations.
+
 ## [1.3.1] - 2026-11-11
 
 ### New

@@ -16,6 +16,7 @@ nav:
       - Leakage Modeling: notebooks/leakage.md
       - Multi-Patch Surface Code Operations: notebooks/multipatch.md
       - Parallel Execution: notebooks/parallel.md
+      - Batched STIM Runs: notebooks/batchedstim.md
   - Examples:
       - Run LoGST: notebooks/runlogst.md
       - FT Tests: notebooks/fttests.md
