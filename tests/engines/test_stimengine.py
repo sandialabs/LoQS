@@ -10,6 +10,7 @@ from loqs.backends import (
     NumpyStatevectorQuantumState,
     STIMPhysicalCircuit,
     STIMQuantumState,
+    propagate_state,
 )
 from loqs.backends.reps import (
     ProbabilisticStimGateRep,
@@ -23,12 +24,14 @@ from loqs.core import (
     History,
     HistoryDataCollector,
     InstructionStack,
+    MeasurementOutcomes,
     OutputResults,
     QECCode,
     QuantumProgram,
 )
 from loqs.core.instructions import InstructionLabel
 from loqs.core.instructions.builders import (
+    build_composite_instruction,
     build_lookup_decoder_instruction,
     build_object_builder_instruction,
     build_physical_circuit_instruction,
@@ -36,6 +39,7 @@ from loqs.core.instructions.builders import (
 from loqs.core.instructions.instruction import Instruction
 from loqs.engines import StimEngine
 from loqs.tools.stimtools import (
+    _label_order,
     _shot_record,
     build_stim_decoder_instruction,
     build_stim_model,
@@ -196,6 +200,34 @@ class TestRefusals:
             lambda state: Frame({"n": len(state.qubit_labels)})
         )
 
+    @classmethod
+    def _state_reader_in_composite(cls):
+        step = Instruction(
+            lambda state: Frame({"n": len(state.qubit_labels)}),
+            name="classical",
+        )
+        composite = build_composite_instruction([step], name="wrapped")
+        program = simple_program("X 0\nM 0\n", [0])
+        stack = list(program.instruction_stack) + [InstructionLabel(composite)]
+        return QuantumProgram.from_quantum_program(
+            program, InstructionStack(stack)
+        )
+
+    @classmethod
+    def _composite_forwards_outcomes(cls):
+        step = Instruction(
+            lambda measurement_outcomes: Frame(
+                {"bit": int(measurement_outcomes[0][0])}
+            ),
+            name="classical",
+        )
+        composite = build_composite_instruction([step], name="forwarding")
+        program = simple_program("X 0\nM 0\n", [0])
+        stack = list(program.instruction_stack) + [InstructionLabel(composite)]
+        return QuantumProgram.from_quantum_program(
+            program, InstructionStack(stack)
+        )
+
     @staticmethod
     def _probabilistic():
         rep = ProbabilisticStimGateRep([("X 0", 0.5), ("I 0", 0.5)], (0,))
@@ -208,6 +240,16 @@ class TestRefusals:
         program = simple_program("X 0\nTICK\nM 0\n", [0])
         return QuantumProgram.from_quantum_program(
             program, default_noise_model=model
+        )
+
+    @staticmethod
+    def _custom_circuit():
+        program = simple_program("X 0\n", [0, 1])
+        stack = list(program.instruction_stack) + [
+            InstructionLabel(_peeking_instruction())
+        ]
+        return QuantumProgram.from_quantum_program(
+            program, InstructionStack(stack)
         )
 
     @staticmethod
@@ -277,6 +319,9 @@ class TestRefusals:
             "_stack_reader",
             "_stack_writer",
             "_state_reader",
+            "_state_reader_in_composite",
+            "_composite_forwards_outcomes",
+            "_custom_circuit",
         ],
         ids=[
             "statevector-state",
@@ -288,6 +333,9 @@ class TestRefusals:
             "stack-reader",
             "stack-writer",
             "state-reader",
+            "state-reader-in-composite",
+            "composite-forwards-outcomes",
+            "custom-circuit",
         ],
     )
     def test_refused(self, make):
@@ -468,12 +516,27 @@ class TestRun:
                 got.setdefault(lbl, []).append(int(bit))
             assert got == expected
 
-    def test_same_seed_same_arrays(self):
-        program, _, _ = split_program(seed=7)
-        first = StimEngine().run(program, 1_000)
-        second = StimEngine().run(program, 1_000)
-        for key in ("measurements", "detectors", "observables"):
-            assert np.array_equal(first[key], second[key])
+    @pytest.mark.parametrize("path", ["batched", "fast-path"])
+    def test_same_seed_same_arrays(self, path):
+        if path == "batched":
+            program, _, _ = split_program(seed=7)
+            outputs, keys = None, ("measurements", "detectors", "observables")
+            shots = 1_000
+        else:
+            program = _outcome_dependent_program(seed=7)
+            outputs, keys = _FAST_OUTPUTS, ("measurements", "branch")
+            shots = 10
+        first = StimEngine().run(program, shots, outputs=outputs)
+        second = StimEngine().run(program, shots, outputs=outputs)
+        for key in keys:
+            for a, b in zip(first.records(key), second.records(key)):
+                assert np.array_equal(a, b)
+
+    def test_read_back_program_runs(self, tmp_path):
+        path = str(tmp_path / "program.json")
+        simple_program("X 0\nM 0\n", [0]).write(path)
+        records = StimEngine().run(QuantumProgram.read(path), 3)
+        assert np.array_equal(records["measurements"], [[1]] * 3)
 
 
 def _assert_record(expected, got):
@@ -732,3 +795,393 @@ class TestOutputRefusals:
         program, _, _ = split_program(decoder=True)
         with pytest.raises(error):
             StimEngine().run(program, 2, outputs=outputs)
+
+
+def _branch(measurement_outcomes, stack):
+    """Insert circuit `D` at the front of the stack when qubit 0 read 1."""
+    bit = int(measurement_outcomes[0][0])
+    if bit:
+        stack = stack.insert_instruction(0, InstructionLabel(_branch.circuit))
+    return Frame({"stack": stack, "branch": bit, "copy": bit})
+
+
+def _outcome_dependent_stack():
+    """Circuits, then a step that inserts a circuit when a bit reads 1."""
+    labels = [0, 1, 2]
+
+    def circuit(text, name):
+        return build_physical_circuit_instruction(
+            STIMPhysicalCircuit(
+                text, qubit_labels=labels, suppress_tick_warning=True
+            ),
+            name=name,
+        )
+
+    plain = circuit("MR 1\n", "C")
+    _branch.circuit = circuit("X 2\nTICK\nM 2\n", "D")
+    return [
+        {"instruction": "Init State", "state": 3, "qubit_labels": labels},
+        InstructionLabel(plain, error_injections=[(0, "X", 1)]),
+        InstructionLabel(build_composite_instruction([plain], name="plain C")),
+        InstructionLabel(circuit("H 0\nTICK\nMR 0\n", "H")),
+        InstructionLabel(Instruction(_branch, name="Branch")),
+    ]
+
+
+def _outcome_dependent_program(*tail, seed=None):
+    model = build_stim_model(stim.Circuit("H 0\nX 0\nM 0\nMR 0\n"))
+    return QuantumProgram(
+        _outcome_dependent_stack() + [InstructionLabel(t) for t in tail],
+        default_noise_model=model,
+        state_type=STIMQuantumState,
+        default_base_seed=seed,
+    )
+
+
+def _state_user(state):
+    return Frame({"n": len(state.qubit_labels)})
+
+
+def _rebuild():
+    return Frame({"state": STIMQuantumState(1)})
+
+
+def _rebuilding_reader(seed, stack):
+    if seed % 2:
+        stack = stack.insert_instruction(
+            0, InstructionLabel(Instruction(_rebuild, name="rebuild"))
+        )
+    return Frame({"stack": stack})
+
+
+def _peeking_circuit(state, model):
+    """A physical circuit whose own code reads the state."""
+    text = "X 1\nM 1\n" if state.state.peek_z(0) == -1 else "M 1\n"
+    circuit = STIMPhysicalCircuit(
+        text, qubit_labels=[0, 1], suppress_tick_warning=True
+    )
+    new_state, outcomes = propagate_state(circuit, model, state, True)
+    return Frame(
+        {
+            "state": new_state,
+            "measurement_outcomes": MeasurementOutcomes(outcomes),
+            "applied_stim_circuit_str": str(new_state.latest_applied_circuit),
+        }
+    )
+
+
+def _peeking_instruction():
+    return Instruction(
+        _peeking_circuit, name="peeking", type="Physical circuit"
+    )
+
+
+def _peeking_reader(seed, stack):
+    if seed % 2:
+        stack = stack.insert_instruction(
+            0, InstructionLabel(_peeking_instruction())
+        )
+    return Frame({"stack": stack})
+
+
+def _looping_reader(seed, stack):
+    if seed % 2:
+        stack = stack.insert_instruction(
+            0, InstructionLabel(Instruction(_looping_reader, name="loop"))
+        )
+    return Frame({"stack": stack})
+
+
+_FAST_OUTPUTS = [
+    {"key": "branch", "indices": "all", "strip_none_entries": True},
+    {"key": "copy", "indices": 5},
+]
+
+
+class TestFastPath:
+
+    @staticmethod
+    def _choice_program(operations):
+        """`X 1`, `M 1 0` on labels `[1, 0]`, with `X` drawn from `operations`."""
+        rep = ProbabilisticStimGateRep(operations, (0,))
+        model = DictNoiseModel(
+            {"X": rep},
+            {"M": StimCircuitInstrumentRep("M 0", ())},
+            gatereps=[ProbabilisticStimGateRep],
+            instreps=[StimCircuitInstrumentRep],
+        )
+        program = simple_program("X 1\nTICK\nM 1 0\n", [1, 0])
+        return QuantumProgram.from_quantum_program(
+            program, default_noise_model=model, default_base_seed=3
+        )
+
+    def test_choice_node(self):
+        program = self._choice_program([("X 0", 0.2), ("I 0", 0.8)])
+        n = 2000
+        records = StimEngine().run(program, n)["measurements"]
+        bits = np.asarray(records, dtype=int)
+        # Label order is [1, 0]; the X on label 1 is the drawn gate
+        mean = bits[:, 0].mean()
+        sigma = np.sqrt(0.2 * 0.8 / n)
+        assert abs(mean - 0.2) <= 3 * sigma
+        assert not bits[:, 1].any()
+
+    def test_measuring_alternative_refused(self):
+        # However rare, a measuring alternative would shift the record
+        program = self._choice_program([("X 0\nM 0", 1e-6), ("I 0", 1 - 1e-6)])
+        with pytest.raises(NotImplementedError):
+            StimEngine().run(program, 4)
+
+    def test_label_parameters_key_the_cache(self):
+        labels = [0, 1]
+        mr = build_physical_circuit_instruction(
+            STIMPhysicalCircuit(
+                "MR 1\n", qubit_labels=labels, suppress_tick_warning=True
+            ),
+            name="C",
+        )
+        program = QuantumProgram(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": 2,
+                    "qubit_labels": labels,
+                },
+                InstructionLabel(mr, error_injections=[(0, "X", 1)]),
+                InstructionLabel(mr),
+                InstructionLabel(
+                    Instruction(
+                        lambda stack: Frame({"stack": stack}), name="r"
+                    )
+                ),
+            ],
+            default_noise_model=build_stim_model(stim.Circuit("X 0\nMR 0\n")),
+            state_type=STIMQuantumState,
+            default_base_seed=1,
+        )
+        records = StimEngine().run(program, 3)["measurements"]
+        assert np.array_equal(records, [[1, 0]] * 3)
+
+    def test_outcome_dependent_order(self, monkeypatch):
+        calls = []
+        compile_circuit = StimEngine._fast_circuit
+
+        def spy(self, *args, **kwargs):
+            calls.append(1)
+            return compile_circuit(self, *args, **kwargs)
+
+        monkeypatch.setattr(StimEngine, "_fast_circuit", spy)
+        results = StimEngine().run(
+            _outcome_dependent_program(seed=1), 10, outputs=_FAST_OUTPUTS
+        )
+        assert len(calls) <= 4
+        for rec, branch, copy in zip(
+            results.records("measurements"),
+            results.records("branch"),
+            results.records("copy"),
+        ):
+            bit = int(rec[2])
+            assert list(rec) == [1, 0, bit] + [1] * bit
+            assert list(branch) == [bit]
+            assert copy == bit
+
+    @pytest.mark.parametrize(
+        "apply_fn, engine, error",
+        [
+            (_state_user, StimEngine(), NotImplementedError),
+            (_rebuilding_reader, StimEngine(), NotImplementedError),
+            (_looping_reader, StimEngine(max_frame_limit=10), RuntimeError),
+            (_peeking_reader, StimEngine(), NotImplementedError),
+        ],
+        ids=["state-reader", "state-rebuilt", "frame-limit", "custom-circuit"],
+    )
+    def test_refused(self, apply_fn, engine, error):
+        program = _outcome_dependent_program(
+            Instruction(apply_fn, name="tail"), seed=0
+        )
+        with pytest.raises(error):
+            engine.run(program, 2)
+
+    @pytest.mark.parametrize(
+        "pack, damped, gate",
+        [
+            ("steane", None, None),
+            ("five-qubit", "Gh", None),
+            ("five-qubit", None, "K"),
+        ],
+        ids=[
+            "steane-ft",
+            "five-qubit-flagged-damped",
+            "five-qubit-frame-update",
+        ],
+    )
+    def test_codepack_shot_for_shot(self, pack, damped, gate):
+        program, qubits, keys = _codepack_program(pack, 11, damped, gate=gate)
+        shots = 10
+        collectors = _codepack_collectors(keys)
+        per_shot = program.run(shots, verbose=False)
+        results = StimEngine().run(program, shots, outputs=collectors)
+
+        for col in collectors:
+            expected = HistoryDataCollector.from_raw(col).collect(per_shot)
+            records = results.records(col["key"])
+            assert len(records) == shots
+            for e, g in zip(expected, records):
+                _assert_record(e, g)
+        for i, rec in enumerate(results.records("measurements")):
+            history = per_shot.shot_histories[i]
+            assert np.array_equal(rec, _frame_records(history, qubits))
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "pack, syndrome",
+        [("steane", "unflagged_syndrome"), ("five-qubit", "raw_syndrome")],
+        ids=["steane-ft", "five-qubit-flagged"],
+    )
+    def test_codepack_agrees_with_per_shot(self, pack, syndrome):
+        reference, _, _ = _codepack_program(pack, 1)
+        program, _, _ = _codepack_program(pack, 100_000)
+        collectors = [
+            {"key": "logical_measurement", "indices": -1},
+            *[
+                {"key": k, "indices": "all", "strip_none_entries": True}
+                for k in ("total_rus_count", syndrome)
+            ],
+        ]
+        per_shot = reference.run(1000, verbose=False)
+        results = StimEngine().run(program, 5000, outputs=collectors)
+
+        def quantities(records, key):
+            if key == "logical_measurement":
+                return [float(np.asarray(r)) for r in records]
+            if key == "total_rus_count":
+                return [float(np.sum(r)) for r in records]
+            return [float(len(r)) for r in records]
+
+        for col in collectors:
+            key = col["key"]
+            expected = HistoryDataCollector.from_raw(col).collect(per_shot)
+            x = np.array(quantities(expected, key))[:, None]
+            y = np.array(quantities(results.records(key), key))[:, None]
+            assert_agree(x, y)
+
+
+_STEANE_QUBITS = ["A0", "A1", "A2"] + [f"D{i+3}" for i in range(7)]
+_FIVE_QUBITS = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
+_STEANE_KEYS = [
+    "classical_syndrome",
+    "flag_syndrome_diff",
+    "unflagged_syndrome",
+    "new_logical_pauli_frame",
+]
+_FIVE_KEYS = ["raw_syndrome", "syndrome_diff", "raw_M1", "inferred_M1"]
+
+
+def _noisy_model(ideal, p, damped_gate=None, damping=0.02):
+    """The ideal model with depolarizing and readout noise at rate `p`.
+
+    Each gate's text is followed by a depolarizing channel on its targets
+    and each measurement is `X_ERROR(p)` then `MR`. A `damped_gate` is a
+    `ProbabilisticStimGateRep` of its noisy text and a reset.
+    """
+    gates = {}
+    for (name, qubits), rep in ideal.gate_dict.items():
+        n = len(qubits)
+        channel = "DEPOLARIZE1" if n == 1 else "DEPOLARIZE2"
+        text = (
+            f"{rep.circuit_str}\n{channel}({p}) {' '.join(map(str, range(n)))}"
+        )
+        if name == damped_gate:
+            gates[(name, qubits)] = ProbabilisticStimGateRep(
+                [(text, 1 - damping), ("R 0", damping)], qubits
+            )
+        else:
+            gates[(name, qubits)] = StimCircuitGateRep(text, qubits)
+    insts = {
+        key: StimCircuitInstrumentRep(f"X_ERROR({p}) 0\nMR 0", key[1])
+        for key in ideal.inst_dict
+    }
+    return DictNoiseModel(
+        gates,
+        insts,
+        gatereps=[StimCircuitGateRep, ProbabilisticStimGateRep],
+        instreps=[StimCircuitInstrumentRep],
+    )
+
+
+def _codepack_program(pack, seed, damped_gate=None, damping=0.02, gate=None):
+    """A noisy FT program of a codepack: (program, qubits, collector keys).
+
+    A `gate` (a logical gate that updates the Pauli frame) runs just before
+    the logical measurement.
+    """
+    pytest.importorskip("pygsti")
+    from loqs.backends import ListPhysicalCircuit
+
+    if pack == "steane":
+        from loqs.codepacks import codepack_7_1_3_quantinuum2021 as mod
+
+        qubits, name, keys = _STEANE_QUBITS, "Steane", _STEANE_KEYS
+        body = [
+            ("FT Zero Prep", "L0"),
+            ("Adaptive QEC", "L0"),
+            ("Adaptive QEC", "L0"),
+            ("FT Logical Z Measure", "L0"),
+        ]
+    else:
+        from loqs.codepacks import codepack_5_1_3_quantinuum2022 as mod
+
+        qubits, name, keys = _FIVE_QUBITS, "5Q", _FIVE_KEYS
+        body = [
+            ("FT Minus Prep", "L0"),
+            ("Flagged QEC", "L0"),
+            ("FT Logical X Measure", "L0"),
+        ]
+    if gate is not None:
+        body.insert(-1, (gate, "L0"))
+    code = mod.create_qec_code(circuit_backend=ListPhysicalCircuit)
+    ideal = mod.create_ideal_model(
+        qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel
+    )
+    model = _noisy_model(ideal, 0.01, damped_gate, damping)
+    stack = [
+        {
+            "instruction": "Init State",
+            "state": len(qubits),
+            "qubit_labels": qubits,
+        },
+        {
+            "instruction": "Init Patch " + name,
+            "new_patch_label": "L0",
+            "qubits": qubits,
+        },
+        *body,
+    ]
+    program = QuantumProgram(
+        InstructionStack(stack),
+        default_noise_model=model,
+        state_type=STIMQuantumState,
+        patch_types={name: code},
+        default_base_seed=seed,
+    )
+    return program, qubits, keys
+
+
+def _codepack_collectors(keys):
+    return [{"key": "logical_measurement", "indices": -1}] + [
+        {"key": k, "indices": "all", "strip_none_entries": True}
+        for k in ["total_rus_count", *keys]
+    ]
+
+
+def _frame_records(history, qubits):
+    """A per-shot history's measurement record, frame by frame."""
+    bits = []
+    for frame in history:
+        text = frame.get("applied_stim_circuit_str")
+        if text is None:
+            continue
+        order = _label_order(text, tuple(qubits))
+        outcomes = frame.get("measurement_outcomes") or {}
+        bits.extend(_shot_record(outcomes, order))
+    return np.array(bits, dtype=bool)

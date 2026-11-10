@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 import warnings
 
 import numpy as np
@@ -22,7 +22,7 @@ from numpy.typing import NDArray
 import stim
 
 from loqs.backends import STIMQuantumState
-from loqs.backends.reps import ProbabilisticStimGateRep
+from loqs.backends.reps import ProbabilisticStimGateRep, StimCircuitGateRep
 from loqs.core import (
     CompiledProgram,
     Frame,
@@ -34,7 +34,11 @@ from loqs.core import (
     QuantumProgram,
 )
 from loqs.internal.serializable import Serializable
-from loqs.core.instructions.builders import _pauli_frame_updated
+from loqs.core.instructions.builders import (
+    _pauli_frame_updated,
+    build_physical_circuit_instruction,
+)
+from loqs.core.instructions.instructionstack import InstructionStackLike
 from loqs.core.recordables import MeasurementOutcomes
 from loqs.tools.stimtools import (
     _label_order,
@@ -55,6 +59,13 @@ _SETUP_TYPES = (
     "Composite",
 )
 """Instruction types that make up a program's setup, when they lead it."""
+
+_CIRCUIT_FN = (
+    build_physical_circuit_instruction.__module__,
+    f"{build_physical_circuit_instruction.__qualname__}.<locals>.apply_fn",
+)
+"""Where the builder's circuit code lives, which a read-back instruction
+keeps; it emits the same text whatever the state holds."""
 
 
 class _StateSentinel:
@@ -104,6 +115,21 @@ class _Plan:
     history: History  # The traced shot's history
     n_initial: int  # Its leading frames from the initial history
     dry: History | None = None  # The dry run's history
+    fast: bool = False  # Whether shots run on the per-shot fast path
+    body: Any = None  # The traced stack after the setup
+    globals: dict = field(default_factory=dict)  # Global instructions by name
+    circuits: dict = field(default_factory=dict)  # `_FastCircuit` by key
+
+
+@dataclass
+class _FastCircuit:
+    """A physical circuit compiled for the fast path."""
+
+    segments: list  # Its stim.Circuits and `_Choice` nodes, in order
+    order: list  # Qubit labels behind the record bits it writes
+    update: Any  # The Pauli-frame update it applies, or None
+    stub: dict  # The frame's keys that don't vary per shot
+    alive: Any = None  # Keeps the objects whose ids make up its key
 
 
 @dataclass
@@ -133,6 +159,11 @@ class _TracingSTIMState(STIMQuantumState):
     """
 
     def __init__(self, state, qubit_labels=None, seed=None) -> None:
+        self.segments: list = []
+        """`latest_applied_circuit` as pieces: circuits and `_Choice` nodes."""
+        self.drew = False
+        """Whether a `ProbabilisticStimGateRep` was ever applied."""
+        self._drawing = False
         # The base flips a bit list on the simulator, not in the text
         if (
             isinstance(state, Sequence)
@@ -146,20 +177,73 @@ class _TracingSTIMState(STIMQuantumState):
 
     def _record_applied(self, global_lines, internal_circuit) -> None:
         self.latest_applied_circuit += internal_circuit
+        if not self._drawing:
+            self._add_segment(internal_circuit)
+
+    def _add_segment(self, circuit) -> None:
+        if self.segments and isinstance(self.segments[-1], stim.Circuit):
+            self.segments[-1] += circuit
+        else:
+            self.segments.append(circuit.copy())
 
     def copy(self) -> _TracingSTIMState:
         new_state = _TracingSTIMState(self.state, self.qubit_labels, self.seed)
         new_state._rng = deepcopy(self._rng)
+        new_state.drew = self.drew
         return new_state
 
     def apply_reps_inplace(self, reps, reset_latest_circ: bool = True):
-        for rep in reps:
-            if isinstance(rep, ProbabilisticStimGateRep):
-                raise NotImplementedError(
-                    "StimEngine can't trace a ProbabilisticStimGateRep, "
-                    "whose STIM text is drawn per shot"
-                )
+        if reset_latest_circ:
+            self.segments = []
         return super().apply_reps_inplace(reps, reset_latest_circ)
+
+    def _apply_gate_rep(self, rep) -> None:
+        if isinstance(rep, StimCircuitGateRep) and not rep.qubit_labels:
+            # An annotation: the base appends it to the applied circuit only
+            self._add_segment(stim.Circuit(rep.circuit_str))
+        elif isinstance(rep, ProbabilisticStimGateRep):
+            self._apply_probabilistic(rep)
+            return
+        super()._apply_gate_rep(rep)
+
+    def _apply_probabilistic(self, rep: ProbabilisticStimGateRep) -> None:
+        """Apply one drawn alternative, and keep the whole choice."""
+        self.drew = True
+        alternatives = []
+        for text, _ in rep.operations:
+            scratch = _TracingSTIMState(
+                len(self.qubit_labels), self.qubit_labels
+            )
+            scratch.apply_reps_inplace(
+                [StimCircuitGateRep(text, rep.qubit_labels)]
+            )
+            alternatives.append(scratch.latest_applied_circuit)
+        weights = np.asarray([w for _, w in rep.operations], dtype=float)
+        cumulative = np.cumsum(weights)
+        self.segments.append(
+            _Choice(alternatives, cumulative / cumulative[-1])
+        )
+
+        # Draw as the base state does
+        idx = self._rng.choice(
+            list(range(len(rep.operations))), p=np.asarray(weights)
+        )
+        self._drawing = True
+        try:
+            self.apply_reps_inplace(
+                [StimCircuitGateRep(rep.operations[idx][0], rep.qubit_labels)],
+                reset_latest_circ=False,
+            )
+        finally:
+            self._drawing = False
+
+
+@dataclass
+class _Choice:
+    """A drawn alternative: each one's internal-index circuit and weight."""
+
+    circuits: list  # One stim.Circuit per alternative
+    cumulative: Any  # Normalized cumulative weights
 
 
 @dataclass
@@ -167,8 +251,11 @@ class StimEngine(Serializable):
     """Runs a STIM-state program many shots at a time.
 
     It uses a STIM state only to compile: one shot is traced through the
-    per-shot executor, then stim runs every shot, with no LoQS state per
-    shot.
+    per-shot executor. A program whose instruction order and STIM text are
+    the same every shot takes the batched path: stim samples every shot
+    at once and the classical steps replay on the records. Any other
+    program takes the per-shot fast path: each shot runs its own stack on
+    a bare stim simulator. Neither path keeps a LoQS state per shot.
     """
 
     _SERIALIZE_ATTRS: ClassVar[list[str]] = ["max_frame_limit"]
@@ -185,13 +272,20 @@ class StimEngine(Serializable):
 
         - a state other than [](api:STIMQuantumState), or one that doesn't
           start in the all-zero state;
-        - an instruction, other than a composite, that reads `stack`, and
-          a classical instruction that returns a `stack`, since either
-          lets the instruction order change per shot;
+        - a program whose instruction order or STIM text varies per shot,
+          which `run` takes on its per-shot fast path: an instruction,
+          other than a composite, that reads `stack`, or a
+          [](api:ProbabilisticStimGateRep) that the program applies;
+        - a classical instruction that returns a `stack` without reading
+          one;
         - an instruction that uses the quantum state: classical steps are
           run on every shot's outcomes without one;
-        - a [](api:ProbabilisticStimGateRep) that the program applies;
+        - a composite that forwards a per-shot value (other than the state)
+          to its instructions;
         - a state rebuilt after the first physical circuit;
+        - a physical circuit not built by
+          [](api:build_physical_circuit_instruction), since its own code
+          could read the state;
         - a physical circuit with record bits that its outcomes don't
           report.
 
@@ -209,7 +303,14 @@ class StimEngine(Serializable):
         CompiledProgram
             The program's steps and qubit register.
         """
-        return self._plan(program).compiled
+        plan = self._plan(program)
+        if plan.fast:
+            raise NotImplementedError(
+                "StimEngine can't compile a program whose instruction order "
+                "or STIM text varies per shot; `run` takes it on its "
+                "per-shot fast path"
+            )
+        return plan.compiled
 
     def _plan(self, program: QuantumProgram) -> _Plan:
         """Trace `program`, then dry-run its classical steps on the trace.
@@ -239,6 +340,7 @@ class StimEngine(Serializable):
         bits: list[NDArray] = []
         in_setup = True
         ran_circuit = False
+        fast = False
         state: Any = None
         qubit_labels: list = []
         propagating = traced.initial_history.propagating_keys
@@ -262,10 +364,7 @@ class StimEngine(Serializable):
                     inst.param_alias(k) == "stack"
                     for k in inst.param_priorities
                 ):
-                    raise NotImplementedError(
-                        f"StimEngine can't run instruction {inst.name!r}: "
-                        "it reads `stack`, so its order may change per shot"
-                    )
+                    fast = True
                 in_setup = in_setup and inst.type in _SETUP_TYPES
                 if in_setup:
                     kind = "setup"
@@ -277,6 +376,7 @@ class StimEngine(Serializable):
                     kind = "classical"
                 new_state = frame["state"] if "state" in frame else None
                 if kind == "circuit":
+                    self._check_circuit_fn(inst)
                     ran_circuit = True
                     step["emitted"], step["outcome_labels"], rec = (
                         self._circuit(inst.name, frame, new_state)
@@ -317,6 +417,8 @@ class StimEngine(Serializable):
                 )
             if state is not None:
                 qubit_labels = list(state.qubit_labels)
+                # A drawn rep's text varies per shot
+                fast = fast or getattr(state, "drew", False)
 
         n_setup = sum(s.kind == "setup" for s in infos)
         plan = _Plan(
@@ -328,12 +430,68 @@ class StimEngine(Serializable):
             np.concatenate(bits) if bits else np.zeros(0, dtype=bool),
             history,
             n_initial,
+            fast=fast,
+            body=(
+                infos[n_setup - 1].frame["stack"]
+                if n_setup
+                else traced.instruction_stack
+            ),
         )
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message="Accessing an expired object"
+            )
+            self._check_composites(plan)
+        if fast:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", message="Accessing an expired object"
+                )
+                plan.dry = self._fast_shot(plan, 0)[0]
+            return plan
         plan.dry = self._replay(plan, plan.record, 0, dry=True)
         for i, compiled_step in enumerate(steps):
             compiled_step["reads"] = self._reads(infos, i)
             infos[i].batch = self._batch_fn(plan, i)
         return plan
+
+    def _check_composites(self, plan: _Plan) -> None:
+        """Refuse a composite that forwards a per-shot value to its children.
+
+        A composite collects its children's parameters when it runs and
+        puts them in every child's label. Children that run from the traced
+        labels (all composites on a batched plan, the setup ones on a fast
+        plan) would reuse the traced shot's value on every shot.
+        """
+        for j, step in enumerate(plan.steps):
+            if step.inst.type != "Composite" or (
+                plan.fast and step.kind != "setup"
+            ):
+                continue
+            before = self._new_history(plan.program)
+            before._history = list(plan.history)[: plan.n_initial + j]
+            sources: dict = {}
+            self._kwargs(
+                plan.program,
+                step.inst,
+                step.label,
+                step.stack,
+                before,
+                0,
+                sources=sources,
+            )
+            for alias, source in sources.items():
+                if alias not in (
+                    "instructions",
+                    "stack",
+                    "state",
+                ) and not self._static(alias, source):
+                    raise NotImplementedError(
+                        f"StimEngine can't run composite "
+                        f"{step.inst.name!r}: it forwards parameter "
+                        f"{alias!r} from {source!r} to its instructions, "
+                        "so every shot would reuse the traced shot's value"
+                    )
 
     def _batch_fn(self, plan: _Plan, i: int) -> Any:
         """The batch function step `i` can run, or None to run it per shot.
@@ -350,15 +508,31 @@ class StimEngine(Serializable):
         sources = dict(step.sources)
         if sources.pop("measurement_outcomes", None) != "history[all]":
             return None
-        for alias, source in sources.items():
-            if source not in ("label", "instruction") and not (
-                source == "program" and alias in ("patch_label", "model")
-            ):
-                return None
+        if not all(self._static(a, s) for a, s in sources.items()):
+            return None
         got = self._batch_call(plan, i, fn, plan.record.reshape(1, -1))
         if got is None or not step.keys <= set(got):
             return None
         return fn
+
+    @staticmethod
+    def _check_circuit_fn(inst: Any) -> None:
+        """Refuse a physical circuit whose own code could read the state."""
+        fn = inst.apply_fn
+        where = (getattr(fn, "__module__", None), fn.__qualname__)
+        if where != _CIRCUIT_FN:
+            raise NotImplementedError(
+                f"StimEngine can't run physical circuit {inst.name!r}: only "
+                "build_physical_circuit_instruction's circuits are known to "
+                "emit the same STIM text whatever the state holds"
+            )
+
+    @staticmethod
+    def _static(alias: str, source: str) -> bool:
+        """Whether a parameter from `source` is the same on every shot."""
+        return source in ("label", "instruction") or (
+            source == "program" and alias in ("patch_label", "model")
+        )
 
     def _batch_call(
         self, plan: _Plan, i: int, fn: Any, measurements: NDArray
@@ -392,23 +566,25 @@ class StimEngine(Serializable):
     @staticmethod
     def _kwargs(
         program: QuantumProgram,
-        step: _Step,
+        inst: Any,
+        label: Any,
+        stack: Any,
         history: History,
         shot_index: int,
         names: Sequence[str] | None = None,
         sources: dict | None = None,
     ) -> dict:
-        """Collect a step's kwargs as `QuantumProgram._run_shot` does.
+        """Collect an instruction's kwargs as `QuantumProgram._run_shot` does.
 
-        When `sources` is given, it gets each parameter's alias mapped to
-        the first priority that supplied it.
+        `stack` is the stack left after popping `label`. When `sources` is
+        given, it gets each parameter's alias mapped to the first priority
+        that supplied it.
         """
-        inst, label = step.inst, step.label
         seed = program.default_base_seed
         program_data = {
             "history": history,
             "patch_label": label.get("patch_label"),
-            "stack": step.stack,
+            "stack": stack,
             "seed": None if seed is None else seed + shot_index,
         }
         if program.default_noise_model is not None:
@@ -419,6 +595,10 @@ class StimEngine(Serializable):
             if names is not None and key not in names:
                 continue
             alias = inst.param_alias(key)
+            if alias == "state":
+                # Never the traced shot's state, even from a composite's label
+                kwargs[key] = _StateSentinel()
+                continue
 
             def collect(plist, alias=alias):
                 return QuantumProgram._collect_kwarg(
@@ -488,7 +668,9 @@ class StimEngine(Serializable):
                     and inst.data.get("frame_key") == "state"
                 ):
                     continue
-                kwargs = self._kwargs(program, step, history, 0)
+                kwargs = self._kwargs(
+                    program, inst, step.label, step.stack, history, 0
+                )
                 frame = inst.apply(**kwargs)
                 step.keys = set(frame) - {"instruction", "stack"}
                 history.append(frame)
@@ -500,6 +682,30 @@ class StimEngine(Serializable):
                 for k in last
                 if k not in ("state", "instruction", "stack")
             }
+
+    def _seed_history(self, plan: _Plan) -> History:
+        """A shot's history: one frame of the setup's output, no state."""
+        history = self._new_history(plan.program)
+        seed_data = dict(plan.template)
+        seed_data["state"] = _StateSentinel()
+        if "patches" in seed_data:
+            # Each shot's decoders write into its own layout and patches
+            layout = seed_data["patches"].copy()
+            for name in list(layout):
+                layout[name] = layout[name].copy()
+            seed_data["patches"] = layout
+        history.append(Frame(seed_data))
+        return history
+
+    @staticmethod
+    def _outcomes(
+        labels: Sequence, bits: Sequence | NDArray
+    ) -> MeasurementOutcomes | None:
+        """Group record bits by qubit label, or None when there are none."""
+        outcomes: dict = {}
+        for lbl, bit in zip(labels, bits):
+            outcomes.setdefault(lbl, []).append(int(bit))
+        return MeasurementOutcomes(outcomes) if outcomes else None
 
     def _replay(
         self,
@@ -517,16 +723,7 @@ class StimEngine(Serializable):
         shot's row instead of running.
         """
         program = plan.program
-        history = self._new_history(program)
-        seed_data = dict(plan.template)
-        seed_data["state"] = _StateSentinel()
-        if "patches" in seed_data:
-            # Each shot's decoders write into its own layout and patches
-            layout = seed_data["patches"].copy()
-            for name in list(layout):
-                layout[name] = layout[name].copy()
-            seed_data["patches"] = layout
-        history.append(Frame(seed_data))
+        history = self._seed_history(plan)
 
         pos = 0
         for j, step in enumerate(plan.steps):
@@ -545,7 +742,13 @@ class StimEngine(Serializable):
             if step.kind == "classical":
                 sources: dict | None = {} if dry else None
                 kwargs = self._kwargs(
-                    program, step, history, shot_index, sources=sources
+                    program,
+                    step.inst,
+                    step.label,
+                    step.stack,
+                    history,
+                    shot_index,
+                    sources=sources,
                 )
                 frame = step.inst.apply(**kwargs)
                 if dry:
@@ -565,21 +768,19 @@ class StimEngine(Serializable):
             # changes a later circuit (a non-Pauli correction) isn't supported.
             data = dict(step.stub)
             if step.kind == "circuit":
-                outcomes: dict = {}
                 n = len(step.outcome_labels)
-                for lbl, bit in zip(
+                outcomes = self._outcomes(
                     step.outcome_labels, record[pos : pos + n]
-                ):
-                    outcomes.setdefault(lbl, []).append(int(bit))
+                )
                 pos += n
-                if n:
-                    data["measurement_outcomes"] = MeasurementOutcomes(
-                        outcomes
-                    )
+                if outcomes is not None:
+                    data["measurement_outcomes"] = outcomes
                 sources = {} if dry else None
                 kwargs = self._kwargs(
                     program,
-                    step,
+                    step.inst,
+                    step.label,
+                    step.stack,
                     history,
                     shot_index,
                     names=("pauli_frame_update", "patches"),
@@ -681,6 +882,19 @@ class StimEngine(Serializable):
                 )
             if keys.count(key) > 1:
                 raise ValueError(f"Output key {key!r} is given twice")
+
+        if plan.fast:
+            # Frames are matched per shot, so the dry run's view is the
+            # only check made before sampling
+            assert plan.dry is not None
+            resolved = [_Resolved(c, [], None) for c in collectors]
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", message="Accessing an expired object"
+                )
+                for res in resolved:
+                    self._fast_record(plan, res, plan.dry)
+            return resolved
 
         history = plan.history
         per_shot = {"measurement_outcomes", *history.propagating_keys}
@@ -796,18 +1010,47 @@ class StimEngine(Serializable):
             if key in fast:
                 out[key] = self._stacked(res, fast[key])
                 continue
-            recs = records[key]
-            out[key] = recs
-            try:
-                if res.depth == 2:
-                    shapes = {tuple(a.shape for a in r) for r in recs}
-                    if len(shapes) == 1:
-                        out[key] = np.stack([np.stack(r) for r in recs])
-                elif len({r.shape for r in recs}) == 1:
-                    out[key] = np.stack(recs)
-            except ValueError:
-                out[key] = recs
+            out[key] = self._assembled(res.depth, records[key])
         return out
+
+    @staticmethod
+    def _assembled(depth: int | None, recs: list) -> Any:
+        """An output's records as a dense array when their shapes agree."""
+        try:
+            if depth == 2:
+                shapes = {tuple(a.shape for a in r) for r in recs}
+                if len(shapes) == 1:
+                    return np.stack([np.stack(r) for r in recs])
+            elif len({r.shape for r in recs}) == 1:
+                return np.stack(recs)
+        except ValueError:
+            pass
+        return recs
+
+    def _fast_record(
+        self, plan: _Plan, res: _Resolved, shot: History
+    ) -> tuple[Any, int]:
+        """A collector's record on a fast-path shot's history.
+
+        Positions are read on a view: the traced history's initial and
+        setup frames, then the shot's frames after its seed frame, so they
+        match the per-shot executor's history. A value read from the
+        traced frames raises `NotImplementedError`, as on the batched path.
+        """
+        col = res.collector
+        n_traced = plan.n_initial + plan.n_setup
+        view = self._new_history(plan.program)
+        view._history = list(plan.history._history[:n_traced]) + list(
+            shot._history[1:]
+        )
+        slots = view._select(col.indices, col.frame_filter)
+        for pos in slots:
+            if pos < n_traced and col.key in view[pos]:
+                raise NotImplementedError(
+                    f"Output {col.key!r} reads a value from an "
+                    "initial-history or setup frame"
+                )
+        return self._record(_Resolved(col, slots, res.depth), view, col.key)
 
     def run(
         self,
@@ -835,6 +1078,19 @@ class StimEngine(Serializable):
         (`NotImplementedError`); or when its values aren't numeric and at
         most 1-D, or mix scalars with 1-D entries.
 
+        A program whose instruction order or STIM text varies per shot
+        (a step that reads the instruction stack, or a
+        `ProbabilisticStimGateRep`) takes the per-shot fast path; the
+        choice is made without user input. Each shot runs its own stack on
+        a bare stim simulator, and each classical step runs per shot, so
+        decoders aren't batched there and the path is slower per shot than
+        the batched path. Its result holds `measurements`, each shot's
+        record (whose length may vary), and the collectors' outputs, but no
+        `detectors` or `observables`. It refuses a step that uses or
+        rebuilds the quantum state: before any shot when the traced shot
+        meets it, otherwise when a shot first does, with no arrays
+        returned.
+
         The seed is `program.default_base_seed`. The same seed gives the
         same arrays on the same machine and stim version. The arrays agree
         with [](api:QuantumProgram.run) in distribution only, never shot
@@ -855,10 +1111,14 @@ class StimEngine(Serializable):
         -------
         OutputResults
             Boolean `measurements`, `detectors` and `observables`, each
-            shaped `(num_shots, n)`, plus one entry per collector.
+            shaped `(num_shots, n)`, plus one entry per collector. On the
+            fast path, `measurements` is one record per shot and there are
+            no `detectors` or `observables`.
         """
         plan = self._plan(program)
         resolved = self._resolve(plan, outputs or [])
+        if plan.fast:
+            return self._run_fast(plan, num_shots, resolved)
         text = _stim_text(plan.compiled)
         sampler = stim.Circuit(text).compile_sampler(
             seed=program.default_base_seed
@@ -875,6 +1135,48 @@ class StimEngine(Serializable):
         arrays.update(self._outputs(plan, measurements, resolved))
         return OutputResults(
             arrays, name=f"StimEngine results for {program.name}"
+        )
+
+    def _run_fast(
+        self, plan: _Plan, num_shots: int, resolved: list[_Resolved]
+    ) -> OutputResults:
+        """Run every shot on the fast path and gather the collectors."""
+        measurements = []
+        records: list[list] = [[] for _ in resolved]  # (record, empty)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message="Accessing an expired object"
+            )
+            for i in range(num_shots):
+                history, record = self._fast_shot(plan, i)
+                measurements.append(record)
+                for res, recs in zip(resolved, records):
+                    rec, depth = self._fast_record(plan, res, history)
+                    single = isinstance(res.collector.indices, int)
+                    empty = not single and len(rec) == 0
+                    if not empty and res.depth is None:
+                        res.depth = depth
+                    recs.append((rec, empty))
+
+        arrays: dict = {"measurements": measurements}
+        for res, recs in zip(resolved, records):
+            full = [r for r, empty in recs if not empty]
+            depth = res.depth or 1
+            if depth == 2:
+                filler: Any = []
+            else:
+                dtype = (
+                    np.result_type(*[r.dtype for r in full])
+                    if full
+                    else np.float64
+                )
+                filler = np.empty(0, dtype=dtype)
+            arrays[res.collector.key] = self._assembled(
+                res.depth,
+                [filler if empty else r for r, empty in recs],
+            )
+        return OutputResults(
+            arrays, name=f"StimEngine results for {plan.program.name}"
         )
 
     @staticmethod
@@ -902,6 +1204,195 @@ class StimEngine(Serializable):
                 "bits aren't all reported in its outcomes"
             ) from e
         return {"stim": text}, list(order), record
+
+    def _fast_shot(
+        self, plan: _Plan, shot_index: int
+    ) -> tuple[History, NDArray]:
+        """Run one shot's stack on a bare simulator.
+
+        Each step is resolved and run as the per-shot executor runs it,
+        except that a physical circuit is compiled once into STIM text and
+        run on a `stim.TableauSimulator` with no LoQS state. Returns the
+        shot's history, seed frame first, and its measurement record.
+        """
+        program = plan.program
+        base = program.default_base_seed
+        seed = None if base is None else base + shot_index
+        sim = stim.TableauSimulator(seed=seed)
+        sim.set_num_qubits(len(plan.compiled.qubit_labels))
+        rng = None  # The shot's choice draws, made on first use
+
+        history = self._seed_history(plan)
+        stack = InstructionStack(plan.body)
+        num_frames = plan.n_setup
+        n_bits = 0
+        while len(stack):
+            if num_frames >= self.max_frame_limit:
+                raise RuntimeError(
+                    f"A shot stopped at max_frame_limit="
+                    f"{self.max_frame_limit} with instructions left; raise "
+                    f"StimEngine.max_frame_limit to run the whole program"
+                )
+            label, stack = stack.pop_instruction()
+            name = label["instruction"]
+            if isinstance(name, str) and label.get("patch_label") is None:
+                inst = plan.globals.get(name)
+                if inst is None:
+                    inst = program._resolve_instruction(label, history[-1])
+                    plan.globals[name] = inst
+            else:
+                inst = program._resolve_instruction(label, history[-1])
+
+            if inst.type == "Physical circuit":
+                kwargs = self._kwargs(
+                    program,
+                    inst,
+                    label,
+                    stack,
+                    history,
+                    shot_index,
+                    names=[
+                        k
+                        for k in inst.param_priorities
+                        if inst.param_alias(k) != "state"
+                    ],
+                )
+                key: list[Any] = [id(inst)]
+                for k, v in kwargs.items():
+                    if k == "patches":
+                        continue
+                    if v is None or isinstance(v, (bool, int, float, str)):
+                        key.append((k, v))
+                    else:
+                        key.append((k, id(v)))
+                entry = plan.circuits.get(tuple(key))
+                if entry is None:
+                    entry = self._fast_circuit(
+                        plan, inst, label, stack, history, shot_index
+                    )
+                    entry.alive = (inst, kwargs)
+                    plan.circuits[tuple(key)] = entry
+                for segment in entry.segments:
+                    if isinstance(segment, _Choice):
+                        if rng is None:
+                            rng = np.random.default_rng(seed)
+                        pick = np.searchsorted(
+                            segment.cumulative, rng.random(), side="right"
+                        )
+                        segment = segment.circuits[
+                            min(int(pick), len(segment.circuits) - 1)
+                        ]
+                    sim.do_circuit(segment)
+                data = dict(entry.stub)
+                data["stack"] = stack
+                if entry.order:
+                    record = sim.current_measurement_record()
+                    outcomes = self._outcomes(entry.order, record[n_bits:])
+                    n_bits = len(record)
+                    if outcomes is not None:
+                        data["measurement_outcomes"] = outcomes
+                if entry.update is not None:
+                    data["patches"] = _pauli_frame_updated(
+                        kwargs.get("patches"),
+                        label.get("patch_label"),
+                        entry.update,
+                    )
+                frame = Frame(data)
+            else:
+                frame = inst.apply(
+                    **self._kwargs(
+                        program, inst, label, stack, history, shot_index
+                    )
+                )
+                if "state" in frame:
+                    raise NotImplementedError(
+                        f"StimEngine can't run instruction {inst.name!r} on "
+                        "its per-shot fast path: it sets `state`, but every "
+                        "shot runs on the simulator"
+                    )
+                if "stack" not in frame:
+                    frame = frame.update({"stack": stack})
+            history.append(frame)
+            stack = InstructionStack(
+                cast(InstructionStackLike, frame["stack"])
+            )
+            num_frames += 1
+
+        return history, np.asarray(
+            sim.current_measurement_record(), dtype=bool
+        )
+
+    def _fast_circuit(
+        self,
+        plan: _Plan,
+        inst: Any,
+        label: Any,
+        stack: Any,
+        history: History,
+        shot_index: int,
+    ) -> _FastCircuit:
+        """Compile a physical-circuit step into STIM text for the fast path.
+
+        The instruction's own code runs on a fresh tracing state, so error
+        injection and noise placement aren't repeated here. A parameter
+        other than the state and the patches whose source varies per shot
+        raises `NotImplementedError`, since the text could differ per shot.
+        """
+        self._check_circuit_fn(inst)
+        sources: dict = {}
+        names = [
+            k for k in inst.param_priorities if inst.param_alias(k) != "state"
+        ]
+        kwargs = self._kwargs(
+            plan.program,
+            inst,
+            label,
+            stack,
+            history,
+            shot_index,
+            names=names,
+            sources=sources,
+        )
+        for alias, source in sources.items():
+            if alias != "patches" and not self._static(alias, source):
+                raise NotImplementedError(
+                    f"StimEngine can't compile instruction {inst.name!r} on "
+                    f"its per-shot fast path: its parameter {alias!r} comes "
+                    f"from {source!r}, so its STIM text could differ per shot"
+                )
+        call = dict(kwargs)
+        for k in inst.param_priorities:
+            alias = inst.param_alias(k)
+            if alias == "state":
+                call[k] = _TracingSTIMState(
+                    len(plan.compiled.qubit_labels),
+                    plan.compiled.qubit_labels,
+                )
+            elif alias == "patches" or k == "pauli_frame_update":
+                call[k] = None
+        frame = inst.apply(**call)
+        state = frame["state"]
+        _, order, _ = self._circuit(inst.name, frame, state)
+        for segment in state.segments:
+            if isinstance(segment, _Choice) and any(
+                alt.num_measurements for alt in segment.circuits
+            ):
+                raise NotImplementedError(
+                    f"StimEngine can't run instruction {inst.name!r}: an "
+                    "alternative of its ProbabilisticStimGateRep writes "
+                    "record bits, so its record layout would vary per shot"
+                )
+        return _FastCircuit(
+            state.segments,
+            order,
+            kwargs.get("pauli_frame_update"),
+            {
+                k: frame[k]
+                for k in frame
+                if k not in plan.program.initial_history.propagating_keys
+                and k != "measurement_outcomes"
+            },
+        )
 
     def _traced_program(self, program: QuantumProgram) -> QuantumProgram:
         """A copy of `program` that runs on tracing states."""
