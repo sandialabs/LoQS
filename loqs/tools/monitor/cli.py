@@ -268,7 +268,12 @@ def format_summary(
     else:
         done, total = snapshot.run_shots
         run_line = f"Run shots done/total (all items): {done}/{total}"
-    lines += [f"Items done: {t.items_done}", run_line]
+    if snapshot.run_items is None:
+        items_line = "Run items done/total (all items): total unknown"
+    else:
+        done, total = snapshot.run_items
+        items_line = f"Run items done/total (all items): {done}/{total}"
+    lines += [items_line, run_line]
     return lines
 
 

@@ -301,7 +301,7 @@ def test_worker_name_matches_driver_ledger_path(tmp_path):
 
 
 def _ledger(tmp_path, pid, **kwargs):
-    write_item_ledger(
+    return write_item_ledger(
         tmp_path,
         pid=pid,
         suffix=f"{pid:08x}",
@@ -326,8 +326,13 @@ def test_run_shots_cumulative_worker_moves_on(tmp_path):
         dict(current_item=1, shots_done=1, done=(0,)),
     ):
         _ledger(tmp_path, 1000, **kwargs)
-        seen.append(tracker.poll().run_shots)
-    assert seen == [(3, 8), (3, 8), (5, 8)]
+        snap = tracker.poll()
+        seen.append((snap.run_items, snap.run_shots))
+    assert seen == [
+        ((0, 2), (3, 8)),
+        ((0, 2), (3, 8)),
+        ((1, 2), (5, 8)),
+    ]
 
 
 def test_run_shots_cumulative_leftover_ledger(tmp_path):
@@ -335,10 +340,12 @@ def test_run_shots_cumulative_leftover_ledger(tmp_path):
     write_run_plan(tmp_path, RunPlan(4, 1, frozenset({1, 2})))
     _ledger(tmp_path, 999, current_item=1, shots_done=3, done=(0,))
     _ledger(tmp_path, 1000, current_item=1, shots_done=2)
-    seen = [tracker.poll().run_shots]
+    snap = tracker.poll()
+    seen = [(snap.run_items, snap.run_shots)]
     _ledger(tmp_path, 1000, current_item=2, shots_done=1, done=(1,))
-    seen.append(tracker.poll().run_shots)
-    assert seen == [(7, 12), (9, 12)]
+    snap = tracker.poll()
+    seen.append((snap.run_items, snap.run_shots))
+    assert seen == [((1, 3), (7, 12)), ((2, 3), (9, 12))]
 
 
 def test_run_shots_cumulative_rerun(tmp_path):
@@ -379,7 +386,22 @@ def test_run_shots_unknown(tmp_path, case):
         (tmp_path / RUN_PLAN_FILENAME).write_text('{"shots_per_item": 4')
     if case != "no_ledgers":
         _ledger(tmp_path, 1000, current_item=0, shots_done=1)
-    assert read_snapshot(tmp_path).run_shots is None
+    snap = read_snapshot(tmp_path)
+    assert snap.run_shots is None
+    assert snap.run_items == ((0, 1) if case == "no_shot_count" else None)
+
+
+def test_run_progress_holds_through_unreadable_ledger(tmp_path):
+    tracker = _tracker(tmp_path)
+    write_run_plan(tmp_path, RunPlan(4, 0, frozenset({0, 1})))
+    first = _ledger(tmp_path, 1000, current_item=1, shots_done=2, done=(0,))
+    _ledger(tmp_path, 2000, current_item=1, shots_done=1)
+    snap = tracker.poll()
+    assert (snap.run_items, snap.run_shots) == ((1, 2), (6, 8))
+    first.write_bytes(b"not an hdf5 file at all" * 100)
+    snap = tracker.poll()
+    assert (snap.run_items, snap.run_shots) == ((1, 2), (6, 8))
+    assert [s.path for s in snap.skipped] == [first]
 
 
 def test_write_run_plan_failure_warns(tmp_path):

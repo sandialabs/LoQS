@@ -42,6 +42,7 @@ def test_once_smoke_two_workers(tmp_path, capsys):
     assert "idle" in out
     assert "40/100" in out
     assert "340/1000" in out
+    assert any(line.endswith(": 3/10") for line in out.splitlines())
 
 
 def test_once_missing_directory_returns_2(tmp_path):

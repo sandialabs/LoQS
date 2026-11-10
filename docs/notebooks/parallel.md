@@ -458,7 +458,8 @@ ledger is an HDF5 single-writer/multiple-reader (SWMR) file, so
 `MultiProgramRunner` can poll it for live shot progress while the worker
 keeps writing. (`MultiProgramRunner`'s Shots bar itself reads in-flight
 shots from each worker's item ledger, so it needs item checkpointing only,
-not shot checkpointing.) Once every dispatched batch is confirmed done,
+not shot checkpointing, and it counts each item's own shot count, a
+`num_shots` in `run_kwargs` included.) Once every dispatched batch is confirmed done,
 `run()` runs one race-free, driver-side pass that streams every payload into the same
 canonical `results.h5` a serial run would have written directly, then
 deletes the payloads and ledgers -- callers never need to touch the
@@ -583,7 +584,7 @@ loqs-monitor --once /scratch/run/item_checkpoints     # one plain snapshot
 Directory: /scratch/run/item_checkpoints
 Workers: 1 starting, 1 running, 1 idle, 0 stale
 Hosts: 2
-Items done: 7
+Run items done/total (all items): 7/10
 Run shots done/total (all items): 740/1000
 
 host    pid    state     current item  items done  shots done/total  no update in
@@ -592,7 +593,7 @@ node01  41234  idle      -             3           -                 5s
 node02  9912   starting  -             0           -                 -
 ```
 
-The run-level shots line counts the shots of all the run's items, finished plus in flight, out of the run's total. It never drops as a worker finishes an item and moves on in live mode, and `--host` doesn't narrow it. It shows "total unknown" when the run was started by an older LoQS, when the runner has no fixed shot count per item (no `num_shots`, or `num_shots` set in `run_kwargs`), or when no worker ledgers are present (not started yet, or finished). `Items done` is separate: it sums the done items over the worker ledgers shown.
+The run-level items line counts the items finished out of all the run's items, including those done before a resume. The run-level shots line counts the shots of all the run's items, finished plus in flight, out of the run's total. Neither drops as a worker finishes an item and moves on in live mode, and `--host` doesn't narrow either. Both show "total unknown" when the run was started by an older LoQS or when no worker ledgers are present (not started yet, or finished). The shots line also shows it when the runner has no shot count (no `num_shots`) or its items run different counts (a per-item `num_shots` callable in `run_kwargs`). The rows' `items done` columns are separate: they count each worker's own done marks.
 
 On a many-host run, `--by-host` collapses the table to one row per host (worker counts per state, items done, the active shots column, and the longest time since a running or stale worker reported). The active shots column covers only that host's in-flight items. `--host PATTERN` limits the view to hosts matching a shell-style glob. `--host` can be repeated, and both flags work in live and `--once` modes and combine. Matching is case-sensitive, so `--host 'NODE*'` does not match `node01`. With `--host`, the summary adds a `Showing N of M hosts` line.
 
@@ -604,7 +605,7 @@ The monitor needs item checkpointing, turned on by `CheckpointConfig(item_checkp
 
 Each worker writes one SWMR ledger, `worker_<host>_<pid>_<suffix>_runner.h5`, in `item_checkpoint_dir` (the name is the worker identity, `hostname_pid_suffix`). It holds the current item index, the done item indices, `item_shots_done`/`item_shots_total` and `last_heartbeat`, written at most once per second. The ledgers are consolidated away when the run ends, so a finished run shows no workers.
 
-The run also writes a small `run_progress.json` in the same directory at dispatch start (the number of items already done, the items it will compute and the shots per item), and removes it after a successful run. It is for display only, and it is what gives the run-level shots line its total.
+The run also writes a small `run_progress.json` in the same directory at dispatch start (the number of items already done, the items it will compute and the shots per item), and removes it after a successful run. It is for display only, and it is what gives both run-level lines their totals.
 
 A worker is *starting* before it has begun an item, *running* while it works on one, *idle* between items, and *stale* when it is running but has made no progress for longer than `--stale-after` (default 120 seconds; stale rows are shown in red in the live table). The options are:
 

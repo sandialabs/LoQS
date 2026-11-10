@@ -1686,6 +1686,10 @@ class TestKeepShotResults:
             executor.shutdown(wait=True)
 
 
+def _shots_for_item(item):
+    return item + 1
+
+
 class TestShotProgressBar:
     """Tests for shot-level progress bar."""
 
@@ -1748,7 +1752,21 @@ class TestShotProgressBar:
         if shows_bar:
             assert shots_values[-1] == 15
 
-    def test_shots_bar_total_correct_on_resumed_run(self, tmp_path, inline):
+    @pytest.mark.parametrize(
+        "run_kwargs, total, initial",
+        [
+            (None, 15, 10),
+            (
+                {"num_shots": _shots_for_item, "max_frame_limit": 1_000_000},
+                9,
+                6,
+            ),
+        ],
+        ids=["runner_num_shots", "per_item"],
+    )
+    def test_shots_bar_total_correct_on_resumed_run(
+        self, tmp_path, inline, run_kwargs, total, initial
+    ):
         """Regression test: shots bar total is sized correctly even on resumed run.
 
         Bug: if shots bar was sized as total=len(remaining) * num_shots instead of
@@ -1756,7 +1774,8 @@ class TestShotProgressBar:
         the initial value would be too small and .n could exceed total.
 
         This test directly verifies the bar initialization parameters when some
-        items are pre-marked as done (simulating a prior interrupted run).
+        items are pre-marked as done (simulating a prior interrupted run), with
+        one shot count for all items or a per-item one.
         """
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
@@ -1803,6 +1822,7 @@ class TestShotProgressBar:
                         shot_checkpoint_dir=shot_checkpoint_dir,
                         show_progress=True,
                     ),
+                    run_kwargs=run_kwargs,
                 )
                 with contextlib.suppress(Exception):
                     runner.run()
@@ -1812,13 +1832,12 @@ class TestShotProgressBar:
         assert shots_inits
         shots_init = shots_inits[0]
 
-        # total = len(items)*num_shots = 15, fixed across a resume rather
-        # than shrinking to len(remaining)*num_shots as items complete.
-        assert shots_init["total"] == 15
+        # total covers all items (5 shots each, or 2, 3 and 4 per item),
+        # fixed across a resume rather than shrinking to the remaining ones.
+        assert shots_init["total"] == total
 
-        # initial should be len(done) * num_shots = 2 * 5 = 10
-        # (indices 0 and 2 were pre-done)
-        assert shots_init["initial"] == 10
+        # initial is the shots of the pre-done indices 0 and 2
+        assert shots_init["initial"] == initial
 
     def test_resumed_item_shots_show_from_first_poll(self, tmp_path, inline):
         """A resumed item's already-done shots show on the bar from the
@@ -1958,40 +1977,84 @@ class TestShotProgressBar:
         dones = [value[0] for value in values]
         assert dones == sorted(dones)
 
-    def test_run_plan_has_no_shot_count_when_run_kwargs_sets_num_shots(
-        self, tmp_path, inline
+    @pytest.mark.parametrize(
+        "num_shots, total, plan_shots",
+        [(2, 4, 2), (_shots_for_item, 5, None)],
+        ids=["fixed", "per_item"],
+    )
+    def test_shots_bar_follows_run_kwargs_num_shots(
+        self, tmp_path, inline, num_shots, total, plan_shots
     ):
-        """A `num_shots` in `run_kwargs` leaves the run plan's shot count
-        unknown."""
+        """The Shots bar is sized from the shots each item really runs (a
+        `num_shots` in `run_kwargs`, fixed or per item) rather than the
+        runner's own; the run plan states a count only when all items
+        share it."""
         from loqs.tools import multiprogramrunner as mpr
 
         plans = []
-        with unittest.mock.patch.object(
-            mpr, "write_run_plan", lambda directory, plan: plans.append(plan)
+        totals = []
+        values = []
+        spy = _make_tqdm_spy(
+            on_init=lambda tqdm_obj, desc: (
+                totals.append(tqdm_obj.total) if desc == "Shots" else None
+            ),
+            on_set_n=lambda desc, value: (
+                values.append(value) if desc == "Shots" else None
+            ),
+        )
+        with (
+            unittest.mock.patch.object(mpr, "tqdm", side_effect=spy),
+            unittest.mock.patch.object(
+                mpr,
+                "write_run_plan",
+                lambda directory, plan: plans.append(plan),
+            ),
         ):
             _ShotProgressTestRunner(
-                [1],
+                [1, 2],
                 num_shots=4,
                 parallel_strategy=ParallelStrategy(
                     program_executor=InlineExecutor(), n_program_chunks=1
                 ),
                 config=CheckpointConfig(
                     item_checkpoint_dir=tmp_path / "item",
-                    show_progress=False,
+                    show_progress=True,
                 ),
-                run_kwargs={"num_shots": 2, "max_frame_limit": 1_000_000},
+                run_kwargs={
+                    "num_shots": num_shots,
+                    "max_frame_limit": 1_000_000,
+                },
             ).run()
 
+        assert totals == [total]
+        assert values and values[-1] == total
+        assert values == sorted(values)
         assert len(plans) == 1
-        assert plans[0].shots_per_item is None
+        assert plans[0].shots_per_item == plan_shots
 
-    @pytest.mark.parametrize("scenario", ["torn_read", "leftover_ledger"])
+    def test_item_shot_counts_unknown_when_num_shots_raises(self):
+        """A per-item `num_shots` that raises leaves the counts unknown
+        rather than failing the run from progress display."""
+
+        def _raise(item):
+            raise ValueError(item)
+
+        runner = _ShotProgressTestRunner(
+            [1], run_kwargs={"num_shots": _raise, "max_frame_limit": 1_000_000}
+        )
+        assert runner._item_shot_counts([(0, 1)]) is None
+
+    @pytest.mark.parametrize(
+        "scenario", ["torn_read", "leftover_ledger", "per_item_counts"]
+    )
     def test_shots_bar_never_decreases(self, tmp_path, scenario):
         """The Shots bar holds through a torn ledger read (a worker's
         `done` refreshed before its `item_shots_done` reset), counts a done
         item once, and takes the per-item max across ledgers rather than a
         sum, with no shot checkpointing. A bar assigned each poll's raw
-        total would dip on the torn read or add a leftover ledger's count."""
+        total would dip on the torn read or add a leftover ledger's count.
+        Finished and in-flight shots follow each item's own count, which
+        also caps a stale ledger's shots for that item."""
         from _shared_checkpoint_test_helpers import write_item_ledger
         from loqs.tools.multiprogramrunner import _run_parallel
 
@@ -1999,9 +2062,30 @@ class TestShotProgressBar:
         spy = _make_tqdm_spy(on_set_n=lambda desc, value: values.append(value))
 
         def ledger(**kwargs):
-            return lambda: write_item_ledger(tmp_path, shots_total=4, **kwargs)
+            kwargs.setdefault("shots_total", 4)
+            return lambda: write_item_ledger(tmp_path, **kwargs)
 
-        if scenario == "torn_read":
+        item_shots = None
+        if scenario == "per_item_counts":
+            n_items, already_done = 2, set()
+            item_shots = {0: 2, 1: 6}
+            steps = [
+                ledger(current_item=0, shots_done=4),
+                ledger(
+                    payloads={0: "r0"},
+                    current_item=1,
+                    shots_done=5,
+                    shots_total=6,
+                ),
+                ledger(
+                    payloads={1: "r1"},
+                    current_item=1,
+                    shots_done=6,
+                    shots_total=6,
+                ),
+            ]
+            expected = [2, 7, 8, 8]
+        elif scenario == "torn_read":
             n_items, already_done = 2, set()
             steps = [
                 ledger(current_item=0, shots_done=3),
@@ -2027,7 +2111,11 @@ class TestShotProgressBar:
                 ledger(payloads={2: "r2"}, current_item=2, shots_done=4),
             ]
             expected = [7, 7, 9, 12, 12]
-        shots_pbar = spy(total=n_items * 4, desc="Shots", disable=True)
+        if item_shots is None:
+            item_shots = {i: 4 for i in range(n_items)}
+        shots_pbar = spy(
+            total=sum(item_shots.values()), desc="Shots", disable=True
+        )
 
         class _ScriptedStrategy:
             shot_executor = None
@@ -2058,7 +2146,7 @@ class TestShotProgressBar:
             already_done_indices=already_done,
             shot_checkpoint_subdir=None,
             shots_pbar=shots_pbar,
-            num_shots_for_progress=4,
+            item_shots=item_shots,
         )
 
         assert values == expected

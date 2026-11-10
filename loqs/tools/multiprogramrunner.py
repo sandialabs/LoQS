@@ -602,7 +602,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
 
         # Shots bar: parallel dispatch + checkpointing only, gated on
         # self.show_progress like the items pbar above.
-        num_shots_for_progress = self._num_shots_for_progress()
+        item_shots = self._item_shot_counts(items_with_index)
         is_parallel_dispatch = (
             self.parallel_strategy is not None
             and self.parallel_strategy.is_chunked
@@ -611,14 +611,14 @@ class MultiProgramRunner(Serializable, Generic[T]):
             self.show_progress
             and is_parallel_dispatch
             and self.checkpoint
-            and num_shots_for_progress is not None
+            and item_shots is not None
         )
 
         if show_shots_bar:
-            assert num_shots_for_progress is not None
+            assert item_shots is not None
             shots_pbar = tqdm(
-                total=len(self.items) * num_shots_for_progress,
-                initial=len(done) * num_shots_for_progress,
+                total=sum(item_shots.values()),
+                initial=sum(item_shots.get(i, 0) for i in done),
                 desc="Shots",
             )
 
@@ -626,7 +626,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
         # self.show_progress like the bar itself above.
         if (
             self.show_progress
-            and num_shots_for_progress is not None
+            and item_shots is not None
             and not show_shots_bar
             and is_parallel_dispatch
         ):
@@ -636,14 +636,12 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 " showing item-level progress only."
             )
 
-        # Display only, for loqs-monitor. A num_shots in run_kwargs
-        # overrides the per-item count, which is then unknown.
+        # Display only, for loqs-monitor. The plan states the shots per
+        # item only when every item runs the same count, else it's unknown.
         if item_store is not None and remaining:
             plan_shots: int | None = None
-            if "num_shots" not in self.run_kwargs and isinstance(
-                num_shots_for_progress, numbers.Integral
-            ):
-                plan_shots = int(num_shots_for_progress)
+            if item_shots is not None and len(set(item_shots.values())) == 1:
+                plan_shots = next(iter(item_shots.values()))
             write_run_plan(
                 item_store.directory,
                 RunPlan(
@@ -694,7 +692,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                     self.keep_shot_results,
                     runner_snapshot._shot_checkpoint_subdir,
                     shots_pbar,
-                    num_shots_for_progress,
+                    item_shots,
                     self.results_filename,
                 )
 
@@ -938,7 +936,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
         Default implementation returns `self.num_shots` if it exists, None
         otherwise. This supports fine-grained shot-level progress tracking
         in the dispatch progress bar when parallel dispatch with checkpointing
-        is enabled.
+        is enabled. A `num_shots` in `run_kwargs` takes precedence over it
+        (through `_item_shot_counts`).
 
         Returns
         -------
@@ -946,6 +945,35 @@ class MultiProgramRunner(Serializable, Generic[T]):
             The number of shots per item, or None if not applicable.
         """
         return getattr(self, "num_shots", None)
+
+    def _item_shot_counts(
+        self, items_with_index: Sequence[tuple[int, Any]]
+    ) -> dict[int, int] | None:
+        """Return the shots each item runs, by index, or None if unknown.
+
+        Resolved as the worker resolves them: a `num_shots` in `run_kwargs`
+        (called per item if it's a sweep callable) wins, else
+        `_num_shots_for_progress()` applies to every item. For progress
+        display only; None when any count can't be determined.
+        """
+        try:
+            if "num_shots" in self.run_kwargs:
+                value = self.run_kwargs["num_shots"]
+                counts = {
+                    index: value(item) if _is_sweep_callable(value) else value
+                    for index, item in items_with_index
+                }
+            else:
+                shared = self._num_shots_for_progress()
+                counts = {index: shared for index, _ in items_with_index}
+        except Exception:
+            return None
+        if not all(
+            isinstance(c, numbers.Integral) and int(c) >= 0
+            for c in counts.values()
+        ):
+            return None
+        return {index: int(c) for index, c in counts.items()}
 
 
 def _checkpoint_subdir_for_prefix(
@@ -1513,7 +1541,7 @@ def _run_parallel(
     keep_shot_results: bool = False,
     shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
     shots_pbar: Any = None,
-    num_shots_for_progress: int | None = None,
+    item_shots: Mapping[int, int] | None = None,
     results_filename: str = "results.h5",
 ) -> dict[int, dict[str, Any]]:
     """Execute remaining items in parallel with checkpointing and polling.
@@ -1529,10 +1557,10 @@ def _run_parallel(
         with item checkpointing is enabled). Each poll tick sets it to the
         shots of finished items plus the in-flight shots read from the worker
         item ledgers (`item_shots_done`); it never decreases.
-    num_shots_for_progress : int | None, optional
-        Number of shots per item (for computing absolute shot totals, and
-        capping an item's in-flight shots). Only used if shots_pbar is
-        provided.
+    item_shots : Mapping[int, int] | None, optional
+        Shots each item runs, by index (for computing absolute shot totals,
+        and capping an item's in-flight shots); an index missing from it
+        counts 0. Only used if shots_pbar is provided.
     results_filename : str, optional
         Filename for checkpoint loading (default "results.h5").
     """
@@ -1569,13 +1597,14 @@ def _run_parallel(
 
         # Finished items count in full, in-flight ones by their ledgers' shots;
         # never moving back covers a torn read or an item done between reads.
-        if shots_pbar is not None and num_shots_for_progress is not None:
+        if shots_pbar is not None and item_shots is not None:
+            finished = sum(item_shots.get(i, 0) for i in observed_indices)
             in_flight = sum(
-                min(s, num_shots_for_progress)
+                min(s, item_shots.get(i, 0))
                 for i, s in in_flight_shots.items()
                 if i not in observed_indices
             )
-            total = len(observed_indices) * num_shots_for_progress + in_flight
+            total = finished + in_flight
             shots_pbar.n = max(shots_pbar.n, total)
             shots_pbar.refresh()
 
