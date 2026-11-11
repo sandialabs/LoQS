@@ -15,6 +15,7 @@ import contextlib
 import copy
 import functools
 import h5py
+import numbers
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -48,6 +49,11 @@ from loqs.internal.swmrledger import (
     read_swmr_ledger_status,
     update_ledger_heartbeat,
     update_ledger_in_flight,
+)
+from loqs.tools.monitor.state import (
+    RunPlan,
+    remove_run_plan,
+    write_run_plan,
 )
 from loqs.tools.paralleltools import (
     ParallelStrategy,
@@ -596,7 +602,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
 
         # Shots bar: parallel dispatch + checkpointing only, gated on
         # self.show_progress like the items pbar above.
-        num_shots_for_progress = self._num_shots_for_progress()
+        item_shots = self._item_shot_counts(items_with_index)
         is_parallel_dispatch = (
             self.parallel_strategy is not None
             and self.parallel_strategy.is_chunked
@@ -604,16 +610,15 @@ class MultiProgramRunner(Serializable, Generic[T]):
         show_shots_bar = (
             self.show_progress
             and is_parallel_dispatch
-            and self.shot_checkpoint
             and self.checkpoint
-            and num_shots_for_progress is not None
+            and item_shots is not None
         )
 
         if show_shots_bar:
-            assert num_shots_for_progress is not None
+            assert item_shots is not None
             shots_pbar = tqdm(
-                total=len(self.items) * num_shots_for_progress,
-                initial=len(done) * num_shots_for_progress,
+                total=sum(item_shots.values()),
+                initial=sum(item_shots.get(i, 0) for i in done),
                 desc="Shots",
             )
 
@@ -621,22 +626,30 @@ class MultiProgramRunner(Serializable, Generic[T]):
         # self.show_progress like the bar itself above.
         if (
             self.show_progress
-            and num_shots_for_progress is not None
+            and item_shots is not None
             and not show_shots_bar
             and is_parallel_dispatch
         ):
-            if not self.shot_checkpoint:
-                print(
-                    "Shot-level progress reporting requires shot_checkpoint=True"
-                    " (and shot_checkpoint_dir) to be set; showing item-level"
-                    " progress only."
-                )
-            elif not self.checkpoint:
-                print(
-                    "Shot-level progress reporting requires checkpoint=True"
-                    " (in addition to shot_checkpoint=True) to be set;"
-                    " showing item-level progress only."
-                )
+            print(
+                "Shot-level progress reporting requires item checkpointing"
+                " (checkpoint=True, turned on by setting item_checkpoint_dir);"
+                " showing item-level progress only."
+            )
+
+        # Display only, for loqs-monitor. The plan states the shots per
+        # item only when every item runs the same count, else it's unknown.
+        if item_store is not None and remaining:
+            plan_shots: int | None = None
+            if item_shots is not None and len(set(item_shots.values())) == 1:
+                plan_shots = next(iter(item_shots.values()))
+            write_run_plan(
+                item_store.directory,
+                RunPlan(
+                    shots_per_item=plan_shots,
+                    items_done_at_start=len(items_with_index) - len(remaining),
+                    pending_items=frozenset(index for index, _ in remaining),
+                ),
+            )
 
         try:
             # Dispatch
@@ -679,7 +692,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                     self.keep_shot_results,
                     runner_snapshot._shot_checkpoint_subdir,
                     shots_pbar,
-                    num_shots_for_progress,
+                    item_shots,
                     self.results_filename,
                 )
 
@@ -699,6 +712,9 @@ class MultiProgramRunner(Serializable, Generic[T]):
             self._assemble_from_store(
                 final_store, [index for index, _ in items_with_index]
             )
+            if item_store is not None:
+                # Display-only file for loqs-monitor; the run is done.
+                remove_run_plan(item_store.directory)
 
         finally:
             if pbar is not None:
@@ -760,14 +776,10 @@ class MultiProgramRunner(Serializable, Generic[T]):
 
         Creates a ProgramResults configured to load shots through the
         store's nested view of the `_program_results` entry at `index`.
-        `num_shots`/`max_frame_limit` are forwarded from
-        this runner (genuine per-runner scalars), and `shot_wall_clock_times`
-        is forwarded from this runner's own already-populated per-item timing
-        data; `parent_program`/`name` are genuinely per-item, so they aren't
-        set here directly -- instead, `_set_nested_shot_source` marks them
-        unresolved, and `ProgramResults`' own `name`/`parent_program`
-        properties lazily resolve each one from this same nested source the
-        first time a caller actually reads it.
+        Only `shot_wall_clock_times` comes from this runner. `num_shots`,
+        `max_frame_limit`, `name` and `parent_program` are per item, so
+        `_set_nested_shot_source` marks them unresolved and each resolves
+        from the nested entry on first read.
 
         Parameters
         ----------
@@ -784,8 +796,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
         from loqs.core.programresults import ProgramResults
 
         pr = ProgramResults(
-            num_shots=getattr(self, "num_shots", None),
-            max_frame_limit=self.run_kwargs.get("max_frame_limit"),
             shot_wall_clock_times=dict(
                 self.shot_wall_clock_times.get(index, {})
             ),
@@ -920,7 +930,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
         Default implementation returns `self.num_shots` if it exists, None
         otherwise. This supports fine-grained shot-level progress tracking
         in the dispatch progress bar when parallel dispatch with checkpointing
-        is enabled.
+        is enabled. A `num_shots` in `run_kwargs` takes precedence over it
+        (through `_item_shot_counts`).
 
         Returns
         -------
@@ -928,6 +939,35 @@ class MultiProgramRunner(Serializable, Generic[T]):
             The number of shots per item, or None if not applicable.
         """
         return getattr(self, "num_shots", None)
+
+    def _item_shot_counts(
+        self, items_with_index: Sequence[tuple[int, Any]]
+    ) -> dict[int, int] | None:
+        """Return the shots each item runs, by index, or None if unknown.
+
+        Resolved as the worker resolves them: a `num_shots` in `run_kwargs`
+        (called per item if it's a sweep callable) wins, else
+        `_num_shots_for_progress()` applies to every item. For progress
+        display only; None when any count can't be determined.
+        """
+        try:
+            if "num_shots" in self.run_kwargs:
+                value = self.run_kwargs["num_shots"]
+                counts = {
+                    index: value(item) if _is_sweep_callable(value) else value
+                    for index, item in items_with_index
+                }
+            else:
+                shared = self._num_shots_for_progress()
+                counts = {index: shared for index, _ in items_with_index}
+        except Exception:
+            return None
+        if not all(
+            isinstance(c, numbers.Integral) and int(c) >= 0
+            for c in counts.values()
+        ):
+            return None
+        return {index: int(c) for index, c in counts.items()}
 
 
 def _checkpoint_subdir_for_prefix(
@@ -1391,12 +1431,16 @@ def _poll_one_new_format_worker_file(
     items_map: dict[int, Any],
     on_item_done: Callable[[int, Any, Any], None] | None,
     pbar: Any,
+    *,
+    in_flight_shots: dict[int, int],
 ) -> int:
     """Read newly-done indices from `worker_file`'s SWMR ledger, notifying
     for each one with the result in its own payload file.
 
     `consumed_count` is incremented by the number of newly-done indices
     found this call, so `on_poll()`'s bookkeeping keeps working.
+    `in_flight_shots` is updated in place with the ledger's current item
+    and its `item_shots_done` (per-item max across ledgers).
     """
     try:
         ledger_file, ledger_group = open_swmr_reader(worker_file)
@@ -1404,6 +1448,14 @@ def _poll_one_new_format_worker_file(
         return consumed_count
     try:
         status = read_swmr_ledger_status(ledger_group)
+        if (
+            status.current_item_index is not None
+            and status.item_shots_done is not None
+        ):
+            index = status.current_item_index
+            in_flight_shots[index] = max(
+                in_flight_shots.get(index, 0), status.item_shots_done
+            )
         done_indices = (
             {i for i, is_done in enumerate(status.done) if is_done}
             if status.done is not None
@@ -1442,9 +1494,14 @@ def _poll_one_worker_file(
     items_map: dict[int, Any],
     on_item_done: Callable[[int, Any, Any], None] | None,
     pbar: Any,
+    *,
+    in_flight_shots: dict[int, int],
 ) -> int:
     """Notify for the newly-done items of one worker ledger and return the
     file's updated consumed count.
+
+    `in_flight_shots` is updated in place with the ledger's current item's
+    `item_shots_done`, keeping the per-item max across ledgers.
 
     A file that is not a SWMR ledger, or that can't be opened or read
     (e.g. deleted since the listing), is skipped and retried on the next
@@ -1460,44 +1517,8 @@ def _poll_one_worker_file(
         items_map,
         on_item_done,
         pbar,
+        in_flight_shots=in_flight_shots,
     )
-
-
-def _read_worker_current_indices(item_store: CheckpointStore) -> set[int]:
-    """Read the in-flight item index from every worker ledger.
-
-    Returns the set of item indices currently being processed by any worker.
-    Silently skips a file that isn't a ledger, is missing or can't be
-    opened (e.g. deleted since the listing), since the set of workers can
-    change mid-dispatch.
-
-    Parameters
-    ----------
-    item_store : CheckpointStore
-        The item store whose ledgers are read.
-
-    Returns
-    -------
-    set[int]
-        Set of item indices currently being processed.
-    """
-    in_flight: set[int] = set()
-    for worker_file in item_store.ledger_paths():
-        try:
-            if not is_swmr_ledger_file(worker_file):
-                continue
-            ledger_file, ledger_group = open_swmr_reader(worker_file)
-            try:
-                status = read_swmr_ledger_status(ledger_group)
-                if status.current_item_index is not None:
-                    in_flight.add(status.current_item_index)
-            finally:
-                ledger_file.close()
-        except (BlockingIOError, OSError, KeyError):
-            # Missing, or can't be opened (e.g. a file deleted since the
-            # glob) -- skip this file for now
-            continue
-    return in_flight
 
 
 def _run_parallel(
@@ -1514,7 +1535,7 @@ def _run_parallel(
     keep_shot_results: bool = False,
     shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
     shots_pbar: Any = None,
-    num_shots_for_progress: int | None = None,
+    item_shots: Mapping[int, int] | None = None,
     results_filename: str = "results.h5",
 ) -> dict[int, dict[str, Any]]:
     """Execute remaining items in parallel with checkpointing and polling.
@@ -1527,11 +1548,13 @@ def _run_parallel(
     ----------
     shots_pbar : Any, optional
         A tqdm progress bar for shot-level progress (only when parallel dispatch
-        with checkpointing is enabled). If provided, it is updated during each
-        poll tick with the total shots completed so far.
-    num_shots_for_progress : int | None, optional
-        Number of shots per item (for computing absolute shot totals). Only used
-        if shots_pbar is provided.
+        with item checkpointing is enabled). Each poll tick sets it to the
+        shots of finished items plus the in-flight shots read from the worker
+        item ledgers (`item_shots_done`); it never decreases.
+    item_shots : Mapping[int, int] | None, optional
+        Shots each item runs, by index (for computing absolute shot totals,
+        and capping an item's in-flight shots); an index missing from it
+        counts 0. Only used if shots_pbar is provided.
     results_filename : str, optional
         Filename for checkpoint loading (default "results.h5").
     """
@@ -1544,11 +1567,6 @@ def _run_parallel(
     # Track consumed count per worker file for efficient polling
     consumed_counts: dict[str, int] = {}
 
-    # Highest live shot count seen per in-flight item. Consolidation deletes
-    # an item's ledgers before the item is reported done, so the raw count
-    # can drop back to 0; the mark is dropped once the item is observed done.
-    inflight_shots_high_water: dict[int, int] = {}
-
     def on_poll() -> None:
         """Poll every worker file and notify for any newly-completed items.
 
@@ -1557,6 +1575,7 @@ def _run_parallel(
         if item_store is None:
             return
 
+        in_flight_shots: dict[int, int] = {}
         for worker_file in item_store.ledger_paths():
             key = str(worker_file)
             consumed_counts[key] = _poll_one_worker_file(
@@ -1567,44 +1586,20 @@ def _run_parallel(
                 items_map,
                 on_item_done,
                 pbar,
+                in_flight_shots=in_flight_shots,
             )
 
-        # Update shots progress bar if enabled
-        if shots_pbar is not None and num_shots_for_progress is not None:
-            from loqs.core.programresults import ProgramResults
-
-            # Count items already fully done
-            done_items = len(observed_indices)
-            total_shots_from_done = done_items * num_shots_for_progress
-
-            for item_index in list(inflight_shots_high_water):
-                if item_index in observed_indices:
-                    del inflight_shots_high_water[item_index]
-
-            # Count shots from in-flight items via their shot ledgers only,
-            # which are safe to read while their writers are still running.
-            # Exclude items already in observed_indices to avoid double-counting
-            in_flight_items = _read_worker_current_indices(item_store)
-            in_flight_items = in_flight_items - observed_indices
-            total_shots_from_inflight = 0
-            if shot_checkpoint_subdir is not None:
-                for item_index in in_flight_items:
-                    shot_subdir = shot_checkpoint_subdir(item_index)
-                    if shot_subdir is not None:
-                        shots_done = min(
-                            ProgramResults._count_live_done_shots(shot_subdir),
-                            num_shots_for_progress,
-                        )
-                        shots_done = max(
-                            shots_done,
-                            inflight_shots_high_water.get(item_index, 0),
-                        )
-                        inflight_shots_high_water[item_index] = shots_done
-                        total_shots_from_inflight += shots_done
-
-            # Set absolute total and refresh
-            total_shots = total_shots_from_done + total_shots_from_inflight
-            shots_pbar.n = total_shots
+        # Finished items count in full, in-flight ones by their ledgers' shots;
+        # never moving back covers a torn read or an item done between reads.
+        if shots_pbar is not None and item_shots is not None:
+            finished = sum(item_shots.get(i, 0) for i in observed_indices)
+            in_flight = sum(
+                min(s, item_shots.get(i, 0))
+                for i, s in in_flight_shots.items()
+                if i not in observed_indices
+            )
+            total = finished + in_flight
+            shots_pbar.n = max(shots_pbar.n, total)
             shots_pbar.refresh()
 
     # Each chunk worker resolves this itself; only the raw value is forwarded here.

@@ -15,13 +15,17 @@ summarizes it as plain data. Nothing here renders or prints anything.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import time
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+import numpy as np
 
 from loqs.internal.checkpointstore import ITEM_LAYOUT, CheckpointStore
 from loqs.internal.swmrledger import (
@@ -86,7 +90,11 @@ class SkippedFile:
 class MonitorTotals:
     """Aggregates over the summarized workers.
 
-    `shots_done` and `shots_total` sum over running and stale workers only.
+    `shots_done` and `shots_total` are the active (in-flight) shots of
+    running and stale workers only, which the host rows show. For the
+    run-wide figure see `MonitorSnapshot.run_shots`. `items_done` is the
+    sum of these workers' own ledger done marks, which host rows show; for
+    the run-wide figure see `MonitorSnapshot.run_items`.
     """
 
     state_counts: dict[WorkerState, int]
@@ -98,14 +106,154 @@ class MonitorTotals:
 
 @dataclass(frozen=True)
 class MonitorSnapshot:
-    """The result of one poll of an item checkpoint directory."""
+    """The result of one poll of an item checkpoint directory.
+
+    `run_items` is `(done, total)` items over all the run's items, or None
+    when unknown. `run_shots` is `(done, total)` shots over all the run's
+    items, finished plus in flight, or None when unknown. Neither is
+    narrowed by `--host`.
+    """
 
     directory: Path
     directory_exists: bool
     workers: tuple[WorkerSummary, ...]
     skipped: tuple[SkippedFile, ...]
     totals: MonitorTotals
+    run_items: tuple[int, int] | None
+    run_shots: tuple[int, int] | None
     notes: tuple[str, ...]
+
+
+RUN_PLAN_FILENAME = "run_progress.json"
+
+
+@dataclass(frozen=True)
+class RunPlan:
+    """What a run will do, as written by the driver for display only.
+
+    `shots_per_item` is None when the driver can't state it.
+    `items_done_at_start` counts items already complete when the run began,
+    and `pending_items` holds the indices this run computes.
+    """
+
+    shots_per_item: int | None
+    items_done_at_start: int
+    pending_items: frozenset[int]
+
+
+def remove_run_plan(directory: Path | str) -> None:
+    """Delete the run plan file, ignoring a missing file or any `OSError`."""
+    try:
+        (Path(directory) / RUN_PLAN_FILENAME).unlink()
+    except OSError:
+        pass
+
+
+def write_run_plan(directory: Path | str, plan: RunPlan) -> None:
+    """Write `plan` to `directory`; on `OSError` warn and remove the file.
+
+    Never raises `OSError`: the plan is display only, so a failed write
+    must not fail the run.
+    """
+    shots = None if plan.shots_per_item is None else int(plan.shots_per_item)
+    payload = {
+        "shots_per_item": shots,
+        "items_done_at_start": int(plan.items_done_at_start),
+        "pending_items": sorted(int(i) for i in plan.pending_items),
+    }
+    try:
+        (Path(directory) / RUN_PLAN_FILENAME).write_text(json.dumps(payload))
+    except OSError as e:
+        warnings.warn(
+            f"Could not write {RUN_PLAN_FILENAME} ({e}); the run goes on, "
+            "and loqs-monitor will show the run's shot total as unknown.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        remove_run_plan(directory)
+
+
+def _is_count(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def read_run_plan(directory: Path | str) -> RunPlan | None:
+    """Read the run plan, or None when missing, unreadable or malformed."""
+    try:
+        data = json.loads((Path(directory) / RUN_PLAN_FILENAME).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        shots = data["shots_per_item"]
+        start = data["items_done_at_start"]
+        pending = data["pending_items"]
+    except KeyError:
+        return None
+    if shots is not None and not _is_count(shots):
+        return None
+    if not _is_count(start):
+        return None
+    if not isinstance(pending, list) or not all(map(_is_count, pending)):
+        return None
+    return RunPlan(shots, start, frozenset(pending))
+
+
+def _finished_items(
+    plan: RunPlan, ledgers: Sequence[SwmrLedgerSnapshot]
+) -> set[int]:
+    """Pending items marked done in any ledger."""
+    finished: set[int] = set()
+    for snap in ledgers:
+        if snap.done is not None:
+            marked = (int(i) for i in np.flatnonzero(snap.done))
+            finished.update(i for i in marked if i in plan.pending_items)
+    return finished
+
+
+def compute_run_items(
+    plan: RunPlan | None, ledgers: Sequence[SwmrLedgerSnapshot]
+) -> tuple[int, int] | None:
+    """Items done and total over all of a run's items, or None if unknown.
+
+    Items done before the run began count as done; a done mark outside
+    `plan.pending_items` is ignored, so no item counts twice.
+    """
+    if plan is None or not ledgers:
+        return None
+    finished = _finished_items(plan, ledgers)
+    start = plan.items_done_at_start
+    return start + len(finished), start + len(plan.pending_items)
+
+
+def compute_run_shots(
+    plan: RunPlan | None, ledgers: Sequence[SwmrLedgerSnapshot]
+) -> tuple[int, int] | None:
+    """Shots done and total over all of a run's items, or None if unknown.
+
+    Finished items are the union of the ledgers' done marks within
+    `plan.pending_items`; an unfinished current item contributes the
+    largest in-flight count across ledgers, capped at the per-item shots.
+    """
+    if plan is None or plan.shots_per_item is None or not ledgers:
+        return None
+    shots = plan.shots_per_item
+    finished = _finished_items(plan, ledgers)
+    in_flight: dict[int, int] = {}
+    for snap in ledgers:
+        index = snap.current_item_index
+        if index is None or index not in plan.pending_items:
+            continue
+        if index in finished:
+            continue
+        count = min(snap.item_shots_done or 0, shots)
+        in_flight[index] = max(in_flight.get(index, 0), count)
+    done = (plan.items_done_at_start + len(finished)) * shots + sum(
+        in_flight.values()
+    )
+    total = (plan.items_done_at_start + len(plan.pending_items)) * shots
+    return done, total
 
 
 def _list_worker_files(directory: Path) -> list[Path]:
@@ -276,6 +424,26 @@ class MonitorTracker:
         self._wall_clock = wall_clock
         # worker id -> (last fingerprint, clock time of last change or None)
         self._history: dict[str, tuple[tuple, float | None]] = {}
+        # Per run figure ("items", "shots"): last done count with its plan,
+        # so the figure never moves backwards while the plan is unchanged.
+        self._floors: dict[str, tuple[RunPlan, int]] = {}
+
+    def _hold(
+        self,
+        key: str,
+        plan: RunPlan | None,
+        figure: tuple[int, int] | None,
+    ) -> tuple[int, int] | None:
+        """Keep `figure`'s done count from dropping under an unchanged plan."""
+        if figure is None or plan is None:
+            self._floors.pop(key, None)
+            return None
+        done, total = figure
+        floor = self._floors.get(key)
+        if floor is not None and floor[0] == plan:
+            done = max(done, floor[1])
+        self._floors[key] = (plan, done)
+        return done, total
 
     def _observe(
         self, worker_id: str, fingerprint: tuple, now: float
@@ -342,6 +510,7 @@ class MonitorTracker:
         workers: list[WorkerSummary] = []
         skipped: list[SkippedFile] = []
         listed_ids: set[str] = set()
+        ledgers: list[SwmrLedgerSnapshot] = []
         for path in files:
             ident = _parse_worker_name(path)
             if ident is None:
@@ -352,10 +521,15 @@ class MonitorTracker:
             if isinstance(result, str):
                 skipped.append(SkippedFile(path, result))
             else:
+                ledgers.append(result)
                 workers.append(self._summarize(ident, result, now, wall))
 
         for gone in set(self._history) - listed_ids:
             del self._history[gone]
+
+        plan = read_run_plan(self.directory) if directory_exists else None
+        run_items = self._hold("items", plan, compute_run_items(plan, ledgers))
+        run_shots = self._hold("shots", plan, compute_run_shots(plan, ledgers))
 
         workers.sort(key=lambda w: (w.host, w.pid, w.worker_id))
         return MonitorSnapshot(
@@ -364,6 +538,8 @@ class MonitorTracker:
             workers=tuple(workers),
             skipped=tuple(skipped),
             totals=compute_totals(workers),
+            run_items=run_items,
+            run_shots=run_shots,
             notes=_build_notes(directory_exists, len(files), skipped),
         )
 

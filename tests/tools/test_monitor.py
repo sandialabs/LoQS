@@ -18,6 +18,11 @@ from loqs.tools.monitor import (
     read_snapshot,
 )
 from loqs.tools.monitor import state as monitor_state
+from loqs.tools.monitor.state import (
+    RUN_PLAN_FILENAME,
+    RunPlan,
+    write_run_plan,
+)
 
 WALL = 1_000_000.0
 STALE = 100.0
@@ -293,3 +298,113 @@ def test_worker_name_matches_driver_ledger_path(tmp_path):
     assert len(snap.workers) == 1
     assert snap.workers[0].host == socket.gethostname()
     assert snap.workers[0].pid == os.getpid()
+
+
+def _ledger(tmp_path, pid, **kwargs):
+    return write_item_ledger(
+        tmp_path,
+        pid=pid,
+        suffix=f"{pid:08x}",
+        shots_total=4,
+        heartbeat=WALL,
+        **kwargs,
+    )
+
+
+def _clear(directory):
+    for p in directory.iterdir():
+        p.unlink()
+
+
+def test_run_shots_cumulative_worker_moves_on(tmp_path):
+    tracker = _tracker(tmp_path)
+    write_run_plan(tmp_path, RunPlan(4, 0, frozenset({0, 1})))
+    seen = []
+    for kwargs in (
+        dict(current_item=0, shots_done=3),
+        dict(current_item=0, shots_done=0),
+        dict(current_item=1, shots_done=1, done=(0,)),
+    ):
+        _ledger(tmp_path, 1000, **kwargs)
+        snap = tracker.poll()
+        seen.append((snap.run_items, snap.run_shots))
+    assert seen == [
+        ((0, 2), (3, 8)),
+        ((0, 2), (3, 8)),
+        ((1, 2), (5, 8)),
+    ]
+
+
+def test_run_shots_cumulative_leftover_ledger(tmp_path):
+    tracker = _tracker(tmp_path)
+    write_run_plan(tmp_path, RunPlan(4, 1, frozenset({1, 2})))
+    _ledger(tmp_path, 999, current_item=1, shots_done=3, done=(0,))
+    _ledger(tmp_path, 1000, current_item=1, shots_done=2)
+    snap = tracker.poll()
+    seen = [(snap.run_items, snap.run_shots)]
+    _ledger(tmp_path, 1000, current_item=2, shots_done=1, done=(1,))
+    snap = tracker.poll()
+    seen.append((snap.run_items, snap.run_shots))
+    assert seen == [((1, 3), (7, 12)), ((2, 3), (9, 12))]
+
+
+def test_run_shots_cumulative_rerun(tmp_path):
+    tracker = _tracker(tmp_path)
+    plan = RunPlan(4, 0, frozenset({0, 1}))
+    write_run_plan(tmp_path, plan)
+    _ledger(tmp_path, 1000, current_item=1, shots_done=3, done=(0,))
+    seen = [tracker.poll().run_shots]
+    _clear(tmp_path)
+    seen.append(tracker.poll().run_shots)
+    write_run_plan(tmp_path, plan)
+    _ledger(tmp_path, 2000, current_item=0, shots_done=1)
+    seen.append(tracker.poll().run_shots)
+    assert seen == [(7, 8), None, (1, 8)]
+
+
+def test_run_shots_floor_resets_on_new_plan(tmp_path):
+    tracker = _tracker(tmp_path)
+    write_run_plan(tmp_path, RunPlan(4, 0, frozenset({0, 1})))
+    _ledger(tmp_path, 1000, current_item=1, shots_done=3, done=(0,))
+    seen = [tracker.poll().run_shots]
+    write_run_plan(tmp_path, RunPlan(4, 0, frozenset({1})))
+    seen.append(tracker.poll().run_shots)
+    assert seen == [(7, 8), (3, 4)]
+
+
+@pytest.mark.parametrize(
+    "case", ["no_plan", "no_shot_count", "no_ledgers", "malformed_plan"]
+)
+def test_run_shots_unknown(tmp_path, case):
+    plans = {
+        "no_shot_count": RunPlan(None, 0, frozenset({0})),
+        "no_ledgers": RunPlan(4, 1, frozenset({1})),
+    }
+    if case in plans:
+        write_run_plan(tmp_path, plans[case])
+    if case == "malformed_plan":
+        (tmp_path / RUN_PLAN_FILENAME).write_text('{"shots_per_item": 4')
+    if case != "no_ledgers":
+        _ledger(tmp_path, 1000, current_item=0, shots_done=1)
+    snap = read_snapshot(tmp_path)
+    assert snap.run_shots is None
+    assert snap.run_items == ((0, 1) if case == "no_shot_count" else None)
+
+
+def test_run_progress_holds_through_unreadable_ledger(tmp_path):
+    tracker = _tracker(tmp_path)
+    write_run_plan(tmp_path, RunPlan(4, 0, frozenset({0, 1})))
+    first = _ledger(tmp_path, 1000, current_item=1, shots_done=2, done=(0,))
+    _ledger(tmp_path, 2000, current_item=1, shots_done=1)
+    snap = tracker.poll()
+    assert (snap.run_items, snap.run_shots) == ((1, 2), (6, 8))
+    first.write_bytes(b"not an hdf5 file at all" * 100)
+    snap = tracker.poll()
+    assert (snap.run_items, snap.run_shots) == ((1, 2), (6, 8))
+    assert [s.path for s in snap.skipped] == [first]
+
+
+def test_write_run_plan_failure_warns(tmp_path):
+    (tmp_path / RUN_PLAN_FILENAME).mkdir()
+    with pytest.warns(RuntimeWarning):
+        write_run_plan(tmp_path, RunPlan(4, 0, frozenset({0})))

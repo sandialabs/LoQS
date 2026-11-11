@@ -27,7 +27,6 @@ from loqs.internal import (
 from loqs.internal.swmrledger import (
     held_swmr_writer,
     mark_ledger_item_done,
-    read_swmr_ledger_done_union,
 )
 from loqs.core.history import (
     History,
@@ -219,8 +218,8 @@ class ProgramResults(Displayable):
         self._name_value: Any = name
         """Backing field for the `name` property."""
 
-        self.num_shots = num_shots
-        """Total number of shots for this run (for resume detection)."""
+        self._num_shots_value: Any = num_shots
+        """Backing field for the `num_shots` property."""
 
         self._max_frame_limit_value: int | None = max_frame_limit
         """Backing field for the `max_frame_limit` property."""
@@ -275,7 +274,8 @@ class ProgramResults(Displayable):
 
         The view is a store's `nested(index)` over an entry of another
         object's `_program_results`. Shots are read through it, and `name`,
-        `parent_program` and `max_frame_limit` resolve from it on first use.
+        `parent_program`, `num_shots` and `max_frame_limit` resolve from it on
+        first use.
 
         Parameters
         ----------
@@ -285,8 +285,23 @@ class ProgramResults(Displayable):
         self._nested_store = view
         self._name_value = _UNRESOLVED
         self._parent_program_value = _UNRESOLVED
+        if self._num_shots_value is None:
+            self._num_shots_value = _UNRESOLVED
         if self._max_frame_limit_value is None:
             self._max_frame_limit_value = _UNRESOLVED
+
+    @property
+    def num_shots(self) -> Any:
+        """Total number of shots for this run (for resume detection).
+        Resolves lazily from the nested source on first access if this is a
+        lazy nested-source proxy that hasn't resolved it yet."""
+        if self._num_shots_value is _UNRESOLVED:
+            self._num_shots_value = self._resolve_nested_attr("num_shots")
+        return self._num_shots_value
+
+    @num_shots.setter
+    def num_shots(self, value: Any) -> None:
+        self._num_shots_value = value
 
     @property
     def name(self) -> str:
@@ -334,10 +349,10 @@ class ProgramResults(Displayable):
         self._max_frame_limit_value = value
 
     def _resolve_nested_attr(self, attr_name: str) -> Any:
-        """Read one non-streamed attribute (`name`, `parent_program` or
-        `max_frame_limit`) from this proxy's nested entry, without decoding
-        its shots. Errors propagate, so a damaged entry is never hidden by
-        a default.
+        """Read one non-streamed attribute (`name`, `parent_program`,
+        `num_shots` or `max_frame_limit`) from this proxy's nested entry,
+        without decoding its shots. Errors propagate, so a damaged entry is
+        never hidden by a default.
         """
         assert self._nested_store is not None
         return self._nested_store.read_attrs((attr_name,))[attr_name]
@@ -639,29 +654,6 @@ class ProgramResults(Displayable):
         self.mark_shots_as_written(list(shot_indices))
         for shot_index in shot_indices:
             self.shot_histories.pop(shot_index, None)
-
-    @staticmethod
-    def _count_live_done_shots(checkpoint_dir: Path) -> int:
-        """Count the shots marked done in a directory's SWMR shot ledgers.
-
-        Safe to poll while writers are running: it opens only
-        `worker_*_checkpoint.h5` files, each in SWMR read mode, and never
-        `results.h5` or a payload file. Shots that exist only in
-        `results.h5` (e.g. from an earlier run) are not counted, and a
-        pre-fix data file at the ledger name is skipped.
-
-        Parameters
-        ----------
-        checkpoint_dir : Path
-            Directory holding the shot ledgers.
-
-        Returns
-        -------
-        int
-            Number of unique shot indices marked done across the ledgers.
-        """
-        store = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
-        return len(read_swmr_ledger_done_union(store.ledger_paths()))
 
     def load_checkpoint(
         self,
