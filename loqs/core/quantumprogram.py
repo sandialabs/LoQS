@@ -143,7 +143,10 @@ class QuantumProgram(Displayable):
             An initial [](api:History) to start num_shots from.
             Defaults to `None`, in which case an empty
             [](api:History) is initialized and
-            `instruction_stack` must be provided.
+            `instruction_stack` must be provided. Unless a `History` is
+            passed, shots don't save the quantum state (it reads back as
+            `"NOT SERIALIZED"`); passing a `History`, which saves everything
+            by default, keeps it.
 
         default_noise_model:
             A noise model to pass to any [](api:Instruction)
@@ -192,16 +195,24 @@ class QuantumProgram(Displayable):
 
         """
         # Do history before instruction stack in case it already has one
+        user_history = isinstance(initial_history, History)
         if expiring_state and isinstance(initial_history, History):
             # Rebuild through `append()`, which records `state`'s location and
             # expires its older copies; a copy would keep the source's (none).
+            # Frames keep their own marks; the source's keys mark later ones.
+            source_no_serialize = set(initial_history.no_serialize_keys)
             initial_history = History(
                 list(initial_history),
                 expiring_keys=list(initial_history.expiring_keys | {"state"}),
                 propagating_keys=list(initial_history.propagating_keys),
-                no_serialize_keys=list(initial_history.no_serialize_keys),
+                no_serialize_keys=[],
             )
+            initial_history.no_serialize_keys = source_no_serialize
         self.initial_history = History(initial_history)
+        if not user_history:
+            # Shots drop the quantum state; the initial frames stay whole
+            # since they were appended before the key was added.
+            self.initial_history.no_serialize_keys.add("state")
         """The initial history that all shots start from."""
 
         if instruction_stack is None and (
@@ -836,6 +847,17 @@ class QuantumProgram(Displayable):
             raise ValueError("resume=True requires checkpoint=True")
         if checkpoint:
             _refuse_thread_executor(shot_executor, "shot_executor")
+            if "state" not in self.initial_history.no_serialize_keys:
+                warnings.warn(
+                    "Every shot checkpoint will hold the quantum state, which "
+                    "can dominate its size. Passing plain frames instead of a "
+                    "History as initial_history drops the state from shots "
+                    "while still saving the initial state; adding 'state' to "
+                    "the History's no_serialize_keys also works when its "
+                    "initial frames hold no state. A program read from a file "
+                    "saved by an earlier LoQS keeps the state until it is "
+                    "rebuilt from its frames."
+                )
 
         checkpoint_enabled = checkpoint
 
@@ -1075,8 +1097,24 @@ class QuantumProgram(Displayable):
 
         history = copy.deepcopy(program.initial_history)
 
+        # The state is updated in place, so the shot's copies of the initial
+        # frames must be marked too, as `History.append` marks new frames.
+        for key in history.no_serialize_keys:
+            for frame in history:
+                frame.no_serialize(key)
+
         # If we have state in the last frame, reset seed
         try:
+            if (
+                len(history)
+                and isinstance(history[-1].get("state"), str)
+                and history[-1]["state"] == "NOT SERIALIZED"
+            ):
+                raise ValueError(
+                    "The program's initial state wasn't saved because its "
+                    "initial History drops 'state'. Pass plain frames, or a "
+                    "History that doesn't drop 'state', to save it."
+                )
             cast(BaseQuantumState, history[-1]["state"]).reset_seed(seed)
         except (KeyError, IndexError):
             pass

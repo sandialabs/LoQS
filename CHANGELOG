@@ -6,6 +6,7 @@
 - **`ExecutorSpec.submitit` and `ExecutorSpec.mpi4py` (`loqs.tools.paralleltools`, #150, @sserita):** Data-only constructors that build a `submitit.AutoExecutor` or an `mpi4py.futures.MPIPoolExecutor`, avoiding the need for a hand-written module-level factory.
 
 ### Changed
+- **Shot histories no longer save the quantum state by default (#164, @sserita):** A `QuantumProgram` built without a `History` (none given, or plain frames) no longer saves the quantum state in its shot histories, checkpoints included. It reads back as `"NOT SERIALIZED"`, and the program's own initial frames are still saved whole. Pass an initial `History` to keep the final state; a checkpointed run whose `History` keeps the state now warns.
 - **Checkpointing refuses thread executors (#150, @sserita):** With item or shot checkpointing on, a `ThreadPoolExecutor` (or a subclass) given as `program_executor` or `shot_executor` raises `ValueError` before any work starts.
 - **STIM and `DictNoiseModel` behaviour users may notice (#138, @sserita):** Code that relied on the old behaviour may notice these changes.
   - **STIM layer edits expand `REPEAT` blocks:** `STIMPhysicalCircuit` layer edits work on the expanded layers.
@@ -22,6 +23,7 @@
 - **`lazy_loading` (#153, @sserita):** `QuantumProgram.run`, `ProgramResults`, `CheckpointConfig` and `MultiProgramRunner` no longer take `lazy_loading`. A checkpointed run always drops each shot from `shot_histories` once it's written, as the default did, and a runner's kept results always read from its file. Read them with `collect_shot_data`, `get_shot_history` or `load_checkpoint()`, since `shot_histories` doesn't hold them. Runner files saved with the old setting still load.
 
 ### Fixed
+- **Composite instructions no longer copy the quantum state into stack labels (#164, @sserita):** A composite instruction used to copy the live quantum state into the stack labels it pushed, which wrote the state to disk even with `no_serialize_keys=["state"]`.
 - **Shots progress in `MultiProgramRunner` and `loqs-monitor` (#152, @sserita):** A resumed item's shots show on the Shots bar from the first poll with no jump, the bar never moves backwards, it no longer needs shot checkpointing, and it follows a `num_shots` set in `run_kwargs`, fixed or per item. In `loqs-monitor`, the run shots and run items lines count all of the run's items, including those done before a resume, and never drop as workers move on; the host column reads as active shots.
 - **Kept shot results report each item's own shots (#152, @sserita):** With `keep_shot_results`, a `MultiProgramRunner`'s kept results now report the `num_shots` and `max_frame_limit` each item ran with when `run_kwargs` sets them, fixed or per item, where they used to report the runner's `num_shots` and the raw `run_kwargs` value.
 - **`loqs-migrate` keeps module aliases (#161, @sserita):** `loqs-migrate` now handles renaming through an aliased module import (`import loqs.core as lc` / `lc.PatchDict()` now gives `lc.PatchLayout()`) instead of writing code that gives a `NameError`.

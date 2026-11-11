@@ -11,6 +11,8 @@ quantumsim = pytest.importorskip("quantumsim")
 stim = pytest.importorskip("stim")
 
 from loqs.backends import QSimQuantumState, STIMQuantumState
+from loqs.backends.state import BaseQuantumState
+from loqs.core.instructions import builders
 from loqs.core import Instruction, QuantumProgram
 from loqs.core.frame import Frame
 from loqs.core.programresults import ProgramResults
@@ -853,3 +855,122 @@ class TestResolveShotBatching:
         }
         with pytest.raises(ValueError):
             self._build_simple_program()._resolve_shot_batching(**call_kwargs)
+
+
+def _record_state_class(state):
+    """Apply function recording the class of the state it was handed."""
+    return Frame({"seen_state": type(state).__name__})
+
+
+def _state_composite_program(initial_history=None, with_init_state=True):
+    leaf = Instruction(_record_state_class, name="Record state")
+    composite = builders.build_composite_instruction([leaf], name="Comp")
+    stack = ["Comp"]
+    kwargs = {}
+    if with_init_state:
+        stack.insert(
+            0,
+            {
+                "instruction": "Init State",
+                "state": 1,
+                "qubit_labels": ["Q0"],
+            },
+        )
+        kwargs["state_type"] = QSimQuantumState
+    return QuantumProgram(
+        stack,
+        global_instructions={"Comp": composite},
+        initial_history=initial_history,
+        default_base_seed=0,
+        name="state checkpoint",
+        **kwargs,
+    )
+
+
+def _label_values(frame):
+    stack = frame.get("stack")
+    if stack is None:
+        return []
+    return [v for i in range(len(stack)) for v in stack[i].values()]
+
+
+@pytest.mark.parametrize("case", ["default", "frames", "kept"])
+def test_checkpoint_state_dropped_unless_kept(case, tmp_path):
+    if case == "default":
+        program = _state_composite_program()
+    elif case == "frames":
+        program = _state_composite_program(
+            initial_history=Frame({"state": QSimQuantumState(1, ["Q0"])}),
+            with_init_state=False,
+        )
+    else:
+        program = _state_composite_program(initial_history=History([]))
+
+    checkpoint_dir = tmp_path / "ckpt"
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        if case == "kept":
+            with pytest.warns(UserWarning, match="no_serialize_keys"):
+                program.run(
+                    num_shots=2, checkpoint=True, checkpoint_dir=checkpoint_dir
+                )
+        else:
+            program.run(
+                num_shots=2, checkpoint=True, checkpoint_dir=checkpoint_dir
+            )
+    if case != "kept":
+        assert not [
+            w for w in recorded if "no_serialize_keys" in str(w.message)
+        ]
+
+    loaded = ProgramResults()
+    loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+    shots = loaded.shot_histories
+    assert len(shots) == 2
+    for history in shots.values():
+        assert history[-1]["seen_state"] == "QSimQuantumState"
+        if case == "kept":
+            assert isinstance(history[-1]["state"], BaseQuantumState)
+            continue
+        assert history[-1]["state"] == "NOT SERIALIZED"
+        for frame in history:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                assert not isinstance(frame.get("state"), BaseQuantumState)
+                assert not any(
+                    isinstance(v, BaseQuantumState)
+                    for v in _label_values(frame)
+                )
+
+
+@pytest.mark.parametrize("case", ["frames", "history", "dropped"])
+def test_saved_initial_state_program(case, make_temp_path):
+    frame = Frame({"state": QSimQuantumState(1, ["Q0"])})
+    if case == "frames":
+        initial = frame
+    elif case == "history":
+        initial = History([frame])
+    else:
+        initial = History([frame], no_serialize_keys=["state"])
+    program = _state_composite_program(
+        initial_history=initial, with_init_state=False
+    )
+
+    def round_trip(prog):
+        with make_temp_path(suffix=".json") as path:
+            prog.write(path)
+            return QuantumProgram.read(path)
+
+    loaded = round_trip(program)
+    if case == "frames":
+        loaded = round_trip(loaded)
+        assert "state" in loaded.initial_history.no_serialize_keys
+
+    if case == "dropped":
+        with pytest.raises(ValueError):
+            loaded.run()
+    else:
+        results = loaded.run()
+        assert isinstance(
+            results.shot_histories[0][-1]["state"], BaseQuantumState
+        )
