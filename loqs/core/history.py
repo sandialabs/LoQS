@@ -159,7 +159,9 @@ class History(Sequence[Frame], Displayable):
             are added. Built-in default is an empty set (a common
             explicit choice is `["state"]` when the quantum state is
             large or there are no plans to rerun a shot from that point);
-            see above.
+            see above. A dropped key reads back as `"NOT SERIALIZED"`.
+            [](api:QuantumProgram) drops `"state"` from its own shot
+            histories unless it is given a `History`.
         """
         self._history = []
         self._expiring_key_locs: dict[str, int] = {}

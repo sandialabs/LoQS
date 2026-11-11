@@ -218,7 +218,9 @@ def build_composite_instruction(
     # instructions, so a kwarg meant for a nested instruction (e.g.
     # "patch_label"/"patch_labels"/"model") is actually collected here and
     # forwarded via apply_fn's **kwargs, instead of being silently dropped.
-    reserved_keys = {"stack", "instructions", "patches"} | data.keys()
+    # "state" is reserved so the live state isn't copied into every stack
+    # label this pushes; each nested instruction collects it when it runs.
+    reserved_keys = {"stack", "instructions", "patches", "state"} | data.keys()
     for inst_or_label in instructions:
         if isinstance(inst_or_label, Instruction):
             sub_instruction: Instruction | None = inst_or_label

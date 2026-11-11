@@ -305,6 +305,24 @@ recovered_results6.load_checkpoint(checkpoint_dir="test-checkpoint")
 len(recovered_results6.shot_histories)
 ```
 
+A shot checkpoint keeps every key of every frame except the quantum state, which reads back as `"NOT SERIALIZED"`. A dense state is most of a checkpoint file, so by default a `QuantumProgram` built without a `History` leaves it out. To keep the final state, pass an initial `History`, which is used as given and saves everything.
+
+```{code-cell} ipython3
+from loqs.core import History
+
+# A History is used as given, so this one saves every key, the state included
+program7 = QuantumProgram(
+    stack,
+    initial_history=History([]),
+    default_noise_model=ideal_model,
+    state_type=state_type,
+    patch_types=patch_types,
+    name="Prep -, measure Z... keeping state"
+)
+```
+
+A checkpointed run whose `History` keeps the state warns that every shot checkpoint will hold it. To silence the warning on purpose, use `warnings.filterwarnings("ignore", message=".*no_serialize_keys.*")`.
+
 ```{note}
 `run()` also supports genuine resume: calling it again with `checkpoint=True, resume=True` against the same `checkpoint_dir` picks up right where an interrupted run left off, computing only the shots not yet checkpointed rather than starting over from 0 (pass `force_resume=True` if the resuming call's own `num_shots`/`max_frame_limit`/RNG seed intentionally differ from the original -- otherwise a mismatch raises `ValueError`). Checkpointing is also useful even without resuming, for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`).
 ```
