@@ -105,6 +105,29 @@ class TestSTIMQuantumState:
             sigma = np.sqrt(p * (1 - p) / n_trials)
             assert abs(count / n_trials - p) < 5 * sigma
 
+    def test_numpy_stream_seeding_and_copy(self):
+        """The NumPy generator behind probabilistic reps is built from the
+        state's seed sequence and carried by copy()."""
+        rep = ProbabilisticStimGateRep([("", 0.5), ("X 0", 0.5)], ["Q0"])
+
+        def draw(state, n=64):
+            out = []
+            for _ in range(n):
+                state.apply_reps_inplace([rep])
+                out.append(state.state.peek_z(0))
+                state.state.do_circuit(stim.Circuit("R 0"))  # type: ignore
+            return out
+
+        seq = np.random.SeedSequence(20260712)
+        first = draw(STIMState([0], ["Q0"], seed=seq))
+        assert draw(STIMState([0], ["Q0"], seed=seq)) == first
+        assert len(set(first)) == 2
+
+        state = STIMState([0], ["Q0"], seed=seq)
+        draw(state)
+        dup = state.copy()
+        assert draw(dup) == draw(state)
+
     def test_probabilistic_stim_operations_bad_sum_raises(self):
         with pytest.raises(RepConstructionError):
             ProbabilisticStimGateRep([("", 0.5), ("X 0", 0.6)], ["Q0"])

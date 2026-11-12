@@ -15,6 +15,9 @@ from collections.abc import Sequence
 import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
+import numpy as np
+from numpy.random import SeedSequence
+
 from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
 from loqs.internal import Displayable
 
@@ -25,11 +28,42 @@ OutcomeDict: TypeAlias = dict[str | int, list[int]]
 """A type alias for outcome dictionaries."""
 
 
+def as_seed_sequence(seed: int | SeedSequence | None) -> SeedSequence:
+    """Turn a seed into a `SeedSequence`.
+
+    A `SeedSequence` is returned as the same object. Anything else goes to
+    `SeedSequence(seed)`, so None draws fresh entropy and a bad value raises
+    NumPy's own error.
+    """
+    if isinstance(seed, SeedSequence):
+        return seed
+    return SeedSequence(seed)
+
+
+def child_seed_sequence(parent: SeedSequence, *key: int) -> SeedSequence:
+    """Derive the child of `parent` at `key`, independent of call order.
+
+    The result equals what `parent.spawn()` would give for the matching
+    index, but never touches the parent's spawn counter.
+    """
+    return SeedSequence(
+        parent.entropy,
+        spawn_key=tuple(parent.spawn_key) + tuple(key),
+        pool_size=parent.pool_size,
+    )
+
+
 class BaseQuantumState(Displayable):
     """Base class for an object that holds a (physical) quantum state."""
 
     name: ClassVar[str]
     """Name of state backend"""
+
+    seed_sequence: SeedSequence
+    """Seed sequence the state's generators are built from."""
+
+    _rng: np.random.Generator
+    """Random number generator."""
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
@@ -116,7 +150,16 @@ class BaseQuantumState(Displayable):
         """
         pass
 
-    @abstractmethod
-    def reset_seed(self, new_seed: int | None) -> None:
-        """Reset the RNG seed."""
-        pass
+    def reset_seed(self, new_seed: int | SeedSequence | None) -> None:
+        """Reset the RNG seed.
+
+        Parameters
+        ----------
+        new_seed:
+            An integer, a NumPy `SeedSequence` (used as is), or None for
+            fresh entropy. The state keeps the resulting sequence in
+            `seed_sequence`, so a run can be replayed from it. A backend with
+            generators besides `_rng` overrides this to seed them too.
+        """
+        self.seed_sequence = as_seed_sequence(new_seed)
+        self._rng = np.random.default_rng(self.seed_sequence)

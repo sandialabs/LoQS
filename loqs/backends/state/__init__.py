@@ -34,5 +34,10 @@ The packages currently available as quantum states:
 
 """
 
-from .basestate import BaseQuantumState, OutcomeDict
+from .basestate import (
+    BaseQuantumState,
+    OutcomeDict,
+    as_seed_sequence,
+    child_seed_sequence,
+)
 from .npsvstate import NumpyStatevectorQuantumState

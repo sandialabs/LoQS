@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence, Collection
 from copy import deepcopy
 from functools import singledispatchmethod
 import numpy as np
+from numpy.random import SeedSequence
 from typing import ClassVar, TypeAlias, TypeVar
 
 
@@ -69,7 +70,7 @@ class QSimQuantumState(BaseQuantumState):
         "_qsim_maj_vot_mask",
         "_qsim_maj_vot_array",
     ]
-    """`seed` is deliberately not here to avoid triggering re-caching."""
+    """`seed_sequence` is deliberately not here to avoid triggering re-caching."""
 
     _PICKLE_VIA_ENCODING_ATTRS = True
     """GPU density classes hold device arrays; encoding attrs copy them to host."""
@@ -101,7 +102,7 @@ class QSimQuantumState(BaseQuantumState):
         self,
         state: QSimStateLike,
         qubit_labels: Collection[QubitTypes] | None = None,
-        seed: int | None = None,
+        seed: int | SeedSequence | None = None,
     ) -> None:
         """
         Parameters
@@ -115,7 +116,8 @@ class QSimQuantumState(BaseQuantumState):
             is used.
 
         seed:
-            Optional RNG seed. If not provided, default NumPy RNG behavior applies.
+            Optional RNG seed: an integer or a NumPy `SeedSequence`. If None,
+            fresh entropy is used. The sequence is kept in `seed_sequence`.
         """
         if isinstance(state, QSimQuantumState):
             self._state = deepcopy(state._state)
@@ -174,13 +176,10 @@ class QSimQuantumState(BaseQuantumState):
         return super().apply_reps(reps)
 
     def copy(self) -> QSimQuantumState:
-        new_state = QSimQuantumState(deepcopy(self.state), seed=self.seed)
+        new_state = QSimQuantumState(deepcopy(self.state))
+        new_state.seed_sequence = self.seed_sequence
         new_state._rng = deepcopy(self._rng)
         return new_state
-
-    def reset_seed(self, new_seed: int | None) -> None:
-        self.seed = new_seed
-        self._rng = np.random.default_rng(new_seed)
 
     @singledispatchmethod
     def _apply_gate_rep(self, rep: GateRep) -> None:

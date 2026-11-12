@@ -22,6 +22,7 @@ from loqs.backends.reps import (
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
+from loqs.backends.state import child_seed_sequence
 
 LABELS = ["Q0", "Q1"]
 SEED = 20241016
@@ -357,3 +358,63 @@ def test_serialization_after_instrument(adapter, make_temp_path):
         loaded = adapter.cls.read(tmp_path)
 
     assert adapter.probe(loaded) == [0]
+
+
+def _draw(adapter, state, n=64):
+    """`n` outcomes drawn from a one-qubit state, advancing its generators.
+
+    Each shot applies H then a projection reset to 0, which draws from the
+    tableau on STIM and from the NumPy generator on the other backends.
+    """
+    q = ["Q0"]
+    reps = [adapter.gate("H", q), ZBasisProjectionInstrumentRep(0, True, q)]
+    return state.apply_reps_inplace(reps * n)["Q0"]
+
+
+def test_copy_continues_stream(adapter):
+    state = adapter.make(1, ["Q0"], seed=SEED)
+    _draw(adapter, state)
+    copies = [state.copy(), copy.deepcopy(state)]
+
+    expected = _draw(adapter, state)
+    for dup in copies:
+        assert _draw(adapter, dup) == expected
+
+
+def test_seed_sequence_seeding(adapter):
+    q = ["Q0"]
+    seq = np.random.SeedSequence(SEED)
+
+    from_int = adapter.make(1, q, seed=SEED)
+    from_seq = adapter.make(1, q, seed=seq)
+    assert from_seq.seed_sequence is seq
+    reference = _draw(adapter, from_int)
+    assert _draw(adapter, from_seq) == reference
+
+    unseeded = adapter.make(1, q)
+    replay = adapter.make(1, q, seed=unseeded.seed_sequence)
+    assert _draw(adapter, replay) == _draw(adapter, unseeded)
+
+    _draw(adapter, from_int)
+    from_int.reset_seed(np.random.SeedSequence(SEED))
+    assert _draw(adapter, from_int) == reference
+
+
+def test_copy_construct_honours_seed(adapter):
+    q = ["Q0"]
+    source = adapter.make(1, q, seed=SEED + 1)
+    _draw(adapter, source)
+
+    built = adapter.cls(source, q, seed=SEED)
+    assert _draw(adapter, built) == _draw(
+        adapter, adapter.make(1, q, seed=SEED)
+    )
+
+
+def test_child_seed_sequence_matches_spawn():
+    def parent():
+        return np.random.SeedSequence(SEED, spawn_key=(3,), pool_size=8)
+
+    expected = parent().spawn(2)[1].generate_state(4)
+    child = child_seed_sequence(parent(), 1)
+    assert child.generate_state(4).tolist() == expected.tolist()
