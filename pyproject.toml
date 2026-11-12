@@ -86,6 +86,7 @@ docs = [
     "pymdown-extensions~=10.21.2",
     "pypandoc==1.17",
     "pypandoc-binary==1.17",
+    loqs[stim]
 ]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti>=0.9.12"]
