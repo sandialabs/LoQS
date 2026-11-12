@@ -23,9 +23,9 @@ about it!
      fixed but not yet released, so the fix is either on `main` or in a
      release branch that will ship soon.
 2. **If you can't find one, [open a new issue][issues:new].** There are two
-   issue forms:
-   - **Single bug or feature request** asks for a short **summary**, a
-     **minimal working example** (a code block or an attached notebook) if
+   issue templates:
+   - **Single issue** (a bug, feature or task) asks for a short **summary**,
+     a **minimal working example** (a code block or an attached notebook) if
      you can, and the **outcome you expected** or want.
    - **Multiple related bugs** groups several bugs in one issue, with a
      checklist and a section per bug.
