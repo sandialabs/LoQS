@@ -1,65 +1,43 @@
 # CHANGELOG
 
-## [Unreleased Changes]
+## [1.3.1] - 2026-11-11
 
 ### New
-- **`ExecutorSpec.submitit` and `ExecutorSpec.mpi4py` (`loqs.tools.paralleltools`, #150, @sserita):** Data-only constructors that build a `submitit.AutoExecutor` or an `mpi4py.futures.MPIPoolExecutor`, avoiding the need for a hand-written module-level factory.
+- **`ExecutorSpec.submitit` and `ExecutorSpec.mpi4py` (`loqs.tools.paralleltools`, #150, #160, @sserita):** Data-only constructors for a `submitit.AutoExecutor` or `mpi4py.futures.MPIPoolExecutor`, with no hand-written module-level factory.
 
 ### Changed
-- **Shot histories no longer save the quantum state by default (#164, @sserita):** A `QuantumProgram` built without a `History` (none given, or plain frames) no longer saves the quantum state in its shot histories, checkpoints included. It reads back as `"NOT SERIALIZED"`, and the program's own initial frames are still saved whole. Pass an initial `History` to keep the final state; a checkpointed run whose `History` keeps the state now warns.
-- **Checkpointing refuses thread executors (#150, @sserita):** With item or shot checkpointing on, a `ThreadPoolExecutor` (or a subclass) given as `program_executor` or `shot_executor` raises `ValueError` before any work starts.
-- **STIM and `DictNoiseModel` behaviour users may notice (#138, @sserita):** Code that relied on the old behaviour may notice these changes.
-  - **STIM layer edits expand `REPEAT` blocks:** `STIMPhysicalCircuit` layer edits work on the expanded layers.
-  - **`STIMPhysicalCircuit.insert` negative `idx`:** A negative `idx` is treated as list slicing treats it, so `-1` inserts before the last layer (it used to append on a circuit ending in `TICK`).
-  - **STIM lookups in `DictNoiseModel`:** A key like `("X", ("0",))` no longer matches label `0`, and raises `KeyError` when a generic entry would otherwise stand in for it. A failed lookup raises `KeyError`, not `AssertionError`.
-  - **Noise-channel lines:** They are applied on `STIMQuantumState` (they used to be dropped with a warning) and refused on a dense state. `E`, `CORRELATED_ERROR` and `ELSE_CORRELATED_ERROR` (Pauli targets) raise `NotImplementedError` in `DictNoiseModel`, and heralded channels raise on `STIMQuantumState`.
-  - **Generic non-STIM reps on a fused line:** They give one rep per target.
-  - **Wider `output_gate_reps`/`output_instrument_reps`:** They also list the types the model can convert to.
-  - **Unsupported STIM instructions:** Tagged instructions and the operations no `STIMPhysicalCircuit` list names raise `NotImplementedError` in `DictNoiseModel`.
-  - **`STIMQuantumState` measurement refusals:** `MXX`, `MYY`, `MZZ`, `MPP`, `MPAD`, heralded noise and a measurement it can't match to a label raise `NotImplementedError`.
-  - **`DictNoiseModel.from_model`:** It refuses time-dependent pyGSTi models, and its rep-type arguments default to `None`.
+- **STIM and `DictNoiseModel` behaviour changes (#138, #168, @sserita):** Code that relied on the old behaviour may notice these.
+  - **`STIMPhysicalCircuit` edits:** Layer edits work on expanded `REPEAT` layers, and a negative `insert` `idx` indexes like a list (`-1` inserts before the last layer, not at the end).
+  - **`DictNoiseModel` lookups:** A key like `("X", ("0",))` no longer matches label `0`, and a failed lookup raises `KeyError`, not `AssertionError`.
+  - **Noise channels and measurements:** Noise-channel lines now apply on `STIMQuantumState` (they were dropped); unsupported instructions and `MXX`/`MYY`/`MZZ`/`MPP` raise `NotImplementedError`.
+  - **`DictNoiseModel.from_model`:** It refuses time-dependent pyGSTi models.
+- **Checkpointing refuses thread executors (#150, #160, @sserita):** With checkpointing on, a `ThreadPoolExecutor` as `program_executor` or `shot_executor` raises `ValueError` before any work starts; use a process executor.
+- **Shot histories no longer save the quantum state by default (#164, #176, @sserita):** Without a `History` (none, or plain frames), a `QuantumProgram`'s shots save no state, checkpoints included; it reads `"NOT SERIALIZED"`. Pass an initial `History` to keep it (a checkpointed run then warns).
 
 ### Removed
-- **`lazy_loading` (#153, @sserita):** `QuantumProgram.run`, `ProgramResults`, `CheckpointConfig` and `MultiProgramRunner` no longer take `lazy_loading`. A checkpointed run always drops each shot from `shot_histories` once it's written, as the default did, and a runner's kept results always read from its file. Read them with `collect_shot_data`, `get_shot_history` or `load_checkpoint()`, since `shot_histories` doesn't hold them. Runner files saved with the old setting still load.
+- **`lazy_loading` (#153, #172, @sserita):** `QuantumProgram.run`, `ProgramResults`, `CheckpointConfig` and `MultiProgramRunner` drop `lazy_loading`. A checkpointed run always drops written shots from `shot_histories`; read them with `collect_shot_data`, `get_shot_history` or `load_checkpoint()`.
 
 ### Fixed
-- **Composite instructions no longer copy the quantum state into stack labels (#164, @sserita):** A composite instruction used to copy the live quantum state into the stack labels it pushed, which wrote the state to disk even with `no_serialize_keys=["state"]`.
-- **Shots progress in `MultiProgramRunner` and `loqs-monitor` (#152, @sserita):** A resumed item's shots show on the Shots bar from the first poll with no jump, the bar never moves backwards, it no longer needs shot checkpointing, and it follows a `num_shots` set in `run_kwargs`, fixed or per item. In `loqs-monitor`, the run shots and run items lines count all of the run's items, including those done before a resume, and never drop as workers move on; the host column reads as active shots.
-- **Kept shot results report each item's own shots (#152, @sserita):** With `keep_shot_results`, a `MultiProgramRunner`'s kept results now report the `num_shots` and `max_frame_limit` each item ran with when `run_kwargs` sets them, fixed or per item, where they used to report the runner's `num_shots` and the raw `run_kwargs` value.
-- **`loqs-migrate` keeps module aliases (#161, @sserita):** `loqs-migrate` now handles renaming through an aliased module import (`import loqs.core as lc` / `lc.PatchDict()` now gives `lc.PatchLayout()`) instead of writing code that gives a `NameError`.
-- **Saved `PyGSTiPhysicalCircuit` reads back on the right qubits (#166, @sserita):** Reading a saved `PyGSTiPhysicalCircuit` (JSON or HDF5) with integer qubit labels, or with labels where one is a prefix of another (`D1` and `D10`), no longer fails or puts gates on the wrong qubit. Gate arguments and times now survive the read and `map_qubit_labels`/`map_qubit_labels_inplace`. The saved format is unchanged, so files already saved read back correctly.
-- **History, results and state copy fixes (#157, @sserita):** Fixes bugs where a `History` lost bookkeeping through a copy or a file, and smaller bugs found alongside them.
-- **Serialization fixes (#156, @sserita):** Fixes bugs that read back wrong data from JSON, HDF5 and checkpoint files, or failed to write it.
-  - **Objects with matching old hashes no longer read back as one another:** Objects whose contents differ but whose old hashes matched (`-1` and `-2`; `1`, `True` and `1.0`; two classes with equal attributes) no longer read back as one another, in JSON, HDF5 and checkpoints. Files already written stay wrong. A cached `encode` with `ignore_no_serialize_flags=True` now raises `ValueError`.
-  - **A `merge_dict_attr` entry that raises leaves nothing behind:** Later entries keep their own values, instead of pairing with the wrong key.
-  - **Non-ASCII `str` and any `bytes` round-trip in HDF5 string datasets outside a `Frame`:** A value that can't be stored exactly (a trailing NUL, a lone surrogate) raises `ValueError`. A `merge_dict_attr` append of `bytes` to a `str` side, or the reverse, raises `TypeError`. Their `bytes` items read back as `bytes`, not `numpy.bytes_`.
-  - **Numpy scalars and `complex` values keep their type:** Numpy integer, floating, bool and complex scalars read back with their own type and value in JSON and HDF5.
-  - **Checkpointed shots no longer read back as an earlier shot's object:** A later shot's object, written after Python reused a freed object's memory address, no longer reads back as an earlier shot's object. A live object shared across batches now reads back as one copy per shot.
-- **Windows recovery of a killed writer's ledger (#150, @sserita):** On Windows, a checkpoint that reuses a killed writer's explicit `worker_id` now rebuilds its ledger and resumes, as on Linux and macOS, instead of failing with HDF5's stale "open for write" error.
-- **Decoded codepack instructions run and compare equal to fresh ones (#151, @sserita):** Instructions from the built-in codepacks, read back from disk, now run and compare equal to freshly built ones, so a fresh-runner resume no longer needs `force_resume`.
-  - **Codepack functions that raised `NameError`:** The 5Q `"Unflagged Decoder"` and the surf17 `"FT Logical Z Measure"` and `"FT Logical X Measure"` parity functions raised `NameError` once read back from a file, since they read values from the function that built them. Files written before the fix still do, and need rebuilding.
-  - **Physical circuits compare by content:** Two physical circuits are now equal when they have the same class, the same qubit labels in order, and the same backend circuit, instead of only when they are the same object. Their hash is per class, so equal circuits now collide as dict keys.
-  - **Closure warning:** Building an instruction whose `apply_fn` or `map_qubits_fn` closes over its builder's local variables now warns, since such a function can't be restored faithfully from a file.
-- **`loqs.tools` fixes (#155, @sserita):** Fixes four bugs found while slimming the test suite.
-  - `get_state_probs_phases`/`print_state_probs_phases` work at any qubit count, not just 7, and raise `ValueError` for a state whose signs they can't determine (e.g. a GHZ state) instead of printing wrong ones
-  - Reading a v1.0/v1.1 program with `migrate_legacy_fns=True` takes about 2 s instead of about 17 s, and `loqs-migrate` no longer stalls on a file that only mentions old names in comments or docstrings
-  - `loqs-migrate` also reports renames made through a module import (e.g. `loqs.core.PatchDict`), and flags removed names used that way
-  - `loqs-migrate --dry-run` exits 1 when it would rewrite a file, so it works as a CI gate
-  - `profile_strategies` raises `ValueError` for `repeats < 1` before running anything
-- **STIM circuits and `DictNoiseModel` on all three backends (#138, @sserita):** A circuit built from `stim.Circuit`s with integer or string labels now runs under a `DictNoiseModel` on the STIM, statevector and QuantumSim backends.
-  - **Idle qubits:** `STIMPhysicalCircuit` accepts idle `qubit_labels`.
-  - **`copy()`:** It no longer swaps qubits when integer labels aren't `0..n-1` in order.
-  - **Layer edits:** The four layer edits agree with or without a final `TICK`.
-  - **STIM lookup in `DictNoiseModel`:** It keeps label types, gives a generic key one rep per target group in order, and runs STIM circuits with `TICK`s and annotations on the dense states.
-  - **Rep conversion:** `DictNoiseModel` converts reps to the types a state asks for.
-  - **Noise channels:** STIM noise-channel lines are applied on `STIMQuantumState`, including multi-argument ones (`PAULI_CHANNEL_1`, `PAULI_CHANNEL_2`), and a `StimCircuitGateRep` whose text spaces its arguments now runs there.
-  - **Joint measurements:** They are refused on `STIMQuantumState`, and each `StimCircuitInstrumentRep` reads only the record bits its own circuit wrote.
-  - **`DictNoiseModel.from_model`:** It builds the model from a real `PyGSTiNoiseModel`, and copies keep their rep types.
-- **Faster checkpoint reads and writes (#153, @sserita):** Reading results back from a checkpoint costs what was asked for, and checkpointed runs stop redoing per-circuit work. Answers are unchanged.
-  - **`collect_shot_data` reads only what it needs:** With a checkpoint, it decodes only the requested key at the requested frames, plus what `frame_filter` needs, instead of every shot's full `History`: about 13x faster on a 200-shot, two-patch Steane circuit.
-  - **Per-shot reads stay flat:** `get_shot_history` no longer rebuilds the index of every checkpoint file on each call, or scans the file from the start for objects shared with earlier shots, so a cold read takes about 1.9 s at shot 999 of 1000 on the same circuit instead of 31 s.
-  - **Bounded memory through a collect:** A checkpointed `collect_shot_data` no longer leaves every decoded shot in memory.
-  - **No decode right after a write:** Fresh checkpointed runs no longer decode the program they just wrote, saving one noise-model decode per circuit (seconds with a statevector noise model), so runs with many circuits and few shots each speed up. `Serializable.dump` honours a caller's `encode_cache`, and shots a `ProgramResults` checkpoints into a second directory read back instead of raising `CheckpointReadError`.
+- **STIM circuits and `DictNoiseModel` on all three backends (#138, #168, @sserita):** A circuit built from `stim.Circuit`s with integer or string labels now runs under a `DictNoiseModel` on every backend. `STIMPhysicalCircuit.copy()` no longer swaps qubits for integer labels not in `0..n-1` order.
+- **Windows recovery of a killed writer's ledger (#150, #160, @sserita):** On Windows, a checkpoint that reuses a killed writer's `worker_id` now rebuilds its ledger and resumes, instead of failing with HDF5's stale "open for write" error.
+- **Decoded codepack instructions run and compare equal to fresh ones (#151, #167, @sserita):** Built-in codepack instructions read back from disk now run and compare equal to fresh ones, so a fresh-runner resume no longer needs `force_resume`.
+  - **`NameError` in codepack functions:** The 5Q `"Unflagged Decoder"` and surf17 `"FT Logical Z/X Measure"` raised `NameError` once read back; files written earlier still do, so rebuild them.
+  - **Physical circuits compare by content:** Circuits with the same class, qubit labels and backend circuit are now equal, not only the same object, so equal circuits collide as dict keys.
+- **Shots progress in `MultiProgramRunner` and `loqs-monitor` (#152, #175, @sserita):** A resumed item's shots show on the Shots bar from the first poll and the bar never moves backwards, and it follows a `num_shots` set in `run_kwargs`. `loqs-monitor` run counts include items done before a resume.
+- **Kept shot results report each item's own shots (#152, #175, @sserita):** With `keep_shot_results`, a `MultiProgramRunner`'s kept results report the `num_shots` and `max_frame_limit` each item ran with when `run_kwargs` sets them, not the runner's.
+- **Faster checkpoint reads and writes (#153, #169, #172, @sserita):** Reading results back from a checkpoint costs only what was asked for, and checkpointed runs stop redoing per-circuit work. Apart from the dtype fix below, answers are unchanged.
+  - **Reads:** `collect_shot_data` is about 13x faster on a 200-shot, two-patch Steane circuit, and a cold `get_shot_history` at shot 999 of 1000 takes about 1.9 s, not 31 s.
+  - **Writes:** Checkpointed shot writes are 12x faster in a numpy `History` example. Equal-valued arrays of different dtypes no longer read back as one another; files already written stay wrong.
+- **`loqs.tools` fixes (#155, #159, @sserita):** `get_state_probs_phases` works at any qubit count and raises `ValueError`, not wrong signs, for e.g. GHZ; reading a v1.0/v1.1 program with `migrate_legacy_fns=True` takes 2 s, not 17 s; `loqs-migrate --dry-run` exits 1 when it would rewrite a file.
+- **Serialization fixes (#156, #171, @sserita):** Fixes bugs that read back wrong data from JSON, HDF5 and checkpoint files, or failed to write it.
+  - **Objects with matching old hashes no longer read back as one another:** Such as `-1` and `-2`, or `1`, `True` and `1.0`, in JSON, HDF5 and checkpoints. Files already written stay wrong.
+  - **Numpy scalars and `complex` values keep their type:** They read back with their own type and value in JSON and HDF5.
+  - **Non-ASCII `str` and `bytes` in HDF5 strings:** They now round-trip, and a value that can't be stored exactly raises `ValueError`.
+  - **Reused addresses in checkpoints:** A later shot's object, written after Python reused a freed address, no longer reads back as an earlier shot's.
+- **History, results and state copy fixes (#157, #173, @sserita):** Fixes bugs where a `History` lost bookkeeping through a copy or a file, and smaller bugs found alongside them.
+- **`loqs-migrate` keeps module aliases (#161, #174, @sserita):** `loqs-migrate` now renames through an aliased module import (`import loqs.core as lc` / `lc.PatchDict()` now gives `lc.PatchLayout()`) instead of writing code that gives a `NameError`.
+- **Composite instructions no longer copy the quantum state into stack labels (#164, #176, @sserita):** A composite instruction used to write the live quantum state to disk through the stack labels it pushed, even with `no_serialize_keys=["state"]`.
+- **Saved `PyGSTiPhysicalCircuit` reads back on the right qubits (#166, #174, @sserita):** Reads with integer labels, or labels like `D1` and `D10`, no longer fail or put gates on the wrong qubit, and reads and `map_qubit_labels` now keep gate arguments and times. Old files read back correctly.
 
 ## [1.3] - 2026-10-22
 
