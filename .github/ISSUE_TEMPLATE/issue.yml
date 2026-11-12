@@ -1,0 +1,91 @@
+name: Single bug or feature request
+description: Report one bug, or suggest a new feature or change.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file an issue!
+        Please search the [existing issues](https://github.com/sandialabs/LoQS/issues) first. This includes closed issues in open [milestones](https://github.com/sandialabs/LoQS/milestones), i.e. fixed but not yet released.
+
+        A good title names the part of LoQS it affects, then a short summary, e.g. `Serialization: ...` or `Tools: ...`.
+
+        To report several small related bugs in one issue, use the "Multiple related bugs" form instead.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: Defaults to Low. Adjust it as you see fit; maintainers may change it during triage.
+      options:
+        - Low
+        - Medium
+        - High
+      default: 0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: effort
+    attributes:
+      label: Effort
+      description: Your best guess at the size of the fix. Defaults to Low; adjust it as you see fit.
+      options:
+        - Low
+        - Medium
+        - High
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: |
+        What's wrong or missing, and why it matters. Enough context that someone new to the problem can follow it. Link related issues or PRs inline where they matter, e.g. `[#123](https://github.com/sandialabs/LoQS/issues/123)` (use `/pull/123` for a PR).
+    validations:
+      required: true
+
+  - type: textarea
+    id: mwe
+    attributes:
+      label: Minimal working example
+      description: |
+        The smallest code that shows the problem, if you can: code that fails today and should pass once it's fixed. Put the error or wrong output in the block as a comment. Use a code block, or drag and drop a notebook (`.ipynb`) or script here to attach it.
+      placeholder: |
+        ```python
+        import loqs
+        ...
+        # ValueError: ...
+        ```
+    validations:
+      required: false
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected or desired outcome
+      description: What you expected to happen, or what you'd like LoQS to do instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix
+    attributes:
+      label: Proposed fix
+      description: |
+        Optional. The approach you have in mind (an API sketch or code snippet is welcome), plus any real caveats: issues or PRs it depends on, open design decisions, or edge cases it might not handle.
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: For a bug, the versions involved.
+      placeholder: |
+        - LoQS version or commit: [e.g. 1.3.1, or 84053ba]
+        - Python version: [e.g. 3.12]
+        - OS: [e.g. macOS 15, Ubuntu 24.04]
+    validations:
+      required: false
