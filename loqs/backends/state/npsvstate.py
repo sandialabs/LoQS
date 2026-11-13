@@ -195,6 +195,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             if seed is None:
                 # Without a seed, share the source's generator
                 self.seed_sequence = state.seed_sequence
+                self.seeded = state.seeded
                 self._rng = state._rng
         else:
             num_subsystems = self._infer_num_subsystems(state, qubit_labels, d)
@@ -704,6 +705,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             d=self.d,
         )
         new_state.seed_sequence = self.seed_sequence
+        new_state.seeded = self.seeded
         new_state._rng = deepcopy(self._rng)
         return new_state
 

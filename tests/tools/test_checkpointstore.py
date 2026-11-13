@@ -53,6 +53,7 @@ from _shared_checkpoint_test_helpers import (
     repeated_cache_ids,
     sampled_events,
     sessions_in,
+    shot_seed,
     simulate_process_death,
     spy_on_renames,
 )
@@ -213,7 +214,7 @@ def test_snapshot_round_trip(tmp_path, histories, shots):
     loaded = ProgramResults.read(store.canonical_path)
     assert sorted(loaded.shot_histories) == shots
     for key, history in loaded.shot_histories.items():
-        assert _final_frame_signature(history)[0] == BASE_SEED + key
+        assert _final_frame_signature(history)[0] == shot_seed(key)
 
 
 def test_empty_batch_writes_nothing(tmp_path):
@@ -341,13 +342,13 @@ def test_contract_round_trip(tmp_path, histories, kind):
     assert store.missing(range(6)) == [3, 5]
     assert store.missing([2, 4]) == []
     for key in (0, 4):
-        assert _seed(store.get(key)) == BASE_SEED + key
+        assert _seed(store.get(key)) == shot_seed(key)
         assert store.get(key, "shot_wall_clock_times") == 0.5 + key
     with pytest.raises(KeyError):
         store.get(3)
     items = list(store.iter_items())
     assert [k for k, _ in items] == [0, 1, 2, 4]
-    assert all(_seed(h) == BASE_SEED + k for k, h in items)
+    assert all(_seed(h) == shot_seed(k) for k, h in items)
     subset = list(store.iter_items("shot_wall_clock_times", keys=[4, 0, 9]))
     assert subset == [(0, 0.5), (4, 4.5)]
     with pytest.raises(ValueError):
@@ -379,14 +380,14 @@ def test_collision_rule_first_committed_wins(tmp_path, histories):
 
     def check(expected_seed, expected_wall):
         assert store.keys("shot_wall_clock_times") == store.keys() == [0, 5]
-        assert _seed(store.get(0)) == BASE_SEED + expected_seed
+        assert _seed(store.get(0)) == shot_seed(expected_seed)
         assert store.get(0, "shot_wall_clock_times") == expected_wall
         items = dict(store.iter_items())
-        assert _seed(items[0]) == BASE_SEED + expected_seed
+        assert _seed(items[0]) == shot_seed(expected_seed)
         assert dict(store.iter_items("shot_wall_clock_times"))[0] == (
             expected_wall
         )
-        assert _seed(items[5]) == BASE_SEED + 5
+        assert _seed(items[5]) == shot_seed(5)
 
     check(0, 10.0)
     store.canonical_path.unlink()
@@ -719,10 +720,10 @@ def test_nested_view_reads_kept_results(tmp_path, histories):
     view = store.nested(1)
     assert view.keys() == [2, 3, 4]
     assert view.keys("shot_wall_clock_times") == [2, 3, 4]
-    assert _seed(view.get(3)) == BASE_SEED + 3
+    assert _seed(view.get(3)) == shot_seed(3)
     assert view.get(3, "shot_wall_clock_times") == 3.5
     assert [_seed(h) for _, h in view.iter_items()] == [
-        BASE_SEED + k for k in (2, 3, 4)
+        shot_seed(k) for k in (2, 3, 4)
     ]
     assert view.missing(range(5)) == [0, 1]
     assert store.nested(0).keys() == [0, 1]
@@ -784,7 +785,7 @@ def _state_problems(store, histories, count) -> list[str]:
         if store.keys() != expected:
             problems.append(f"keys {store.keys()}")
         for key, history in store.iter_items():
-            if _seed(history) != BASE_SEED + key:
+            if _seed(history) != shot_seed(key):
                 problems.append(f"wrong value at {key}")
         if _physical_lengths(store.canonical_path) != {
             n: count for n in STREAMED
@@ -796,7 +797,7 @@ def _state_problems(store, histories, count) -> list[str]:
         if sorted(read.shot_histories) != expected:
             problems.append(f"read keys {sorted(read.shot_histories)}")
         for key, history in read.shot_histories.items():
-            if _seed(history) != BASE_SEED + key:
+            if _seed(history) != shot_seed(key):
                 problems.append(f"read wrong value at {key}")
     except Exception as exc:  # noqa: BLE001
         problems.append(repr(exc))
@@ -970,7 +971,7 @@ def test_error_partway_through_a_batch_then_good_batch(tmp_path, histories):
     store.put_batch(good, encode_cache=cache)
     assert store.keys() == store.keys("label") == [0, 3, 4]
     for key, source in ((0, 0), (3, 1), (4, 4)):
-        assert _seed(store.get(key)) == BASE_SEED + source
+        assert _seed(store.get(key)) == shot_seed(source)
     assert store.get(3, "label") == "ef"
     assert [v for _, v in store.iter_items("label")] == ["ab", "ef", "gh"]
 
@@ -997,7 +998,7 @@ def test_consolidate_dedups_per_attr(tmp_path, histories):
     assert _physical_lengths(store.canonical_path, ITEM_LAYOUT) == {
         a.canonical: 1 for a in ITEM_LAYOUT.attrs
     }
-    assert _seed(store.get(0)) == BASE_SEED
+    assert _seed(store.get(0)) == shot_seed(0)
     assert store.get(0, "item_wall_clock_times") == 1.5
     assert store.nested(0).keys() == [0, 1]
 
@@ -1049,9 +1050,9 @@ def test_truncated_payload_stops_consolidation(tmp_path, histories):
 def test_append_keeps_decode_cache_and_pickles(tmp_path, histories):
     store = CheckpointStore(tmp_path, SHOT_LAYOUT)
     store.write_snapshot(_shot_results(histories, [0]))
-    assert _seed(store.get(0)) == BASE_SEED
+    assert _seed(store.get(0)) == shot_seed(0)
     store.put_batch(_shot_entries(histories, [1]))
-    assert _seed(store.get(1)) == BASE_SEED + 1
+    assert _seed(store.get(1)) == shot_seed(1)
     clone = pickle.loads(pickle.dumps(store))
     clone.put_batch(_shot_entries(histories, [2]))
     assert store.keys() == [0, 1, 2]
@@ -1073,7 +1074,7 @@ def test_shot_level_round_trip(tmp_path, histories):
     assert sorted(read.shot_histories) == list(range(6))
     assert sorted(read.shot_wall_clock_times) == list(range(6))
     for key in range(6):
-        assert _seed(read.shot_histories[key]) == BASE_SEED + key
+        assert _seed(read.shot_histories[key]) == shot_seed(key)
         assert read.shot_wall_clock_times[key] == 0.5 + key
     assert store.missing(range(6)) == []
 
@@ -1106,7 +1107,7 @@ def test_item_level_round_trip(tmp_path, histories):
     assert sorted(read._reduced_results) == [0, 1]
     assert sorted(read._program_results) == [0, 1]
     for key in (0, 1):
-        assert _seed(read._reduced_results[key]) == BASE_SEED + key
+        assert _seed(read._reduced_results[key]) == shot_seed(key)
         assert read.item_wall_clock_times[key] == 1.5 + key
         assert read.shot_wall_clock_times[key] == {key: 0.25}
         assert sorted(read._program_results[key].shot_histories) == [
@@ -1116,7 +1117,7 @@ def test_item_level_round_trip(tmp_path, histories):
     view = store.nested(1)
     assert view.keys() == [2, 3]
     for key, history in view.iter_items():
-        assert _seed(history) == BASE_SEED + key
+        assert _seed(history) == shot_seed(key)
 
 
 # -- keep-entries rewrite, config read and payload views -------------------
@@ -1215,12 +1216,12 @@ def test_keep_entries_rewrite_carries_committed_entries(tmp_path, histories):
         assert dict(store.iter_items(name)) == old[name]
     assert store.keys("_program_results") == [0, 1]
     for key in (0, 1):
-        assert _seed(store.get(key)) == BASE_SEED + key
+        assert _seed(store.get(key)) == shot_seed(key)
         view = store.nested(key)
         assert view.keys() == [2 * key, 2 * key + 1]
         assert [_seed(h) for _, h in view.iter_items()] == [
-            BASE_SEED + 2 * key,
-            BASE_SEED + 2 * key + 1,
+            shot_seed(2 * key),
+            shot_seed(2 * key + 1),
         ]
 
     store.put_batch(
@@ -1281,7 +1282,7 @@ def test_payload_view_reads_one_file(tmp_path, histories):
     path = store.payload_path("w_a", 1)
     view = store.payload_view(path)
     assert view.keys() == [1]
-    assert _seed(view.get(1)) == BASE_SEED + 1
+    assert _seed(view.get(1)) == shot_seed(1)
     for other in (0, 2):
         with pytest.raises(KeyError):
             view.get(other)

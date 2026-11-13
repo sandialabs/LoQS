@@ -178,6 +178,7 @@ class QSimQuantumState(BaseQuantumState):
     def copy(self) -> QSimQuantumState:
         new_state = QSimQuantumState(deepcopy(self.state))
         new_state.seed_sequence = self.seed_sequence
+        new_state.seeded = self.seeded
         new_state._rng = deepcopy(self._rng)
         return new_state
 

@@ -11,6 +11,7 @@ import pytest
 
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.backends.state import NumpyStatevectorQuantumState
+from loqs.internal.seeding import seed_sequence_to_dict
 from loqs.tools import paralleltools
 from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.noisesweeptools import (
@@ -69,13 +70,7 @@ def pick_state_type(strength):
 def make_runner(strengths, **kwargs):
     kwargs.setdefault("instruction_stack", make_stack)
     kwargs.setdefault("global_instructions", {"Flip Coin": FLIP_COIN})
-    # Default num_shots/seed_stride always satisfy num_shots <= seed_stride: derive
-    # num_shots from an explicit seed_stride, or fall back to fixed defaults.
-    if kwargs.get("seed_stride") is not None:
-        kwargs.setdefault("num_shots", max(1, kwargs["seed_stride"]))
-    else:
-        kwargs.setdefault("num_shots", 10)
-        kwargs.setdefault("seed_stride", 100)
+    kwargs.setdefault("num_shots", 10)
     kwargs.setdefault("collect_shot_data_args", COLLECT_SHOT_DATA_ARGS)
     kwargs.setdefault("expected_outcomes", EXPECTED_OUTCOMES)
     return NoiseSweepRunner(strengths, **kwargs)
@@ -129,26 +124,24 @@ def _hooked_build_program(before):
 
 
 class TestBuildProgram:
-    @pytest.mark.parametrize(
-        "seed_stride, num_shots, stride",
-        [(100, 10, 100), (None, 5, 5)],
-        ids=["explicit_stride", "default_stride"],
-    )
-    def test_seed_formula(self, seed_stride, num_shots, stride):
-        runner = make_runner(
-            [0.0, 0.1, 0.2],
-            base_seed=5,
-            seed_stride=seed_stride,
-            num_shots=num_shots,
-        )
-        for index in range(3):
-            program = runner.build_program(index)
-            assert program.default_base_seed == 5 + index * stride
+    def test_point_roots_are_children(self):
+        """Points of one sweep, and of sweeps with different base seeds,
+        never share a root."""
+        roots = {}
+        for base in (5, 6):
+            runner = make_runner([0.0, 0.1, 0.2], base_seed=base)
+            for index in range(3):
+                root = runner.build_program(index).default_base_seed
+                if base == 5:
+                    assert root.entropy == 5
+                    assert tuple(root.spawn_key) == (index,)
+                roots[(base, index)] = seed_sequence_to_dict(root)
+        keys = [repr(sorted(d.items())) for d in roots.values()]
+        assert len(set(keys)) == 6
 
     def test_resolves_fixed_and_callable_mix(self):
         runner = make_runner(
             [0.01, 0.02],
-            seed_stride=10,
             name=name_for_strength,
         )
         program0 = runner.build_program(0)
@@ -167,7 +160,7 @@ class TestBuildProgram:
         ids=["class", "function"],
     )
     def test_state_type_class_vs_callable(self, state_type):
-        runner = make_runner([0.1], seed_stride=1, state_type=state_type)
+        runner = make_runner([0.1], state_type=state_type)
         program = runner.build_program(0)
         assert program.state_type is NumpyStatevectorQuantumState
 
@@ -189,7 +182,6 @@ class TestSerialization:
         runner = make_runner(
             [0.01, 0.02, 0.05],
             base_seed=3,
-            seed_stride=50,
             default_noise_model=identity_noise_model,
             name="fixed name",
         )
@@ -199,7 +191,6 @@ class TestSerialization:
 
         assert loaded.strengths == runner.strengths
         assert loaded.base_seed == runner.base_seed
-        assert loaded.seed_stride == runner.seed_stride
         assert loaded.name == "fixed name"
         assert callable(loaded.default_noise_model)
         assert loaded.default_noise_model(0.5) == 0.5
@@ -208,23 +199,40 @@ class TestSerialization:
         for index in range(3):
             p_orig = runner.build_program(index)
             p_loaded = loaded.build_program(index)
-            assert p_orig.default_base_seed == p_loaded.default_base_seed
+            assert seed_sequence_to_dict(
+                p_orig.default_base_seed
+            ) == seed_sequence_to_dict(p_loaded.default_base_seed)
             assert p_orig.name == p_loaded.name
+
+    def test_file_with_seed_stride_still_reads(self, tmp_path, monkeypatch):
+        """A runner file written as before 1.3.2 (a stride, no scheme) reads
+        back and builds programs."""
+        runner = make_runner([0.1, 0.2], base_seed=3)
+        path = tmp_path / "runner.json"
+        with monkeypatch.context() as patch:
+            attrs = [
+                "seed_stride" if a == "_seeding_scheme" else a
+                for a in NoiseSweepRunner._SERIALIZE_ATTRS
+            ]
+            patch.setattr(NoiseSweepRunner, "_SERIALIZE_ATTRS", attrs)
+            runner.seed_stride = 100
+            runner.write(path)
+
+        loaded = NoiseSweepRunner.read(path)
+        assert loaded._seeding_scheme == "seed stride"
+        assert loaded.build_program(1).default_base_seed is not None
 
     def test_non_file_backed_callable_raises_without_override(
         self, interactive_fn
     ):
         with pytest.raises(OSError):
-            make_runner(
-                [0.1], seed_stride=1, default_noise_model=interactive_fn
-            )
+            make_runner([0.1], default_noise_model=interactive_fn)
 
     def test_non_file_backed_callable_with_override_succeeds(
         self, interactive_fn
     ):
         runner = make_runner(
             [0.1],
-            seed_stride=1,
             default_noise_model=interactive_fn,
             serialized_callables={
                 "default_noise_model": INTERACTIVE_FN_SOURCE
@@ -240,7 +248,6 @@ class TestRun:
         num_shots = 20
         runner = make_runner(
             [0.0, 0.5, 1.0],
-            seed_stride=num_shots,
             num_shots=num_shots,
             verbose=False,
         )
@@ -250,17 +257,11 @@ class TestRun:
         for rate, stderr in zip(result.failure_rates, result.stderrs):
             assert stderr == math.sqrt(rate * (1 - rate) / num_shots)
 
-    def test_explicit_seed_stride_too_small_raises(self):
-        with pytest.raises(ValueError):
-            make_runner([0.0, 0.1], seed_stride=3, num_shots=5)
-
     def test_serial_run_forwards_verbose_parameter(self):
         """Serial run forwards the runner's `verbose` to each point's
         QuantumProgram.run call (False differs from the default)."""
         seen_verbose_values = []
-        runner = make_runner(
-            [0.0, 0.1], seed_stride=5, num_shots=5, verbose=False
-        )
+        runner = make_runner([0.0, 0.1], num_shots=5, verbose=False)
         with _spy_program_run(seen_verbose_values, "verbose"):
             runner.run()
 
@@ -274,9 +275,7 @@ class TestResume:
         uninterrupted run (seeding is per index)."""
         strengths = [0.0, 0.1, 0.2, 0.3]
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner_kwargs = dict(
-            seed_stride=20, base_seed=1, num_shots=10, verbose=False
-        )
+        runner_kwargs = dict(base_seed=1, num_shots=10, verbose=False)
 
         uninterrupted_result = make_runner(strengths, **runner_kwargs).run()
 
@@ -324,19 +323,42 @@ class TestResume:
         assert final_result.stderrs == uninterrupted_result.stderrs
         assert final_result.is_complete
 
+    def test_resume_of_stride_seeded_sweep_raises(self, tmp_path, monkeypatch):
+        """A sweep checkpointed before 1.3.2 (no scheme saved) can't be
+        resumed, as its finished points used another seeding."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+        with monkeypatch.context() as patch:
+            attrs = [
+                a
+                for a in NoiseSweepRunner._SERIALIZE_ATTRS
+                if a != "_seeding_scheme"
+            ]
+            patch.setattr(NoiseSweepRunner, "_SERIALIZE_ATTRS", attrs)
+            make_runner(
+                [0.0, 0.1],
+                verbose=False,
+                config=CheckpointConfig(
+                    item_checkpoint_dir=item_checkpoint_dir
+                ),
+            ).run()
+
+        runner = make_runner(
+            [0.0, 0.1],
+            verbose=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir, resume=True
+            ),
+        )
+        with pytest.raises(ValueError):
+            runner.run()
+
     @pytest.mark.parametrize(
         "second_overrides",
         [
-            # seed_stride=None resolves to num_shots=5, so seed_stride=5 is
-            # the same effective seeding.
-            {"seed_stride": 5},
             # Equivalent-but-differently-typed expected_outcomes.
             {"expected_outcomes": (False,)},
         ],
-        ids=[
-            "default_seed_stride_resolving_to_num_shots",
-            "equivalent_expected_outcomes",
-        ],
+        ids=["equivalent_expected_outcomes"],
     )
     def test_resume_checks_effective_config(self, tmp_path, second_overrides):
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
@@ -345,7 +367,6 @@ class TestResume:
             num_shots=5,
             collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
             expected_outcomes=[False],
-            seed_stride=None,
             base_seed=0,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
@@ -536,7 +557,7 @@ class TestNoiseSweepRunnerHooks:
     def test_reduce_program_outcomes_raises_on_missing_shot(self):
         """A results object with fewer shots than `num_shots` raises
         instead of reporting a failure rate biased low."""
-        runner = make_runner([0.1], seed_stride=20, num_shots=2)
+        runner = make_runner([0.1], num_shots=2)
         program = runner.build_program(0)
         program_results = program.run(num_shots=1, verbose=False)
         with pytest.raises(RuntimeError):
@@ -550,7 +571,6 @@ class TestNoiseSweepRunnerHooks:
         """
         runner = make_runner(
             [0.1, 0.2, 0.3],
-            seed_stride=10,
             num_shots=10,
             config=CheckpointConfig(item_checkpoint_dir=tmp_path / "ckpt"),
         )
@@ -571,16 +591,12 @@ class TestNoiseSweepRunnerHooks:
     def test_mismatch_check_fields_lists_expected_fields(self):
         """_mismatch_check_fields returns the expected set of fields for resume
         consistency checking."""
-        runner = make_runner(
-            [0.1],
-            seed_stride=10,
-            num_shots=10,
-        )
+        runner = make_runner([0.1], num_shots=10)
         fields = runner._mismatch_check_fields()
         assert fields == [
             "strengths",
             "base_seed",
-            "_resolved_seed_stride",
+            "_seeding_scheme",
             "num_shots",
             "_normalized_collect_shot_data_args",
             "expected_outcomes",

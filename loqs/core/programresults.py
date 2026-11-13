@@ -20,9 +20,16 @@ from typing import Any, ClassVar
 from pathlib import Path
 import h5py
 
+from numpy.random import SeedSequence
+
 from loqs.internal import (
     Displayable,
     worker_id as _global_worker_id,
+)
+from loqs.internal.seeding import (
+    as_seed_sequence,
+    seed_sequence_from_dict,
+    seed_sequence_to_dict,
 )
 from loqs.internal.swmrledger import (
     held_swmr_writer,
@@ -54,6 +61,11 @@ _UNRESOLVED: Any = object()
 """Sentinel distinguishing "not yet lazily resolved" from a real resolved
 value that happens to equal the plain default (e.g. `parent_program=None`,
 or `name="(Unnamed program results)"` genuinely stored on disk)."""
+
+
+def _seed_from_stored(value: Any) -> "SeedSequence | None":
+    """A stored root (its dict form, or None) as a `SeedSequence` or None."""
+    return None if value is None else seed_sequence_from_dict(value)
 
 
 _SHOT_LEDGER_FIELDS: tuple[str, ...] = ("done", "wall_clock_times")
@@ -117,6 +129,7 @@ class ProgramResults(Displayable):
         "num_shots",
         "max_frame_limit",
         "_results_filename",
+        "root_seed",
     ]
 
     # Each streamed dict attr, paired with its own `value_use_dataset` flag
@@ -146,6 +159,7 @@ class ProgramResults(Displayable):
         num_shots: int | None = None,
         max_frame_limit: int | None = None,
         results_filename: str = "results.h5",
+        root_seed: int | SeedSequence | None = None,
     ) -> None:
         """
         Parameters
@@ -187,6 +201,13 @@ class ProgramResults(Displayable):
         max_memory_shots:
             How many lazily read shots stay in memory at once. A value
             below 1 raises a `ValueError`.
+
+        root_seed:
+            The root seed the run's shots were drawn from, as an integer or
+            a `SeedSequence`. None means no recorded root: results built by
+            hand, or read from a file written before LoQS 1.3.2. Passing
+            `root_seed` as the `default_base_seed` of the program replays
+            the run.
         """
         if max_memory_shots < 1:
             raise ValueError(
@@ -223,6 +244,11 @@ class ProgramResults(Displayable):
 
         self._max_frame_limit_value: int | None = max_frame_limit
         """Backing field for the `max_frame_limit` property."""
+
+        self._root_seed_value: Any = (
+            None if root_seed is None else as_seed_sequence(root_seed)
+        )
+        """Backing field for the `root_seed` property."""
 
         self._parent_program_value: "QuantumProgram | str | Path | None" = (
             parent_program
@@ -289,6 +315,8 @@ class ProgramResults(Displayable):
             self._num_shots_value = _UNRESOLVED
         if self._max_frame_limit_value is None:
             self._max_frame_limit_value = _UNRESOLVED
+        if self._root_seed_value is None:
+            self._root_seed_value = _UNRESOLVED
 
     @property
     def num_shots(self) -> Any:
@@ -348,14 +376,42 @@ class ProgramResults(Displayable):
     def max_frame_limit(self, value: "int | None") -> None:
         self._max_frame_limit_value = value
 
+    @property
+    def root_seed(self) -> "SeedSequence | None":
+        """The root `SeedSequence` the run's shots were drawn from, or None
+        when none was recorded (results built by hand, or read from a file
+        written before LoQS 1.3.2). Passing it as `default_base_seed`
+        replays the run. Resolves lazily like `max_frame_limit`."""
+        if self._root_seed_value is _UNRESOLVED:
+            self._root_seed_value = _seed_from_stored(
+                self._resolve_nested_attr("root_seed")
+            )
+        return self._root_seed_value
+
+    @root_seed.setter
+    def root_seed(self, value: "int | SeedSequence | None") -> None:
+        self._root_seed_value = (
+            None if value is None else as_seed_sequence(value)
+        )
+
     def _resolve_nested_attr(self, attr_name: str) -> Any:
         """Read one non-streamed attribute (`name`, `parent_program`,
-        `num_shots` or `max_frame_limit`) from this proxy's nested entry,
-        without decoding its shots. Errors propagate, so a damaged entry is
-        never hidden by a default.
+        `num_shots`, `max_frame_limit` or `root_seed`) from this proxy's
+        nested entry, without decoding its shots. Only `root_seed` may be
+        absent. Other errors propagate, so a damaged entry is never hidden
+        by a default.
         """
         assert self._nested_store is not None
-        return self._nested_store.read_attrs((attr_name,))[attr_name]
+        return self._nested_store.read_attrs(
+            (attr_name,), optional=("root_seed",)
+        )[attr_name]
+
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        """The dict form of `root_seed`, or None; other attributes as usual."""
+        if attr == "root_seed":
+            seq = self.root_seed
+            return None if seq is None else seed_sequence_to_dict(seq)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     def _shot_store(self) -> CheckpointStore:
         """The shot-level checkpoint store for this object's directory and
@@ -398,6 +454,7 @@ class ProgramResults(Displayable):
             num_shots=self.num_shots,
             max_frame_limit=self.max_frame_limit,
             results_filename=self._results_filename,
+            root_seed=self.root_seed,
         )
         self._checkpoint_encode_cache = {}
         store.write_snapshot(shell, encode_cache=self._checkpoint_encode_cache)
@@ -549,6 +606,7 @@ class ProgramResults(Displayable):
             num_shots=attr_dict.get("num_shots"),
             max_frame_limit=attr_dict.get("max_frame_limit"),
             results_filename=attr_dict.get("_results_filename", "results.h5"),
+            root_seed=_seed_from_stored(attr_dict.get("root_seed")),
         )
 
         # Set internal attributes that aren't in the constructor
@@ -695,7 +753,14 @@ class ProgramResults(Displayable):
         # Restore stored metadata only where self's fields are still unset,
         # never overwriting values a caller set deliberately.
         stored = store.read_attrs(
-            ("name", "parent_program", "num_shots", "max_frame_limit")
+            (
+                "name",
+                "parent_program",
+                "num_shots",
+                "max_frame_limit",
+                "root_seed",
+            ),
+            optional=("root_seed",),
         )
         if (
             self.name == "(Unnamed program results)"
@@ -714,6 +779,8 @@ class ProgramResults(Displayable):
             and stored["max_frame_limit"] is not None
         ):
             self.max_frame_limit = stored["max_frame_limit"]
+        if self.root_seed is None:
+            self.root_seed = _seed_from_stored(stored["root_seed"])
 
         # Shots and wall-clock times are independent: a shot may have one
         # but not the other. Entries already in memory are not read again.

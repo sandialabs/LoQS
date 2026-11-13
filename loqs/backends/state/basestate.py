@@ -20,37 +20,13 @@ from numpy.random import SeedSequence
 
 from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
 from loqs.internal import Displayable
+from loqs.internal.seeding import as_seed_sequence
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BaseQuantumState")
 
 OutcomeDict: TypeAlias = dict[str | int, list[int]]
 """A type alias for outcome dictionaries."""
-
-
-def as_seed_sequence(seed: int | SeedSequence | None) -> SeedSequence:
-    """Turn a seed into a `SeedSequence`.
-
-    A `SeedSequence` is returned as the same object. Anything else goes to
-    `SeedSequence(seed)`, so None draws fresh entropy and a bad value raises
-    NumPy's own error.
-    """
-    if isinstance(seed, SeedSequence):
-        return seed
-    return SeedSequence(seed)
-
-
-def child_seed_sequence(parent: SeedSequence, *key: int) -> SeedSequence:
-    """Derive the child of `parent` at `key`, independent of call order.
-
-    The result equals what `parent.spawn()` would give for the matching
-    index, but never touches the parent's spawn counter.
-    """
-    return SeedSequence(
-        parent.entropy,
-        spawn_key=tuple(parent.spawn_key) + tuple(key),
-        pool_size=parent.pool_size,
-    )
 
 
 class BaseQuantumState(Displayable):
@@ -61,6 +37,10 @@ class BaseQuantumState(Displayable):
 
     seed_sequence: SeedSequence
     """Seed sequence the state's generators are built from."""
+
+    seeded: bool = False
+    """True when `seed_sequence` was given, false when it came from fresh
+    entropy."""
 
     _rng: np.random.Generator
     """Random number generator."""
@@ -162,4 +142,5 @@ class BaseQuantumState(Displayable):
             generators besides `_rng` overrides this to seed them too.
         """
         self.seed_sequence = as_seed_sequence(new_seed)
+        self.seeded = new_seed is not None
         self._rng = np.random.default_rng(self.seed_sequence)

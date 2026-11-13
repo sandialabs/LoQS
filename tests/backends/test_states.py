@@ -22,7 +22,7 @@ from loqs.backends.reps import (
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
-from loqs.backends.state import child_seed_sequence
+from loqs.internal.seeding import child_seed_sequence
 
 LABELS = ["Q0", "Q1"]
 SEED = 20241016
@@ -378,6 +378,7 @@ def test_copy_continues_stream(adapter):
 
     expected = _draw(adapter, state)
     for dup in copies:
+        assert dup.seeded
         assert _draw(adapter, dup) == expected
 
 
@@ -418,3 +419,84 @@ def test_child_seed_sequence_matches_spawn():
     expected = parent().spawn(2)[1].generate_state(4)
     child = child_seed_sequence(parent(), 1)
     assert child.generate_state(4).tolist() == expected.tolist()
+
+
+def _draw_program(adapter, initial_state=None, stack=None, **kwargs):
+    """A program whose instruction draws 64 outcomes from its state in
+    place and records them with the seed it received. With `initial_state`
+    it starts from that state; otherwise `stack` (default one `"Init State"`
+    then the draw) builds it."""
+    from loqs.core import Frame, Instruction, QuantumProgram
+    from loqs.core.history import History
+
+    def draw(state, seed):
+        return Frame({"draws": _draw(adapter, state), "inst_seed": seed})
+
+    draw_instruction = Instruction(
+        draw,
+        param_priorities={"state": ["history[-1]"], "seed": ["program"]},
+        name="Draw",
+    )
+    init = {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}
+    if stack is None:
+        stack = [{"instruction": "Draw"}]
+        if initial_state is None:
+            stack.insert(0, init)
+    if initial_state is not None:
+        kwargs["initial_history"] = History([Frame({"state": initial_state})])
+    return QuantumProgram(
+        stack,
+        state_type=adapter.cls,
+        global_instructions={"Draw": draw_instruction},
+        **kwargs,
+    )
+
+
+def _records(results, key="draws"):
+    histories = results.shot_histories
+    return [histories[i][-1][key] for i in sorted(histories)]
+
+
+_CLOSURE_WARNING = "ignore:'apply_fn' uses names from an enclosing function"
+
+
+@pytest.mark.filterwarnings(_CLOSURE_WARNING)
+def test_program_init_paths_agree(adapter):
+    """A state in the initial history and one from "Init State" draw the
+    same per-shot streams, serially or in batches, and shots differ."""
+    from tests.tools._shared_checkpoint_test_helpers import InlineExecutor
+
+    run_kwargs = {"num_shots": 4, "verbose": False}
+    in_history = _draw_program(
+        adapter, adapter.make(1, ["Q0"]), default_base_seed=SEED
+    ).run(**run_kwargs)
+    built = _draw_program(adapter, default_base_seed=SEED)
+    built_serial = built.run(**run_kwargs)
+    built_batched = built.run(
+        shot_executor=InlineExecutor(), n_shot_batches=2, **run_kwargs
+    )
+
+    expected = _records(built_serial)
+    assert _records(in_history) == expected
+    assert _records(built_batched) == expected
+    assert len({tuple(draws) for draws in expected}) == 4
+
+
+@pytest.mark.filterwarnings(_CLOSURE_WARNING)
+def test_program_consumers_draw_own_streams(adapter):
+    """The state and the instructions don't share a seed, and a second
+    state built in one shot doesn't replay the first's stream."""
+    init = {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}
+    program = _draw_program(
+        adapter,
+        stack=[init, {"instruction": "Draw"}, init, {"instruction": "Draw"}],
+        default_base_seed=SEED,
+    )
+    history = program.run(num_shots=1, verbose=False).shot_histories[0]
+    draws = [f["draws"] for f in history if f.get("draws") is not None]
+    inst_seed = history[-1]["inst_seed"]
+
+    fresh = _draw(adapter, adapter.make(1, ["Q0"], seed=inst_seed))
+    assert len(draws) == 2
+    assert draws[0] != draws[1]
+    assert fresh not in draws

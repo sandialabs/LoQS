@@ -15,7 +15,6 @@ from typing import Any
 import h5py
 import pytest
 from _shared_checkpoint_test_helpers import (
-    BASE_SEED,
     NUM_SHOTS,
     TAG_NAME,
     H5Injection,
@@ -35,6 +34,7 @@ from _shared_checkpoint_test_helpers import (
     run_shot_program,
     sampled_events,
     sessions_in,
+    shot_seed,
     shot_signature,
     simulate_process_death,
 )
@@ -271,10 +271,10 @@ def test_resume_in_a_fresh_process_reuses_no_cache_id(
     else:
         real_run_shot = QuantumProgram._run_shot
 
-        def run_shot(program, max_frame_limit=100, seed=None, shot_index=None):
+        def run_shot(program, max_frame_limit, root, shot_index):
             if shot_index == 3:
                 raise KeyboardInterrupt
-            return real_run_shot(program, max_frame_limit, seed, shot_index)
+            return real_run_shot(program, max_frame_limit, root, shot_index)
 
         with monkeypatch.context() as patch:
             patch.setattr(QuantumProgram, "_run_shot", staticmethod(run_shot))
@@ -296,12 +296,12 @@ def test_resume_in_a_fresh_process_reuses_no_cache_id(
 
     for i in range(num_shots):
         fresh = CheckpointStore(tmp_path, SHOT_LAYOUT)
-        assert problems(fresh.get(i)) == (BASE_SEED + i, (True, TAG_NAME))
+        assert problems(fresh.get(i)) == (shot_seed(i), (True, TAG_NAME))
     loaded = ProgramResults()
     loaded.load_checkpoint(checkpoint_dir=tmp_path)
     for i in range(num_shots):
         assert problems(loaded.shot_histories[i]) == (
-            BASE_SEED + i,
+            shot_seed(i),
             (True, TAG_NAME),
         )
 

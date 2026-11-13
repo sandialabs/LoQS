@@ -33,11 +33,8 @@ from loqs.backends.reps import (
     ZBasisProjectionInstrumentRep,
     is_rep_compatible,
 )
-from loqs.backends.state import (
-    BaseQuantumState,
-    OutcomeDict,
-    child_seed_sequence,
-)
+from loqs.backends.state import BaseQuantumState, OutcomeDict
+from loqs.internal.seeding import child_seed_sequence, seed_word
 
 # Conditional imports for STIM
 if TYPE_CHECKING:
@@ -257,13 +254,14 @@ class STIMQuantumState(BaseQuantumState):
         # No seed, so the tableau stream is carried over
         new_state = STIMQuantumState(self.state, self.qubit_labels)
         new_state.seed_sequence = self.seed_sequence
+        new_state.seeded = self.seeded
         new_state._rng = deepcopy(self._rng)
         return new_state
 
     def _tableau_seed(self) -> int:
         """Integer seed for the tableau simulator, from a child sequence."""
         child = child_seed_sequence(self.seed_sequence, 0)
-        return int(child.generate_state(1, np.uint64)[0])
+        return seed_word(child)
 
     def reset_seed(self, new_seed: int | SeedSequence | None) -> None:
         """Reset the random seed for the quantum state.

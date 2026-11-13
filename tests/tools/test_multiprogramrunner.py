@@ -1566,6 +1566,7 @@ class TestKeepShotResults:
             assert pr.num_shots == index + 2
             assert pr.max_frame_limit == 201 + index
             assert pr.parent_program is not None
+            assert pr.root_seed is not None
             assert pr.name == f"Results for Item {index}"
 
     def test_keep_shot_results_resume_preserves(self, tmp_path):

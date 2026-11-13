@@ -144,7 +144,6 @@ runner = NoiseSweepRunner(
     initial_history=init_history,
     default_noise_model=build_noise_model,
     serialized_callables={"default_noise_model": noise_model_source},
-    seed_stride=200,  # comfortably larger than num_shots below, so per-point seed ranges never overlap
     name="Steane Z-basis QEC sweep (demonstration)",
     num_shots=1,  # minimal for demonstration
     collect_shot_data_args=[("logical_measurement", -1)],
@@ -154,8 +153,8 @@ runner = NoiseSweepRunner(
 
 Passing `default_base_seed` here would raise a `TypeError` -- seeding is entirely the runner's
 job, so that every sweep is deterministic and reproducible regardless of what the noise model or
-instruction stack do internally. Point `i`'s `QuantumProgram` always gets seed
-`base_seed + i * seed_stride`.
+instruction stack do internally. Point `i`'s `QuantumProgram` always runs on a child of
+`base_seed` keyed by `i`, so points never share randomness.
 
 ```{code-cell} ipython3
 # The QuantumProgram for one sweep point can be inspected directly, if you want to sanity-check
@@ -179,7 +178,6 @@ runner = NoiseSweepRunner(
     initial_history=init_history,
     default_noise_model=build_noise_model,
     serialized_callables={"default_noise_model": noise_model_source},
-    seed_stride=200,
     name="Steane Z-basis QEC sweep",
     num_shots=40,
     collect_shot_data_args=[("logical_measurement", -1)],
@@ -234,7 +232,6 @@ runner_x = NoiseSweepRunner(
     initial_history=init_history,
     default_noise_model=build_noise_model,
     serialized_callables={"default_noise_model": noise_model_source},
-    seed_stride=200,
     name="Steane X-basis QEC sweep",
     num_shots=40,
     collect_shot_data_args=[("logical_measurement", -1)],
@@ -295,7 +292,6 @@ try:
         [0.001],
         instruction_stack=stack_z,
         default_noise_model=env["rebuilt_noise_model"],
-        seed_stride=10,
         num_shots=1,
         collect_shot_data_args=[("logical_measurement", -1)],
         expected_outcomes=[0],
@@ -315,7 +311,6 @@ runner_with_override = NoiseSweepRunner(
     serialized_callables={
         "default_noise_model": "def rebuilt_noise_model(strength):\n    return build_noise_model(strength)\n"
     },
-    seed_stride=10,
     num_shots=1,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
@@ -340,7 +335,6 @@ runner_kept = NoiseSweepRunner(
     initial_history=init_history,
     default_noise_model=build_noise_model,
     serialized_callables={"default_noise_model": noise_model_source},
-    seed_stride=200,
     name="Steane Z-basis QEC sweep (keeping shots)",
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
@@ -386,7 +380,6 @@ resumable_runner = NoiseSweepRunner(
     initial_history=init_history,
     default_noise_model=build_noise_model,
     serialized_callables={"default_noise_model": noise_model_source},
-    seed_stride=200,
     name="Resumable sweep",
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
@@ -410,7 +403,6 @@ resumed_runner = NoiseSweepRunner(
     initial_history=init_history,
     default_noise_model=build_noise_model,
     serialized_callables={"default_noise_model": noise_model_source},
-    seed_stride=200,
     name="Resumable sweep",
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
