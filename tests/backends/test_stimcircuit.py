@@ -151,11 +151,11 @@ def test_no_tick_warning_emitted():
         STIMPhysicalCircuit("H 0\nCX 0 1", ["Q0", "Q1"])
 
 
-@pytest.mark.parametrize("case", ["mpp", "merge-collision"])
+@pytest.mark.parametrize("case", ["spp", "merge-collision"])
 def test_unsupported_input_raises(case):
-    if case == "mpp":
+    if case == "spp":
         with pytest.raises(ValueError):
-            STIMPhysicalCircuit("MPP 0 1\nTICK")
+            STIMPhysicalCircuit("SPP X0\nTICK")
     else:
         circ1 = STIMPhysicalCircuit("H 0\nTICK\nX 0", ["Q0"])
         circ2 = STIMPhysicalCircuit("Y 0\nTICK\nZ 0", ["Q0"])
@@ -273,10 +273,96 @@ def test_parsed_lines():
     assert parsed[3][3] == "(0.1)"
 
 
+@pytest.mark.parametrize("form", ["string", "stim-circuit"])
+def test_mpp_and_rec_targets_follow_labels(form):
+    text = "H 1\nMPP X1*!Z0\nCX rec[-1] 0 rec[-1] 1\nTICK"
+    source = (
+        "H 5\nMPP X5*!Z7\nCX rec[-1] 7 rec[-1] 5\nTICK"
+        if form == "string"
+        else (stim.Circuit(text))
+    )
+    circuit = STIMPhysicalCircuit(source, [7, 5])
+    assert circuit.circuit == stim.Circuit(text)
+    assert circuit.qubit_labels == [7, 5]
+
+
+def test_parsed_lines_passthrough():
+    circuit = STIMPhysicalCircuit("MPP(0.01) X0*Z1 !Y1\nTICK", ["a", "b"])
+    (kind, line, _, _, groups), _ = list(circuit._parsed_lines())
+    assert kind == "text"
+    assert stim.Circuit(line) == stim.Circuit("MPP(0.01) X0*Z1 !Y1")
+    assert groups == (("a", "b"),)
+
+    circuit = STIMPhysicalCircuit(
+        "CX rec[-1] 0 0 1 rec[-2] 1\nTICK", ["a", "b"]
+    )
+    parsed = list(circuit._parsed_lines())[:3]
+    assert [p[0] for p in parsed] == ["text", "gate", "text"]
+    assert [p[1] for p in parsed[::2]] == ["CX rec[-1] 0", "CX rec[-2] 0"]
+    assert [p[4] for p in parsed] == [
+        (("a",),),
+        (("a", "b"),),
+        (("b",),),
+    ]
+
+
 @pytest.mark.parametrize(
-    "text", ["E(1) X0\nTICK", "H[t] 0\nTICK", "II 0 1\nTICK"]
+    "text",
+    [
+        "E(1) X0\nTICK",
+        "H[t] 0\nTICK",
+        "II 0 1\nTICK",
+        "CX sweep[0] 0\nTICK",
+    ],
 )
 def test_parsed_lines_refuses(text):
     circuit = STIMPhysicalCircuit(text, ["a", "b"])
     with pytest.raises(NotImplementedError):
         list(circuit._parsed_lines())
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.get_possible_discrete_error_locations(),
+        lambda c: c.pad_single_qubit_idles_by_duration_inplace(
+            {1: "I"}, {"H": 1, "MPP": 1, "CX": 1}
+        ),
+        lambda c: c.transplant_idle_schedule_inplace(
+            STIMPhysicalCircuit("H 0\nTICK\nH 1"), [0], ["I"]
+        ),
+        lambda c: STIMPhysicalCircuit(
+            "H 0\nTICK\nH 1"
+        ).transplant_idle_schedule_inplace(c, [0], ["I"]),
+    ],
+    ids=["locations", "pad", "transplant", "transplant-reference"],
+)
+def test_layer_methods_refuse_passthrough(call):
+    text = "H 0\nTICK\nMPP X0*Z1"
+    with pytest.raises(NotImplementedError):
+        call(STIMPhysicalCircuit(text, suppress_tick_warning=True))
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: STIMPhysicalCircuit("H 0\nTICK\nM 3\nTICK").merge_inplace(
+            c, 0
+        ),
+        lambda c: c.merge_inplace(STIMPhysicalCircuit("H 2\nTICK\nM 3"), 0),
+        lambda c: c.insert_inplace(STIMPhysicalCircuit("M 2\nTICK"), 1),
+    ],
+    ids=["merge", "merge-into", "insert"],
+)
+def test_layer_edits_refuse_rec_gates(call):
+    feed_forward = STIMPhysicalCircuit("M 0\nTICK\nCX rec[-1] 1\nTICK")
+    with pytest.raises(NotImplementedError):
+        call(feed_forward)
+
+
+def test_insert_without_measurements_keeps_rec_gates():
+    circuit = STIMPhysicalCircuit("M 0\nTICK\nCX rec[-1] 1\nTICK")
+    circuit.insert_inplace(STIMPhysicalCircuit("X_ERROR(0.1) 0\nTICK"), 1)
+    assert circuit.circuit == stim.Circuit(
+        "M 0\nTICK\nX_ERROR(0.1) 0\nTICK\nCX rec[-1] 1\nTICK"
+    )

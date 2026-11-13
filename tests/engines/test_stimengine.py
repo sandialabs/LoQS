@@ -1184,3 +1184,121 @@ def _frame_records(history, qubits):
         outcomes = frame.get("measurement_outcomes") or {}
         bits.extend(_shot_record(outcomes, order))
     return np.array(bits, dtype=bool)
+
+
+def _circuit_instruction(text, labels, name):
+    return build_physical_circuit_instruction(
+        STIMPhysicalCircuit(
+            text, qubit_labels=labels, suppress_tick_warning=True
+        ),
+        name=name,
+    )
+
+
+class TestPassthrough:
+
+    def test_passthrough_trace_is_exact(self):
+        p = 0.01
+        labels = ["c", "a", "b"]
+        first = _circuit_instruction(
+            "H a\nCX a b\nTICK\nMPP(0.01) Za*Zb\nX_ERROR(0.02) c\n"
+            "DETECTOR rec[-1]\n",
+            labels,
+            "first",
+        )
+        second = _circuit_instruction(
+            "CX rec[-1] c a b\nM c\nOBSERVABLE_INCLUDE(0) rec[-1]\n",
+            labels,
+            "second",
+        )
+        model = build_stim_model(
+            stim.Circuit("H 0\nCX 0 1\nM 0\nMPP Z0*Z1\n"),
+            after_clifford_depolarization=p,
+        )
+        program = QuantumProgram(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": 3,
+                    "qubit_labels": labels,
+                },
+                InstructionLabel(first),
+                InstructionLabel(second),
+            ],
+            default_noise_model=model,
+            state_type=STIMQuantumState,
+        )
+        text = joined(StimEngine().compile(program))
+        expected = stim.Circuit(f"""
+            H 1
+            DEPOLARIZE1({p}) 1
+            CX 1 2
+            DEPOLARIZE2({p}) 1 2
+            MPP(0.01) Z1*Z2
+            X_ERROR(0.02) 0
+            DETECTOR rec[-1]
+            CX rec[-1] 0
+            CX 1 2
+            DEPOLARIZE2({p}) 1 2
+            M 0
+            OBSERVABLE_INCLUDE(0) rec[-1]
+            """)
+        assert sorted_dem(text) == sorted_dem(expected)
+
+    def test_passthrough_record_matches_stim(self):
+        text = (
+            "X 0\nMPP Z0*Z1\nCX rec[-1] 1\nMPP !Z0\nM 1 0\n"
+            "DETECTOR rec[-1] rec[-2]\n"
+        )
+        labels = [0, 1]
+        reference = stim.Circuit(text)
+        model = build_stim_model(reference)
+        read = Instruction(
+            lambda measurement_outcomes: Frame(
+                {
+                    "bit": int(measurement_outcomes[0][0]),
+                    "count": sum(map(len, measurement_outcomes.values())),
+                }
+            ),
+            name="read",
+        )
+        program = QuantumProgram(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": 2,
+                    "qubit_labels": labels,
+                },
+                InstructionLabel(_circuit_instruction(text, labels, "c")),
+                InstructionLabel(read),
+            ],
+            default_noise_model=model,
+            state_type=STIMQuantumState,
+        )
+        results = StimEngine().run(program, 10, outputs=["bit", "count"])
+        want = reference.compile_sampler().sample(1)[0]
+        assert np.array_equal(
+            np.asarray(results["measurements"]), np.tile(want, (10, 1))
+        )
+        assert not np.asarray(results["detectors"]).any()
+        # Qubit 0 is the record's last bit, after two MPP bits
+        assert np.array_equal(np.asarray(results["bit"]), [int(want[-1])] * 10)
+        # The outcomes hold the two `M` bits only, never the MPP bits
+        assert np.array_equal(np.asarray(results["count"]), [2] * 10)
+
+    @pytest.mark.parametrize(
+        "tail",
+        [
+            "MPP Z0*Z1\n",
+            "M 0\nCX rec[-1] 1\n",
+            "CX rec[-1] 0\n",
+        ],
+        ids=["mpp", "rec", "rec-earlier"],
+    )
+    def test_fast_path_refuses_passthrough(self, tail):
+        labels = [0, 1, 2]
+        program = _outcome_dependent_program(
+            _circuit_instruction(tail, labels, "tail")
+        )
+        with pytest.raises(NotImplementedError):
+            StimEngine().run(program, 4)

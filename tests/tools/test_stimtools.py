@@ -188,6 +188,11 @@ class TestBuildStimModel:
             )
         with pytest.raises(NotImplementedError, match="MXX"):
             build_stim_model(stim.Circuit("MXX 0 1\n"))
+        with pytest.raises(NotImplementedError, match="MPP"):
+            build_stim_model(
+                stim.Circuit("MPP Z0*Z1\n"),
+                before_measure_flip_probability=0.1,
+            )
 
 
 class TestRecordFromOutcomes:
@@ -199,8 +204,9 @@ class TestRecordFromOutcomes:
         with pytest.raises(ValueError):
             stim_record_from_outcomes(circuit, [{0: [0], 1: [0], 2: [1]}])
 
-    def test_unattributable_record_bits_refused(self):
-        circuit = stim.Circuit("MPAD 0\nM 0\n")
+    @pytest.mark.parametrize("text", ["MPAD 0\nM 0\n", "MPP Z0\nM 0\n"])
+    def test_unattributable_record_bits_refused(self, text):
+        circuit = stim.Circuit(text)
         with pytest.raises(NotImplementedError):
             stim_record_from_outcomes(circuit, [{0: [0]}])
 

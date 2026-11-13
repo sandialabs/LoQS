@@ -139,6 +139,10 @@ def build_stim_model(
     before_measure_flip_probability:
         Flip probability before each measurement.
 
+    A pass-through line (`MPP`, or a gate controlled by a `rec` bit) gets
+    no model entry and no model noise: its own arguments and the circuit's
+    noise lines pass through as written.
+
     Returns
     -------
     DictNoiseModel
@@ -151,8 +155,9 @@ def build_stim_model(
 
     NotImplementedError
         If the circuit has an instruction other than a unitary gate, reset,
-        measurement, annotation or noise channel, or a gate with Pauli
-        targets.
+        measurement, annotation, noise channel or `MPP`, or a gate with
+        Pauli targets; or if `before_measure_flip_probability` is positive
+        and the circuit has an `MPP`.
     """
     pd = after_clifford_depolarization
     pr = after_reset_flip_probability
@@ -167,7 +172,12 @@ def build_stim_model(
     gates, instruments = ["X", "Y", "Z"], []
     for name in dict.fromkeys(i.name for i in circuit.flattened()):
         data = stim.gate_data(name)
-        if name in _INSTRUMENTS:
+        if name == "MPP":
+            if pm > 0:
+                raise NotImplementedError(
+                    "build_stim_model can't place measurement noise on MPP"
+                )
+        elif name in _INSTRUMENTS:
             instruments.append(name)
         elif data.is_unitary and not data.takes_pauli_targets:
             gates.append(name)
@@ -240,13 +250,21 @@ def build_stim_model(
 
 
 @functools.lru_cache(maxsize=32)
-def _label_order(circuit_str: str, labels: tuple) -> tuple:
-    """The qubit label behind each bit of the measurement record."""
+def _label_order(
+    circuit_str: str, labels: tuple, unlabeled: bool = False
+) -> tuple:
+    """The qubit label behind each bit of the measurement record.
+
+    With `unlabeled`, each bit an `MPP` writes has label `None`; any other
+    instruction that writes bits without a qubit still raises.
+    """
     order: list = []
     for inst in stim.Circuit(circuit_str).flattened():
         # The instructions the STIM state files under a qubit label
         if inst.name in STIMQuantumState._recorded_measurements:
             order += [labels[t.value] for t in inst.targets_copy()]
+        elif unlabeled and inst.name == "MPP":
+            order += [None] * inst.num_measurements
         elif stim.gate_data(inst.name).produces_measurements:
             raise NotImplementedError(
                 f"{inst.name} writes measurement record bits that LoQS "
@@ -315,7 +333,7 @@ def stim_record_from_outcomes(
 
     NotImplementedError
         If the circuit writes record bits that LoQS can't attribute to a
-        qubit, such as `MPAD`.
+        qubit, such as `MPP` or `MPAD`.
     """
     if not isinstance(circuit, STIMPhysicalCircuit):
         circuit = STIMPhysicalCircuit(circuit, suppress_tick_warning=True)

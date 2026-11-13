@@ -29,7 +29,8 @@ class CompiledProgram(Displayable):
 
     - `name` and `type`: those of the instruction that ran.
     - `outcome_labels`: the qubit labels behind the record bits the step
-      wrote, in record order.
+      wrote, in record order; an entry is `None` for a bit with no qubit
+      label (an `MPP` bit).
     - `emitted`: a `dict` from a target name to what the step emitted for
       that target, so one step can carry several targets. The `"stim"`
       target holds the STIM text the step ran, and a step that emits
