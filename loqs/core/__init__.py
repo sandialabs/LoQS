@@ -37,10 +37,12 @@ from .recordables import (
     PatchRelation,
 )
 from .syndromelabel import SyndromeLabel
+from .compiledprogram import CompiledProgram
 
 # After QECCodePatch
 from .quantumprogram import QuantumProgram
 from .programresults import ProgramResults
+from .outputresults import OutputResults
 
 # After ProgramResults
 from .historydatacollector import (

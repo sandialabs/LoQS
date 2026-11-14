@@ -86,11 +86,12 @@ docs = [
     "pymdown-extensions~=10.21.2",
     "pypandoc==1.17",
     "pypandoc-binary==1.17",
+    "loqs[stim]"
 ]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti>=0.9.12"]
 pymatching = ["pymatching>=2"]
-stim = ["stim>=1.6"]
+stim = ["stim>=1.12"]
 test = [
     "loqs[dev]",
     "mock>=5",

@@ -13,6 +13,8 @@ from loqs.backends.reps import (
     RepConstructionError,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
+    ZBasisPrePostInstrumentRep,
+    ZBasisProjectionInstrumentRep,
 )
 from loqs.backends import STIMQuantumState as STIMState
 
@@ -148,6 +150,32 @@ class TestSTIMQuantumState:
         neg_m_rep = StimCircuitInstrumentRep("M 0", ["!Q0"])
         outs = state1c.apply_reps_inplace([neg_m_rep])
         assert outs["Q0"] == [0]
+
+    def test_zbasis_instruments_record_their_measurements(self):
+        state = STIMState([0, 0], ["Q0", "Q1"])
+        reps = [
+            StimCircuitGateRep("H 0", ("Q0",)),
+            ZBasisProjectionInstrumentRep(None, True, ("Q0",)),
+            ZBasisPrePostInstrumentRep(
+                1,
+                False,
+                StimCircuitGateRep("H 0", ("Q1",)),
+                StimCircuitGateRep("H 0", ("Q1",)),
+                ("Q1",),
+            ),
+        ]
+        state.apply_reps_inplace(reps)
+        lines = str(state.latest_applied_circuit).split("\n")
+        assert lines[0] == "H 0"
+        assert [ln.split()[0] for ln in lines] == [
+            "H",
+            "M",
+            "H",
+            "MR",
+            "X",
+            "H",
+        ]
+        assert state.latest_applied_circuit.num_measurements == 2
 
     @pytest.mark.parametrize(
         "rep_class, text, error",
