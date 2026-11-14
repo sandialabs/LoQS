@@ -614,6 +614,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
     ) -> None:
+        self._refuse_passthrough("delete_qubits_inplace")
         # Convert qubit labels to STIM indices
         qubit_idxs_to_delete = [
             self._qubit_labels.index(q) for q in qubits_to_delete

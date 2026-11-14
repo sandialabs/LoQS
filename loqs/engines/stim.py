@@ -893,7 +893,7 @@ class StimEngine(Serializable):
         collectors = [HistoryDataCollector.from_raw(o) for o in outputs]
         keys = [c.key for c in collectors]
         for key in keys:
-            if key in ("measurements", "detectors", "observables"):
+            if key in ("measurements", "detectors", "observables", "kept"):
                 raise ValueError(
                     f"Output key {key!r} is already an engine array"
                 )
@@ -1094,11 +1094,11 @@ class StimEngine(Serializable):
         `key` with the per-shot shape [](api:History.collect_data) gives:
         a scalar, a 1-D array, or a list of 1-D arrays when it reads
         several frames. A collector is refused, before any shot is
-        sampled, when its key repeats or is `measurements`, `detectors`
-        or `observables`; when it reads a value from an initial-history or
-        setup frame, or filters frames on a key that changes per shot
-        (`NotImplementedError`); or when its values aren't numeric and at
-        most 1-D, or mix scalars with 1-D entries.
+        sampled, when its key repeats or is `measurements`, `detectors`,
+        `observables` or `kept`; when it reads a value from an
+        initial-history or setup frame, or filters frames on a key that
+        changes per shot (`NotImplementedError`); or when its values
+        aren't numeric and at most 1-D, or mix scalars with 1-D entries.
 
         A program whose instruction order or STIM text varies per shot
         (a step that reads the instruction stack, or a
@@ -1112,6 +1112,10 @@ class StimEngine(Serializable):
         rebuilds the quantum state: before any shot when the traced shot
         meets it, otherwise when a shot first does, with no arrays
         returned.
+
+        A shot is kept when none of its detectors fired. The kept and
+        discarded counts are `results["kept"].sum()` and `num_shots`
+        minus it; the fast path returns no `kept`.
 
         The seed is `program.default_base_seed`. The same seed gives the
         same arrays on the same machine and stim version. The arrays agree
@@ -1133,9 +1137,10 @@ class StimEngine(Serializable):
         -------
         OutputResults
             Boolean `measurements`, `detectors` and `observables`, each
-            shaped `(num_shots, n)`, plus one entry per collector. On the
-            fast path, `measurements` is one record per shot and there are
-            no `detectors` or `observables`.
+            shaped `(num_shots, n)`, and `kept`, shaped `(num_shots,)`,
+            plus one entry per collector. On the fast path,
+            `measurements` is one record per shot and there are no
+            `detectors`, `observables` or `kept`.
         """
         plan = self._plan(program)
         resolved = self._resolve(plan, outputs or [])
@@ -1153,6 +1158,7 @@ class StimEngine(Serializable):
             "measurements": measurements,
             "detectors": detectors,
             "observables": observables,
+            "kept": ~detectors.any(axis=1),
         }
         arrays.update(self._outputs(plan, measurements, resolved))
         return OutputResults(

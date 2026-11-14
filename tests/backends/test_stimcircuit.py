@@ -351,8 +351,9 @@ def test_layer_methods_refuse_passthrough(call):
         ),
         lambda c: c.merge_inplace(STIMPhysicalCircuit("H 2\nTICK\nM 3"), 0),
         lambda c: c.insert_inplace(STIMPhysicalCircuit("M 2\nTICK"), 1),
+        lambda c: c.delete_qubits_inplace([0]),
     ],
-    ids=["merge", "merge-into", "insert"],
+    ids=["merge", "merge-into", "insert", "delete"],
 )
 def test_layer_edits_refuse_rec_gates(call):
     feed_forward = STIMPhysicalCircuit("M 0\nTICK\nCX rec[-1] 1\nTICK")

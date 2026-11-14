@@ -26,7 +26,8 @@ shot axis.
 This tutorial needs `stim` and `pymatching` (the `stim` and `pymatching`
 extras), and the codepack section also needs `pygsti`. It builds a
 surface-code memory program and runs it batched and per shot, then runs a
-fault-tolerant Steane program on the engine's per-shot fast path, and finally
+fault-tolerant Steane program on the engine's per-shot fast path, runs a
+Pauli-product measurement with feed-forward and postselection, and finally
 shows what the engine refuses.
 
 ```{code-cell} ipython3
@@ -332,14 +333,106 @@ you asked for, but no `detectors` or `observables`. Classical steps run once
 per shot there, so it's slower than the batched path, but much faster than the
 per-shot executor.
 
+## Pauli-product measurements, feed-forward and postselection
+
+Stim circuits can measure Pauli products with `MPP` and feed a measurement bit
+forward as a Pauli gate controlled by a `rec` target. Both build in a
+`STIMPhysicalCircuit` and run on the batched path as stim runs them. The
+circuit below prepares `|++>`, measures `Z0*Z1`, corrects qubit 1 by the
+outcome, adds a bit flip on both qubits, measures the parity again and flags a
+detector if that second parity is odd.
+
+```{code-cell} ipython3
+parity_text = """
+H 0 1
+TICK
+MPP Z0*Z1
+CX rec[-1] 1
+X_ERROR(0.05) 0 1
+TICK
+MPP Z0*Z1
+DETECTOR rec[-1]
+M 0 1
+TICK
+"""
+parity = stim.Circuit(parity_text)
+parity_labels = [0, 1]
+parity_program = QuantumProgram(
+    [
+        {"instruction": "Init State", "state": 2, "qubit_labels": parity_labels},
+        InstructionLabel(
+            build_physical_circuit_instruction(
+                STIMPhysicalCircuit(parity, qubit_labels=parity_labels),
+                name="Parity checks",
+            )
+        ),
+    ],
+    default_noise_model=build_stim_model(parity),
+    state_type=STIMQuantumState,
+    default_base_seed=1,
+)
+parity_results = StimEngine().run(parity_program, 100_000)
+```
+
+The `UserWarning` above is expected. It says the circuit's own noise lines
+apply on top of the model's, and here the model from `build_stim_model` adds
+none, so the circuit's noise is all there is. The model supplies no noise for
+`MPP` or for the `rec`-controlled gate either; noise comes from the circuit's
+noise lines and an `MPP`'s own argument.
+
+`measurements` is stim's whole record, four bits here: the two parities, then
+the final `M 0 1`. The `MPP` bits have no qubit label, so they aren't in
+`measurement_outcomes`, which holds only labelled measurements.
+`results["kept"]` is true for the shots in which no detector fired. The
+counts are its sum and the shots left over, so postselecting is indexing by it.
+
+```{code-cell} ipython3
+kept = parity_results["kept"]
+print("measurements:", parity_results["measurements"].shape)
+print("kept:", kept.dtype, kept.shape)
+n_kept = int(kept.sum())
+print(f"kept {n_kept}, discarded {len(kept) - n_kept}")
+print(f"discard rate {1 - kept.mean():.4f} (expected 2 * 0.05 * 0.95 = 0.095)")
+```
+
+The second parity check is deterministic only because the feed-forward ran.
+The first parity is a random bit, and without the correction the second would
+repeat it; with it, the qubits agree whatever the first was. So the second
+parity is odd only when exactly one of the two bit flips fired, which is the
+discard rate above.
+
+```{code-cell} ipython3
+record = parity_results["measurements"]
+print(f"first parity bit set in {record[:, 0].mean():.4f} of shots")
+print(f"second parity bit set in {record[:, 1].mean():.4f} of shots")
+```
+
+Everything else refuses both instructions with `NotImplementedError`, and
+refuses at once. `QuantumProgram.run` on the `STIMQuantumState` can't record
+the outcome of an `MPP`:
+
+```{code-cell} ipython3
+:tags: [raises-exception]
+
+parity_program.run(1, verbose=False)
+```
+
+The dense states and the engine's per-shot fast path refuse the same
+instructions. A decoder from `build_stim_decoder_instruction` can't run on a
+circuit with `MPP` yet (the engine refuses it), and `stim_record_from_outcomes`
+refuses one, so a program that both postselects with `MPP` and decodes isn't
+available.
+
 ## What it refuses
 
 A program that neither path can reproduce raises an error and never returns
-arrays. When the traced shot meets the problem, the error comes before any
-shot runs; otherwise it comes when a shot first meets it. The main cases are a
-state other than `STIMQuantumState`, a classical instruction that reads the
-quantum state, a state rebuilt after the first circuit, and a physical circuit
-not built by `build_physical_circuit_instruction`.
+arrays. The `MPP` and `rec`-controlled instructions above are refused outside
+the batched path in the same way. When the traced shot meets the problem, the
+error comes before any shot runs; otherwise it comes when a shot first meets
+it. The main cases are a state other than `STIMQuantumState`, a classical
+instruction that reads the quantum state, a state rebuilt after the first
+circuit, and a physical circuit not built by
+`build_physical_circuit_instruction`.
 [StimEngine.compile](api:StimEngine.compile) lists them all.
 
 Here the memory program gets one more instruction after the readout, whose
