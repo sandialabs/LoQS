@@ -756,8 +756,12 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
         - Passing annotations and noise-channel lines on as STIM text, only
           when `StimCircuitGateRep` is requested; a noise channel is
           refused otherwise and warned about when applied
+        - Passing `MPP` lines and the `rec[-k]`-controlled pairs of
+          two-qubit gates on as STIM text, with no dictionary lookup, no
+          model noise and no warning, only when `StimCircuitGateRep` is
+          requested; they are refused otherwise
         - Refusing (`NotImplementedError`) any instruction or target it
-          can't map, such as tagged gates or `rec[-1]` targets
+          can't map, such as tagged gates or `sweep[k]` targets
 
         Parameters
         ----------
@@ -799,6 +803,13 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
                 # them and keeps the circuit's format
                 if want_text:
                     reps.append(StimCircuitGateRep(line, tuple()))
+            elif kind == "text":
+                if not want_text:
+                    raise NotImplementedError(
+                        f"Instruction '{line}' needs a state that takes "
+                        "StimCircuitGateRep"
+                    )
+                reps.append(StimCircuitGateRep(line, groups[0]))
             elif kind == "noise":
                 if not want_text:
                     raise NotImplementedError(

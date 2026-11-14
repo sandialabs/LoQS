@@ -20,6 +20,7 @@ from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 from loqs.backends import is_backend_available
 from loqs.backends.circuit.stimcircuit import (
     _STIM_LINE,
+    _reindex_stim_circuit_lines,
     _separate_stimcircuit_instruction,
 )
 from loqs.backends.reps import (
@@ -89,6 +90,10 @@ class STIMQuantumState(BaseQuantumState):
             "HERALDED_PAULI_CHANNEL_1",
         }
     )
+
+    # Whether a line with a `rec[-k]` target may run. Only a subclass that
+    # tracks the whole record turns it on; here it is refused.
+    _feed_forward: ClassVar[bool] = False
 
     _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
     """`seed` is deliberately not here to avoid triggering re-caching."""
@@ -312,10 +317,31 @@ class STIMQuantumState(BaseQuantumState):
             targets = rest.split()
 
             # Refuse before mapping targets or running anything
+            has_rec = any(t.startswith("rec[") for t in targets)
+            if has_rec and not self._feed_forward:
+                raise NotImplementedError(
+                    f"STIMQuantumState can't feed {command} forward from "
+                    "a measurement record"
+                )
             if command in self._unrecorded_measurements:
                 raise NotImplementedError(
                     f"STIMQuantumState can't record the outcomes of {command}"
                 )
+
+            if command == "MPP" or has_rec:
+                # The line's own qubit indices are the local ones
+                text = "\n".join(
+                    _reindex_stim_circuit_lines(
+                        _Circuit(instruction),
+                        {
+                            int(k): int(v.strip("!"))
+                            for k, v in local_to_internal.items()
+                        },
+                    )
+                )
+                internal_lines.append(text)
+                global_lines.append(text)
+                continue
 
             # Pull measurement labels, if they exist
             if command in self._recorded_measurements:

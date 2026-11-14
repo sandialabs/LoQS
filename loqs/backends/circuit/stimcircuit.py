@@ -296,11 +296,16 @@ def _replace_instruction_targets(
         post = _replace_instruction_targets(post, targets_map)
         return pre + ")" + post
 
+    # Only a tag's `]` ends the name part; one after a space closes a
+    # `rec[-k]` target, which is left as written
     parts = inst.split("]", maxsplit=1)
-    if len(parts) == 2:
+    if len(parts) == 2 and " " not in parts[0].split("[")[0]:
         pre, post = parts
         post = _replace_instruction_targets(post, targets_map)
         return pre + "]" + post
+
+    def map_label(label: str) -> str:
+        return str(targets_map[label]) if label in targets_map else label
 
     parts = inst.split(" ")
     for i in range(1, len(parts)):
@@ -308,7 +313,17 @@ def _replace_instruction_targets(
         prefix = "" if (not pi.startswith("!")) else "!"
         pi = pi.lstrip("!")
         if pi in targets_map:
-            pi = str(targets_map[pi])
+            pi = map_label(pi)
+        elif "*" in pi or re.fullmatch(r"[XYZxyz].+", pi):
+            # An `MPP` product: terms like `X5` or `!Z7` joined by `*`
+            terms = []
+            for term in pi.split("*"):
+                neg = "!" if term.startswith("!") else ""
+                term = term.lstrip("!")
+                if term[:1] in "XYZxyz" and term[1:] in targets_map:
+                    term = term[0] + map_label(term[1:])
+                terms.append(neg + term)
+            pi = "*".join(terms)
         pi = prefix + pi
         parts[i] = pi
     inst = " ".join(parts)
@@ -331,6 +346,34 @@ def _as_stim_circuit(circuit: str, qubit_labels) -> _Circuit:
     return c
 
 
+def _passthrough_names(circuit: _Circuit) -> list[str]:
+    """Names of the flattened instructions that are `MPP`, or that read a
+    `rec` bit (other than `DETECTOR` and `OBSERVABLE_INCLUDE`)."""
+    return [
+        inst.name
+        for inst in circuit.flattened()
+        if inst.name == "MPP"
+        or (
+            inst.name not in ("DETECTOR", "OBSERVABLE_INCLUDE")
+            and any(
+                t.is_measurement_record_target for t in inst.targets_copy()
+            )
+        )
+    ]
+
+
+def _refuse_rec_gates(circuit: _Circuit, method: str) -> None:
+    """Raise if the circuit has a `rec`-controlled gate, whose `rec[-k]`
+    offset ``method`` would not rewrite."""
+    names = [n for n in _passthrough_names(circuit) if n != "MPP"]
+    if names:
+        raise NotImplementedError(
+            f"STIMPhysicalCircuit.{method} doesn't support {names[0]} "
+            "controlled by a measurement record bit, since it doesn't "
+            "rewrite rec offsets"
+        )
+
+
 class STIMPhysicalCircuit(BasePhysicalCircuit):
     """Circuit backend using STIM.
 
@@ -347,6 +390,16 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     ``merge``, ``pad_single_qubit_idles_by_duration`` and
     ``transplant_idle_schedule``) unroll every ``REPEAT`` block of each
     circuit they read, so the result has them expanded.
+
+    ``MPP`` lines and two-qubit Pauli gates controlled by a ``rec[-k]``
+    bit are accepted and passed on as STIM text, with no model noise.
+    Only a state that records STIM text and a program that is traced
+    (``StimEngine``'s batched path) run them. Dense states, the layer
+    methods and ``sweep[k]`` targets refuse them with
+    ``NotImplementedError``, except that ``merge`` refuses only the
+    ``rec``-controlled gates and ``insert`` only a measuring circuit
+    inserted into one that has them; ``SPP`` and ``SPP_DAG`` are refused
+    when the circuit is built.
     """
 
     _circuit: _Circuit
@@ -523,7 +576,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             self._circuit = _as_stim_circuit(circuit, qubit_labels)
             self._qubit_labels = list(qubit_labels)
 
-        unsupported = ("MPP", "SPP", "SPP_DAG")
+        unsupported = ("SPP", "SPP_DAG")
         if any([u in str(self.circuit) for u in unsupported]):
             msg = f"STIM circuit contains a LoQS-unsupported instruction {unsupported}"
             raise ValueError(msg)
@@ -561,6 +614,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
     ) -> None:
+        self._refuse_passthrough("delete_qubits_inplace")
         # Convert qubit labels to STIM indices
         qubit_idxs_to_delete = [
             self._qubit_labels.index(q) for q in qubits_to_delete
@@ -602,9 +656,20 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         self._circuit = _reindex_stim_circuit(temp_circuit, index_map)
         self._qubit_labels = qubits_to_keep
 
+    def _refuse_passthrough(self, method: str) -> None:
+        """Raise if the circuit has `MPP` or a `rec`-controlled gate, which
+        the layer-walking methods would skip or mis-parse."""
+        names = _passthrough_names(self._circuit)
+        if names:
+            raise NotImplementedError(
+                f"STIMPhysicalCircuit.{method} doesn't support {names[0]}, "
+                "an MPP or a gate controlled by a measurement record bit"
+            )
+
     def get_possible_discrete_error_locations(
         self, post_twoq_gates: bool = False
     ) -> list[tuple[int, int | tuple[int, ...]]]:
+        self._refuse_passthrough("get_possible_discrete_error_locations")
         circuit_locations: list[tuple[int, int | tuple[int, ...]]] = []
         layers, _ = _split_stim_layers(self._unroll_repeats())
         for lidx, (lines, _tick) in enumerate(layers):
@@ -655,8 +720,16 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             Layer index at which the other circuit's layers are placed,
             with Python list slicing semantics (so -1 inserts before the
             last layer).
+
+        Raises
+        ------
+        NotImplementedError
+            If the inserted circuit writes record bits and this circuit has
+            a gate controlled by a ``rec`` bit, which could be re-pointed.
         """
         other_circuit = STIMPhysicalCircuit(circuit)
+        if other_circuit._circuit.num_measurements:
+            _refuse_rec_gates(self._circuit, "insert_inplace")
 
         layers, terminated = _split_stim_layers(self._unroll_repeats())
         other_layers, _ = _split_stim_layers(other_circuit._unroll_repeats())
@@ -695,8 +768,16 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         idx : int
             Layer index to start merge
+
+        Raises
+        ------
+        NotImplementedError
+            If either circuit has a gate controlled by a ``rec`` bit, which
+            the merge could re-point.
         """
         other_circuit = STIMPhysicalCircuit(circuit)
+        _refuse_rec_gates(self._circuit, "merge_inplace")
+        _refuse_rec_gates(other_circuit._circuit, "merge_inplace")
 
         # Build index map for the other circuit
         index_map = {}
@@ -769,6 +850,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         See [](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for the parameters.
         """
+        self._refuse_passthrough("pad_single_qubit_idles_by_duration_inplace")
         layers, terminated = _split_stim_layers(self._unroll_repeats())
         new_layers = []
         for lines, tick in layers:
@@ -827,6 +909,8 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         # it's already the right type (reference is only ever read below).
         if not isinstance(reference, STIMPhysicalCircuit):
             reference = STIMPhysicalCircuit(reference)
+        self._refuse_passthrough("transplant_idle_schedule_inplace")
+        reference._refuse_passthrough("transplant_idle_schedule_inplace")
         idle_set = set(idle_names)
         qubit_set = set(qubits)
 
@@ -967,10 +1051,16 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         is the original text, `name` the instruction without its tag (`""`
         for a blank line) and `args` its `(...)` text or `""`. `kind` is
         `"annotation"` (blank lines and `_stim_annotations`, `groups` empty),
-        `"noise"` (`groups` holds one tuple of every mapped target) or
+        `"noise"` (`groups` holds one tuple of every mapped target),
         `"gate"` (`groups` the mapped targets in pairs for two-qubit gates
-        and `MXX`/`MYY`/`MZZ`, else singly). A tagged line that isn't an
-        annotation, an unknown name or an unmappable target raises
+        and `MXX`/`MYY`/`MZZ`, else singly) or `"text"`, a pass-through
+        line. A pass-through line is an `MPP` or a run of consecutive pairs
+        of a two-qubit gate that have a `rec[-k]` target (a line's plain
+        pairs stay `"gate"`, in target order). For `"text"`, `line` is the
+        run's own STIM text with its qubits renumbered `0..k-1` in
+        increasing index order, and `groups` is one tuple of the labels
+        behind those indices. A tagged line that isn't an annotation, an
+        unknown name, an unmappable target or a `sweep[k]` target raises
         `NotImplementedError`.
         """
         labels = self.qubit_labels
@@ -982,11 +1072,24 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                 yield "annotation", line, name, args, ()
                 continue
             if tag or not (
-                name in self._stim_gates or name in self._stim_noise_channels
+                name in self._stim_gates
+                or name in self._stim_noise_channels
+                or name == "MPP"
             ):
                 raise NotImplementedError(
                     f"STIM instruction '{line}' is not supported"
                 )
+            if "SWEEP[" in rest:
+                raise NotImplementedError(
+                    f"STIM instruction '{line}' has a sweep target, which "
+                    "is not supported"
+                )
+            if name == "MPP":
+                yield from self._text_line(_Circuit(line.strip()))
+                continue
+            if "REC[" in rest:
+                yield from self._rec_gate_lines(line, args)
+                continue
             mapped = [_target_label(t, labels) for t in rest.split()]
             if name in self._stim_noise_channels:
                 yield "noise", line, name, args, (tuple(mapped),)
@@ -1002,6 +1105,60 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                 for i in range(0, len(mapped), size)
             )
             yield "gate", line, name, args, groups
+
+    def _text_line(self, circuit: _Circuit):
+        """Yield the `"text"` entry of a one-instruction circuit: its text
+        renumbered onto `0..k-1` and the labels behind its indices."""
+        used = _get_used_stim_indices(circuit)
+        index_map = {old: new for new, old in enumerate(used)}
+        text = "\n".join(_reindex_stim_circuit_lines(circuit, index_map))
+        labels = self.qubit_labels
+        yield "text", text, circuit[0].name, "", (
+            tuple(labels[i] for i in used),
+        )
+
+    def _rec_gate_lines(self, line: str, args_text: str):
+        """Yield the entries of a two-qubit gate line with `rec` targets,
+        one per run of consecutive pairs that are alike (all pass-through
+        or all plain); `args_text` is the line's `(...)` text or `""`.
+        Parsed from the original text, as STIM rejects upper-case
+        `REC[-1]`."""
+        inst = _Circuit(line.strip())[0]
+        name = inst.name
+        pairs = []
+        for group in inst.target_groups():
+            if len(group) != 2:
+                raise NotImplementedError(
+                    f"STIM instruction '{line}' is not supported"
+                )
+            pairs.append(group)
+        runs: list[tuple[bool, list]] = []
+        for pair in pairs:
+            passthrough = any(t.is_measurement_record_target for t in pair)
+            if runs and runs[-1][0] == passthrough:
+                runs[-1][1].append(pair)
+            else:
+                runs.append((passthrough, [pair]))
+        for passthrough, run in runs:
+            if passthrough:
+                tokens = [
+                    (
+                        f"rec[{t.value}]"
+                        if t.is_measurement_record_target
+                        else str(t.value)
+                    )
+                    for pair in run
+                    for t in pair
+                ]
+                yield from self._text_line(
+                    _Circuit(f"{name} {' '.join(tokens)}")
+                )
+            else:
+                groups = tuple(
+                    tuple(self.qubit_labels[t.value] for t in pair)
+                    for pair in run
+                )
+                yield "gate", line, name.upper(), args_text, groups
 
     def _unroll_repeats(self) -> str:
         """Return the circuit string with all ``REPEAT`` blocks fully expanded.

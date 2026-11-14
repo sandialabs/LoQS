@@ -22,6 +22,10 @@ from numpy.typing import NDArray
 import stim
 
 from loqs.backends import STIMQuantumState
+from loqs.backends.circuit.stimcircuit import (
+    STIMPhysicalCircuit,
+    _passthrough_names,
+)
 from loqs.backends.reps import ProbabilisticStimGateRep, StimCircuitGateRep
 from loqs.core import (
     CompiledProgram,
@@ -155,8 +159,14 @@ class _TracingSTIMState(STIMQuantumState):
     """A STIM state that records the internal-index text it runs.
 
     The base state records global-label text when STIM can parse it, which
-    can't be run against the qubit register by index.
+    can't be run against the qubit register by index. Unlike the base, it
+    runs `MPP` and `rec`-controlled gates, whose bits it traces.
     """
+
+    _feed_forward: ClassVar[bool] = True
+    _unrecorded_measurements: ClassVar[frozenset[str]] = (
+        STIMQuantumState._unrecorded_measurements - {"MPP"}
+    )
 
     def __init__(self, state, qubit_labels=None, seed=None) -> None:
         self.segments: list = []
@@ -288,6 +298,11 @@ class StimEngine(Serializable):
           could read the state;
         - a physical circuit with record bits that its outcomes don't
           report.
+
+        `MPP` and `rec`-controlled Paulis (`CX rec[-1] 0`) run on the
+        batched path only. Their `MPP` bits appear in `measurements` at
+        stim's record positions, never in `measurement_outcomes`, and the
+        per-shot fast path refuses both.
 
         A traced shot that stops at `max_frame_limit` with instructions
         left raises `RuntimeError`, so a truncated program is never
@@ -704,6 +719,8 @@ class StimEngine(Serializable):
         """Group record bits by qubit label, or None when there are none."""
         outcomes: dict = {}
         for lbl, bit in zip(labels, bits):
+            if lbl is None:
+                continue
             outcomes.setdefault(lbl, []).append(int(bit))
         return MeasurementOutcomes(outcomes) if outcomes else None
 
@@ -876,7 +893,7 @@ class StimEngine(Serializable):
         collectors = [HistoryDataCollector.from_raw(o) for o in outputs]
         keys = [c.key for c in collectors]
         for key in keys:
-            if key in ("measurements", "detectors", "observables"):
+            if key in ("measurements", "detectors", "observables", "kept"):
                 raise ValueError(
                     f"Output key {key!r} is already an engine array"
                 )
@@ -1067,16 +1084,21 @@ class StimEngine(Serializable):
         (decoders, Pauli-frame tracking) then run on each shot's outcomes,
         on a fresh history seeded from the setup's output.
 
+        A circuit may hold `MPP` and `rec`-controlled Paulis on this
+        batched path: the `MPP` bits are in `measurements` at stim's
+        record positions and absent from `measurement_outcomes`. The
+        per-shot fast path refuses both with `NotImplementedError`.
+
         `outputs` takes the collectors LoQS's runners take
         ([](api:HistoryDataCollectorLike)). Each is returned under its
         `key` with the per-shot shape [](api:History.collect_data) gives:
         a scalar, a 1-D array, or a list of 1-D arrays when it reads
         several frames. A collector is refused, before any shot is
-        sampled, when its key repeats or is `measurements`, `detectors`
-        or `observables`; when it reads a value from an initial-history or
-        setup frame, or filters frames on a key that changes per shot
-        (`NotImplementedError`); or when its values aren't numeric and at
-        most 1-D, or mix scalars with 1-D entries.
+        sampled, when its key repeats or is `measurements`, `detectors`,
+        `observables` or `kept`; when it reads a value from an
+        initial-history or setup frame, or filters frames on a key that
+        changes per shot (`NotImplementedError`); or when its values
+        aren't numeric and at most 1-D, or mix scalars with 1-D entries.
 
         A program whose instruction order or STIM text varies per shot
         (a step that reads the instruction stack, or a
@@ -1090,6 +1112,10 @@ class StimEngine(Serializable):
         rebuilds the quantum state: before any shot when the traced shot
         meets it, otherwise when a shot first does, with no arrays
         returned.
+
+        A shot is kept when none of its detectors fired. The kept and
+        discarded counts are `results["kept"].sum()` and `num_shots`
+        minus it; the fast path returns no `kept`.
 
         The seed is `program.default_base_seed`. The same seed gives the
         same arrays on the same machine and stim version. The arrays agree
@@ -1111,9 +1137,10 @@ class StimEngine(Serializable):
         -------
         OutputResults
             Boolean `measurements`, `detectors` and `observables`, each
-            shaped `(num_shots, n)`, plus one entry per collector. On the
-            fast path, `measurements` is one record per shot and there are
-            no `detectors` or `observables`.
+            shaped `(num_shots, n)`, and `kept`, shaped `(num_shots,)`,
+            plus one entry per collector. On the fast path,
+            `measurements` is one record per shot and there are no
+            `detectors`, `observables` or `kept`.
         """
         plan = self._plan(program)
         resolved = self._resolve(plan, outputs or [])
@@ -1131,6 +1158,7 @@ class StimEngine(Serializable):
             "measurements": measurements,
             "detectors": detectors,
             "observables": observables,
+            "kept": ~detectors.any(axis=1),
         }
         arrays.update(self._outputs(plan, measurements, resolved))
         return OutputResults(
@@ -1190,19 +1218,25 @@ class StimEngine(Serializable):
                 "didn't run on one"
             )
         text = frame["applied_stim_circuit_str"]
-        order = _label_order(text, tuple(state.qubit_labels))
+        order = _label_order(text, tuple(state.qubit_labels), unlabeled=True)
         outcomes = (
             frame["measurement_outcomes"]
             if ("measurement_outcomes" in frame)
             else {}
         )
+        # Only the bits with a qubit label are reported in the outcomes
         try:
-            record = _shot_record(outcomes, order)
+            _shot_record(
+                outcomes, tuple(lbl for lbl in order if lbl is not None)
+            )
         except ValueError as e:
             raise NotImplementedError(
                 f"StimEngine can't run instruction {name!r}: its record "
                 "bits aren't all reported in its outcomes"
             ) from e
+        # The step's bits are the last ones of the traced shot's record
+        traced = state.state.current_measurement_record()
+        record = np.asarray(traced[len(traced) - len(order) :], dtype=bool)
         return {"stim": text}, list(order), record
 
     def _fast_shot(
@@ -1322,6 +1356,14 @@ class StimEngine(Serializable):
             sim.current_measurement_record(), dtype=bool
         )
 
+    @staticmethod
+    def _fast_refusal(name: str) -> NotImplementedError:
+        return NotImplementedError(
+            f"StimEngine can't run instruction {name!r} on its per-shot "
+            "fast path: it has MPP or a gate controlled by a measurement "
+            "record bit, which only the batched path runs"
+        )
+
     def _fast_circuit(
         self,
         plan: _Plan,
@@ -1370,9 +1412,16 @@ class StimEngine(Serializable):
                 )
             elif alias == "patches" or k == "pauli_frame_update":
                 call[k] = None
+        circuit = kwargs.get("circuit")
+        if isinstance(circuit, STIMPhysicalCircuit) and _passthrough_names(
+            circuit.circuit
+        ):
+            raise self._fast_refusal(inst.name)
         frame = inst.apply(**call)
         state = frame["state"]
-        _, order, _ = self._circuit(inst.name, frame, state)
+        emitted, order, _ = self._circuit(inst.name, frame, state)
+        if _passthrough_names(stim.Circuit(emitted["stim"])):
+            raise self._fast_refusal(inst.name)
         for segment in state.segments:
             if isinstance(segment, _Choice) and any(
                 alt.num_measurements for alt in segment.circuits

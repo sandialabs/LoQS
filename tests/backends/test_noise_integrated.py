@@ -513,3 +513,31 @@ class TestBackendAgreement:
             applied = state.latest_applied_circuit
             assert applied.num_ticks == circuit.circuit.num_ticks
             assert applied.num_detectors == circuit.circuit.num_detectors
+
+    @pytest.mark.parametrize("case", ["stim-mpp", "stim-rec", "dense"])
+    def test_mpp_and_feed_forward_refused(self, case):
+        from loqs.backends import STIMPhysicalCircuit, propagate_state
+        from loqs.tools.stimtools import build_stim_model
+
+        text = {
+            "stim-mpp": "H 0 1\nMPP X0*X1\nTICK",
+            "stim-rec": "X 0\nM 0\nCX rec[-1] 1\nTICK",
+            "dense": "H 0 1\nMPP X0*X1\nTICK",
+        }[case]
+        labels = [0, 1]
+        circuit = STIMPhysicalCircuit(text, labels)
+        plain = "\n".join(
+            line
+            for line in text.split("\n")
+            if "MPP" not in line and "rec[" not in line
+        )
+        dense = case == "dense"
+        model = build_stim_model(
+            stim.Circuit(plain),
+            **({"gaterep": UnitaryGateRep} if dense else {}),
+        )
+        state = (NumpyStatevectorQuantumState if dense else STIMState)(
+            2, labels
+        )
+        with pytest.raises(NotImplementedError):
+            propagate_state(circuit, model, state)

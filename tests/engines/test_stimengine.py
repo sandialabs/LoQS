@@ -1,5 +1,7 @@
 """Tester for loqs.engines.StimEngine."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -405,6 +407,17 @@ class TestRun:
             results["logical_error"].reshape(-1, 1), expected.reshape(-1, 1)
         )
         assert len(calls) < n
+
+    def test_kept_marks_shots_without_detectors(self):
+        program = simple_program(
+            "X_ERROR(0.5) 0\nM 0 1\nDETECTOR rec[-2]\nDETECTOR rec[-1]\n",
+            [0, 1],
+        )
+        results = StimEngine().run(program, 10)
+
+        assert results["kept"].dtype == bool
+        assert results["kept"].shape == (10,)
+        assert (results["kept"] == ~results["measurements"][:, 0]).all()
 
     @pytest.mark.slow
     def test_batched_against_per_shot(self):
@@ -1184,3 +1197,199 @@ def _frame_records(history, qubits):
         outcomes = frame.get("measurement_outcomes") or {}
         bits.extend(_shot_record(outcomes, order))
     return np.array(bits, dtype=bool)
+
+
+def _circuit_instruction(text, labels, name):
+    return build_physical_circuit_instruction(
+        STIMPhysicalCircuit(
+            text, qubit_labels=labels, suppress_tick_warning=True
+        ),
+        name=name,
+    )
+
+
+def _cultivation_program(kind, seed=None):
+    """A vendored cultivation circuit as a multi-instruction program.
+
+    The circuit is cut after the TICK closing each detector round and
+    before any gate that reads a `rec` bit, so detectors and feed-forward
+    cross instruction boundaries. Returns `(program, source)`.
+    """
+    path = (
+        Path(__file__).parent
+        / "fixtures"
+        / "cultivation"
+        / f"inject_{kind}_d3_p0.001.stim"
+    )
+    source = stim.Circuit.from_file(str(path))
+    stages, cur, closing = [], [], False
+    for line in str(source).split("\n"):
+        name = line.split("(")[0].split(" ")[0]
+        if (
+            "rec[" in line
+            and name not in ("DETECTOR", "OBSERVABLE_INCLUDE")
+            and cur
+        ):
+            stages.append(cur)
+            cur = []
+        cur.append(line)
+        closing = closing or name == "SHIFT_COORDS"
+        if name == "TICK" and closing:
+            stages.append(cur)
+            cur, closing = [], False
+    if cur:
+        stages.append(cur)
+    labels = list(range(source.num_qubits))
+    insts = [
+        _circuit_instruction(stim.Circuit("\n".join(s)), labels, f"stage {i}")
+        for i, s in enumerate(stages)
+    ]
+    program = QuantumProgram(
+        [
+            {
+                "instruction": "Init State",
+                "state": len(labels),
+                "qubit_labels": labels,
+            }
+        ]
+        + [InstructionLabel(i) for i in insts],
+        default_noise_model=build_stim_model(source),
+        state_type=STIMQuantumState,
+        default_base_seed=seed,
+    )
+    return program, source
+
+
+@pytest.mark.parametrize("kind", ["bell", "teleport", "unitary"])
+class TestCultivation:
+
+    def test_trace_is_exact(self, kind):
+        program, source = _cultivation_program(kind)
+        compiled = StimEngine().compile(program)
+
+        assert sorted_dem(joined(compiled)) == sorted_dem(source)
+
+    def test_agrees_with_stim(self, kind):
+        n = 200_000
+        program, source = _cultivation_program(kind, seed=1)
+        results = StimEngine().run(program, n)
+        det, obs = source.compile_detector_sampler(seed=2).sample(
+            n, separate_observables=True
+        )
+        kept, stim_kept = results["kept"], ~det.any(axis=1)
+
+        assert results["measurements"].shape == (n, source.num_measurements)
+        assert results["detectors"].shape == (n, source.num_detectors)
+        assert results["observables"].shape == (n, source.num_observables)
+        assert_agree((~kept).reshape(-1, 1), (~stim_kept).reshape(-1, 1))
+        assert_agree(results["observables"], obs)
+        assert_agree(results["observables"][kept], obs[stim_kept])
+
+
+class TestPassthrough:
+
+    def test_passthrough_trace_is_exact(self):
+        p = 0.01
+        labels = ["c", "a", "b"]
+        first = _circuit_instruction(
+            "H a\nCX a b\nTICK\nMPP(0.01) Za*Zb\nX_ERROR(0.02) c\n"
+            "DETECTOR rec[-1]\n",
+            labels,
+            "first",
+        )
+        second = _circuit_instruction(
+            "CX rec[-1] c a b\nM c\nOBSERVABLE_INCLUDE(0) rec[-1]\n",
+            labels,
+            "second",
+        )
+        model = build_stim_model(
+            stim.Circuit("H 0\nCX 0 1\nM 0\nMPP Z0*Z1\n"),
+            after_clifford_depolarization=p,
+        )
+        program = QuantumProgram(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": 3,
+                    "qubit_labels": labels,
+                },
+                InstructionLabel(first),
+                InstructionLabel(second),
+            ],
+            default_noise_model=model,
+            state_type=STIMQuantumState,
+        )
+        text = joined(StimEngine().compile(program))
+        expected = stim.Circuit(f"""
+            H 1
+            DEPOLARIZE1({p}) 1
+            CX 1 2
+            DEPOLARIZE2({p}) 1 2
+            MPP(0.01) Z1*Z2
+            X_ERROR(0.02) 0
+            DETECTOR rec[-1]
+            CX rec[-1] 0
+            CX 1 2
+            DEPOLARIZE2({p}) 1 2
+            M 0
+            OBSERVABLE_INCLUDE(0) rec[-1]
+            """)
+        assert sorted_dem(text) == sorted_dem(expected)
+
+    def test_passthrough_record_matches_stim(self):
+        text = (
+            "X 0\nMPP Z0*Z1\nCX rec[-1] 1\nMPP !Z0\nM 1 0\n"
+            "DETECTOR rec[-1] rec[-2]\n"
+        )
+        labels = [0, 1]
+        reference = stim.Circuit(text)
+        model = build_stim_model(reference)
+        read = Instruction(
+            lambda measurement_outcomes: Frame(
+                {
+                    "bit": int(measurement_outcomes[0][0]),
+                    "count": sum(map(len, measurement_outcomes.values())),
+                }
+            ),
+            name="read",
+        )
+        program = QuantumProgram(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": 2,
+                    "qubit_labels": labels,
+                },
+                InstructionLabel(_circuit_instruction(text, labels, "c")),
+                InstructionLabel(read),
+            ],
+            default_noise_model=model,
+            state_type=STIMQuantumState,
+        )
+        results = StimEngine().run(program, 10, outputs=["bit", "count"])
+        want = reference.compile_sampler().sample(1)[0]
+        assert np.array_equal(
+            np.asarray(results["measurements"]), np.tile(want, (10, 1))
+        )
+        assert not np.asarray(results["detectors"]).any()
+        # Qubit 0 is the record's last bit, after two MPP bits
+        assert np.array_equal(np.asarray(results["bit"]), [int(want[-1])] * 10)
+        # The outcomes hold the two `M` bits only, never the MPP bits
+        assert np.array_equal(np.asarray(results["count"]), [2] * 10)
+
+    @pytest.mark.parametrize(
+        "tail",
+        [
+            "MPP Z0*Z1\n",
+            "M 0\nCX rec[-1] 1\n",
+            "CX rec[-1] 0\n",
+        ],
+        ids=["mpp", "rec", "rec-earlier"],
+    )
+    def test_fast_path_refuses_passthrough(self, tail):
+        labels = [0, 1, 2]
+        program = _outcome_dependent_program(
+            _circuit_instruction(tail, labels, "tail")
+        )
+        with pytest.raises(NotImplementedError):
+            StimEngine().run(program, 4)
