@@ -377,11 +377,10 @@ class TestRootSeed:
     @pytest.mark.parametrize(
         "base, state_seed, expected",
         [
-            (5, 9, 5),
-            (None, 9, 9),
-            (None, None, None),
+            pytest.param(5, 9, 5, id="base_seed_wins"),
+            pytest.param(None, 9, 9, id="seeded_state"),
+            pytest.param(None, None, None, id="unseeded_state"),
         ],
-        ids=["base_seed_wins", "seeded_state", "unseeded_state"],
     )
     def test_root_seed_precedence(self, base, state_seed, expected):
         state = QSimQuantumState(1, ["Q0"], seed=state_seed)

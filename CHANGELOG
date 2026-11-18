@@ -3,7 +3,7 @@
 ## [1.3.2] - Unreleased
 
 ### Changed
-- **Seeded results change, once (#74, #118, #154, #195, @sserita):** Each shot now draws from independent NumPy `SeedSequence` streams keyed by the run's root seed and the shot index, not `default_base_seed + i`, so serial, parallel and resumed runs agree shot for shot. Seeded runs won't reproduce pre-1.3.2 outcomes (which were inconsistently reproduceable anyway).
+- **Seeded results change, once (#74, #118, #154, #195, @sserita):** Each shot now draws from independent NumPy `SeedSequence` streams keyed by the run's root seed and the shot index, not `default_base_seed + i`, so serial, parallel and resumed runs agree shot for shot. Seeded runs won't reproduce pre-1.3.2 outcomes (which were inconsistently reproducible anyway).
   - **Root seed:** `default_base_seed` (an integer or a `SeedSequence`), else a seeded state in the initial `History`, else fresh entropy. `ProgramResults.root_seed` records it; pass it as `default_base_seed` to replay a run.
   - **Resume checks the root:** An unseeded run resumes on its stored root; a different `default_base_seed` (even with `force_resume`) or a pre-1.3.2 checkpoint is refused.
   - **Noise sweeps:** Point `i` runs on the child of `base_seed` keyed by `i`. Older sweep files still read.
