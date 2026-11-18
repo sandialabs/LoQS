@@ -271,7 +271,7 @@ def test_resume_in_a_fresh_process_reuses_no_cache_id(
     else:
         real_run_shot = QuantumProgram._run_shot
 
-        def run_shot(program, max_frame_limit=100, seed=None, shot_index=None):
+        def run_shot(program, max_frame_limit, seed=None, shot_index=None):
             if shot_index == 3:
                 raise KeyboardInterrupt
             return real_run_shot(program, max_frame_limit, seed, shot_index)

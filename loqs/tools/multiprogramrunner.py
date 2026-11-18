@@ -303,11 +303,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
         self.item_key_fn: Callable[[Any], str] | None = None
         self._item_store_cache: CheckpointStore | None = None
         self.run_kwargs = dict(run_kwargs) if run_kwargs is not None else {}
-        if "max_frame_limit" not in self.run_kwargs:
-            warnings.warn(
-                "run_kwargs did not specify 'max_frame_limit'; defaulting to 1_000_000."
-            )
-            self.run_kwargs["max_frame_limit"] = 1_000_000
         if (
             "checkpoint_dir" in self.run_kwargs
             and self.shot_checkpoint_dir is not None

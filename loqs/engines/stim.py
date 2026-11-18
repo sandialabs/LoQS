@@ -270,8 +270,10 @@ class StimEngine(Serializable):
 
     _SERIALIZE_ATTRS: ClassVar[list[str]] = ["max_frame_limit"]
 
-    max_frame_limit: int = 100
-    """The frame limit of the traced shot, as in [](api:QuantumProgram.run)."""
+    max_frame_limit: int | None = None
+    """The frame limit of the traced shot, as in [](api:QuantumProgram.run).
+    The default `None` means no limit; an integer limit that is reached
+    with instructions left raises `RuntimeError` on both paths."""
 
     def compile(self, program: QuantumProgram) -> CompiledProgram:
         """Trace one shot of `program` into a [](api:CompiledProgram).
@@ -1261,7 +1263,10 @@ class StimEngine(Serializable):
         num_frames = plan.n_setup
         n_bits = 0
         while len(stack):
-            if num_frames >= self.max_frame_limit:
+            if (
+                self.max_frame_limit is not None
+                and num_frames >= self.max_frame_limit
+            ):
                 raise RuntimeError(
                     f"A shot stopped at max_frame_limit="
                     f"{self.max_frame_limit} with instructions left; raise "
