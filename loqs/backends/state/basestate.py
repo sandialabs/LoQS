@@ -11,16 +11,20 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import textwrap
-from typing import ClassVar, TypeAlias, TypeVar
+from typing import Any, ClassVar, TypeAlias, TypeVar
 
 import numpy as np
 from numpy.random import SeedSequence
 
 from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
 from loqs.internal import Displayable
-from loqs.internal.seeding import as_seed_sequence
+from loqs.internal.seeding import (
+    as_seed_sequence,
+    seed_sequence_from_dict,
+    seed_sequence_to_dict,
+)
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BaseQuantumState")
@@ -46,6 +50,21 @@ class BaseQuantumState(Displayable):
     """Random number generator."""
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    _INSTANCE_ATTRS = ["seed_sequence", "seeded", "_rng_state"]
+
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        if attr == "seed_sequence":
+            return seed_sequence_to_dict(self.seed_sequence)
+        if attr == "_rng_state":
+            return self._rng.bit_generator.state
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    def _restore_instance_attrs(self, attrs: Mapping[str, Any]) -> None:
+        self.seed_sequence = seed_sequence_from_dict(attrs["seed_sequence"])
+        self.seeded = attrs["seeded"]
+        self._rng = np.random.default_rng(self.seed_sequence)
+        self._rng.bit_generator.state = attrs["_rng_state"]
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"

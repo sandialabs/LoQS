@@ -70,8 +70,6 @@ class QSimQuantumState(BaseQuantumState):
         "_qsim_maj_vot_mask",
         "_qsim_maj_vot_array",
     ]
-    """`seed_sequence` is deliberately not here to avoid triggering re-caching."""
-
     _PICKLE_VIA_ENCODING_ATTRS = True
     """GPU density classes hold device arrays; encoding attrs copy them to host."""
 

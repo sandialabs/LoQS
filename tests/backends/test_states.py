@@ -500,3 +500,92 @@ def test_program_consumers_draw_own_streams(adapter):
     assert len(draws) == 2
     assert draws[0] != draws[1]
     assert fresh not in draws
+
+
+def _advanced(adapter, seed, extra):
+    """A seeded state whose generator has moved on by a seed-dependent
+    amount."""
+    state = adapter.make(1, ["Q0"], seed=seed)
+    _draw(adapter, state, n=4)
+    for _ in range(extra):
+        state._rng.random()
+    return state
+
+
+def _next_values(state, n=8):
+    return [state._rng.random() for _ in range(n)]
+
+
+def _send(obj, how, make_temp_path):
+    import pickle
+
+    from loqs.internal.serializable import Serializable
+
+    if how == "pickle":
+        return pickle.loads(pickle.dumps(obj))
+    suffix = ".json" if how == "json" else ".h5"
+    with make_temp_path(suffix=suffix) as path:
+        obj.write(path)
+        return Serializable.read(path)
+
+
+@pytest.mark.parametrize("how", ["json", "hdf5", "pickle"])
+def test_rng_survives_round_trip(adapter, how, make_temp_path):
+    from loqs.internal.seeding import seed_sequence_to_dict
+
+    state = _advanced(adapter, SEED, 3)
+    loaded = _send(state, how, make_temp_path)
+
+    assert loaded.seeded
+    assert seed_sequence_to_dict(loaded.seed_sequence) == (
+        seed_sequence_to_dict(state.seed_sequence)
+    )
+    assert _next_values(loaded) == _next_values(state)
+    if not adapter.cls.name.startswith("STIM"):
+        assert _draw(adapter, loaded) == _draw(adapter, state)
+
+
+def test_states_differing_in_rng_share_storage(adapter, make_temp_path):
+    from loqs.core import Frame
+
+    a = _advanced(adapter, SEED, 2)
+    b = _advanced(adapter, SEED + 1, 5)
+    from loqs.internal.serializable import Serializable
+
+    assert Serializable._serial_hash(a) == Serializable._serial_hash(b)
+
+    loaded = _send(Frame({"a": a, "b": b}), "hdf5", make_temp_path)
+    assert loaded["a"] is not loaded["b"]
+    assert _next_values(loaded["a"]) == _next_values(a)
+    assert _next_values(loaded["b"]) == _next_values(b)
+
+
+@pytest.mark.parametrize("how", ["json", "hdf5"])
+def test_states_in_shared_histories_keep_own_rng(adapter, how, make_temp_path):
+    from loqs.core import Frame
+    from loqs.core.history import History
+
+    a = _advanced(adapter, SEED, 2)
+    b = _advanced(adapter, SEED + 1, 5)
+    holder = Frame(
+        {"h1": History(Frame({"s": a})), "h2": History(Frame({"s": b}))}
+    )
+
+    loaded = _send(holder, how, make_temp_path)
+    sa, sb = loaded["h1"][0]["s"], loaded["h2"][0]["s"]
+    assert sa is not sb
+    assert _next_values(sa) == _next_values(a)
+    assert _next_values(sb) == _next_values(b)
+
+
+def test_state_file_without_saved_rng_reads(adapter):
+    from loqs.internal.serializable import INSTANCE_ATTRS_KEY, Serializable
+
+    state = _advanced(adapter, SEED, 1)
+    encoded = Serializable.encode(state, format="json")
+    assert INSTANCE_ATTRS_KEY in encoded
+    del encoded[INSTANCE_ATTRS_KEY]
+
+    loaded = Serializable.decode(encoded, format="json")
+    assert not loaded.seeded
+    assert len(adapter.probe(loaded)) == 1

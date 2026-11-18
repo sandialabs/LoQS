@@ -1079,6 +1079,20 @@ def test_checkpoint_state_dropped_unless_kept(case, tmp_path):
                 )
 
 
+def test_checkpoint_collect_keeps_each_shots_rng(tmp_path):
+    from loqs.internal.seeding import seed_sequence_to_dict
+
+    program = _state_composite_program(initial_history=History([]))
+    with pytest.warns(UserWarning, match="no_serialize_keys"):
+        results = program.run(
+            num_shots=2, checkpoint=True, checkpoint_dir=tmp_path / "ckpt"
+        )
+    assert not results.shot_histories
+    states = results.collect_shot_data("state", -1)
+    seqs = {repr(seed_sequence_to_dict(s.seed_sequence)) for s in states}
+    assert len(seqs) == 2
+
+
 @pytest.mark.parametrize("case", ["frames", "history", "dropped"])
 def test_saved_initial_state_program(case, make_temp_path):
     frame = Frame({"state": QSimQuantumState(1, ["Q0"])})

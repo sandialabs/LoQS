@@ -224,3 +224,36 @@ class TestSTIMQuantumState:
             state2.state.current_inverse_tableau()
             == state.state.current_inverse_tableau()
         )
+
+    def test_read_back_reseeds_tableau_deterministically(self, make_temp_path):
+        from loqs.backends.reps import ZBasisProjectionInstrumentRep
+        from loqs.backends.reps import StimCircuitGateRep
+
+        q = ["Q0"]
+        reps = [
+            StimCircuitGateRep("H 0", q),
+            ZBasisProjectionInstrumentRep(0, True, q),
+        ] * 64
+
+        def draw(state):
+            return list(state.apply_reps_inplace(reps)["Q0"])
+
+        def roundtrip(state):
+            with make_temp_path(suffix=".json") as path:
+                state.write(path)
+                return STIMState.read(path)
+
+        original = STIMState(1, q, seed=7)
+        fresh = draw(STIMState(1, q, seed=7))
+        draw(original)
+
+        first, second = roundtrip(original), roundtrip(original)
+        out1, out2 = draw(first), draw(second)
+        assert out1 == out2
+        assert out1 != fresh
+
+        second.reset_seed(7)
+        assert draw(second) == fresh
+
+        again = roundtrip(roundtrip(original).copy())
+        assert draw(again) not in (out1, fresh)

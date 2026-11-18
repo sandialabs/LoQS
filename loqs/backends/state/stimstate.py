@@ -93,7 +93,7 @@ class STIMQuantumState(BaseQuantumState):
     )
 
     _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
-    """`seed_sequence` is deliberately not here to avoid triggering re-caching."""
+    _INSTANCE_ATTRS = BaseQuantumState._INSTANCE_ATTRS + ["_tableau_restores"]
 
     _PICKLE_VIA_ENCODING_ATTRS = True
     """The underlying TableauSimulator can't be pickled directly."""
@@ -156,7 +156,11 @@ class STIMQuantumState(BaseQuantumState):
         STIM's [](api:stim.TableauSimulator) has its own generator. It is
         seeded from a child of the state's `seed_sequence`, so it shares no
         seed bits with the NumPy generator. An in-memory copy continues both
-        streams; a state read from disk or unpickled does not.
+        streams. A state read back or unpickled continues its NumPy generator
+        exactly, but starts its tableau simulator on a new stream derived
+        from the seed sequence and the restore count, so reading one file
+        twice gives the same draws, and they aren't the draws an
+        uninterrupted run would have made.
 
         A caller who hands the same `SeedSequence` to a state and also spawns
         from it gets a child that collides with the tableau's, so each state
@@ -256,12 +260,29 @@ class STIMQuantumState(BaseQuantumState):
         new_state.seed_sequence = self.seed_sequence
         new_state.seeded = self.seeded
         new_state._rng = deepcopy(self._rng)
+        new_state._tableau_restores = self._tableau_restores
         return new_state
 
+    _tableau_restores: int = 0
+    """Times this state's lineage has been restored from disk or a pickle."""
+
     def _tableau_seed(self) -> int:
-        """Integer seed for the tableau simulator, from a child sequence."""
-        child = child_seed_sequence(self.seed_sequence, 0)
+        """Integer seed for the tableau simulator, from a child sequence
+        keyed by the restore count (just `0` for a never-restored state)."""
+        if self._tableau_restores == 0:
+            child = child_seed_sequence(self.seed_sequence, 0)
+        else:
+            child = child_seed_sequence(
+                self.seed_sequence, 0, self._tableau_restores
+            )
         return seed_word(child)
+
+    def _restore_instance_attrs(self, attrs: Mapping[str, Any]) -> None:
+        super()._restore_instance_attrs(attrs)
+        self._tableau_restores = attrs["_tableau_restores"] + 1
+        self._state = self._state.copy(
+            copy_rng=False, seed=self._tableau_seed()
+        )
 
     def reset_seed(self, new_seed: int | SeedSequence | None) -> None:
         """Reset the random seed for the quantum state.
@@ -276,6 +297,7 @@ class STIMQuantumState(BaseQuantumState):
             The new random seed to use. If None, fresh entropy is used.
         """
         super().reset_seed(new_seed)
+        self._tableau_restores = 0
         # We explicitly don't want to copy RNG here, force a new RNG seed
         self._state = self._state.copy(
             copy_rng=False, seed=self._tableau_seed()
