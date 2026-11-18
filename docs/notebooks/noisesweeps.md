@@ -153,8 +153,9 @@ runner = NoiseSweepRunner(
 
 Passing `default_base_seed` here would raise a `TypeError` -- seeding is entirely the runner's
 job, so that every sweep is deterministic and reproducible regardless of what the noise model or
-instruction stack do internally. Point `i`'s `QuantumProgram` always runs on a child of
-`base_seed` keyed by `i`, so points never share randomness.
+instruction stack do internally. Point `i`'s `QuantumProgram` always runs on a root that is a
+`SeedSequence` child of `base_seed` keyed by `i`, so points never share randomness, even
+between sweeps with nearby base seeds.
 
 ```{code-cell} ipython3
 # The QuantumProgram for one sweep point can be inspected directly, if you want to sanity-check

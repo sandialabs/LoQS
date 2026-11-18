@@ -512,7 +512,7 @@ def compute_logical_outcome(measurement_outcomes):
 
 Obviously it's a little hard to tell from a single shot, but we roughly see that we are more likely to sample 1 at the start/end of the cycle and more likely to sample 0 (i.e. we've had a bitflip error and are in the |+> state) near the middle of the cycle.
 
-Of course, I've selected a seed such that this is true for explanatory purposes here, but we can average over all the shots to see this trend is carried out.
+Of course, a single shot is noisy, and which outcomes a given seed shows depends on LoQS's seeding scheme, so the single-shot trace above may differ from what you get on another version. So we average over all the shots to see this trend is carried out.
 
 ```{code-cell} ipython3
 outcomes_td3 = [
