@@ -16,9 +16,13 @@
 # - main must not require branches to be up to date before merging. A sync
 #   PR that fell behind could only be updated by writing main into the
 #   bugfix branch, so it would wait for good.
-# - The bugfix ruleset's "restrict deletions" is also what keeps
-#   "Automatically delete head branches" from deleting the bugfix branch
-#   when its sync PR merges.
+# - A ruleset restricting deletions, with an empty bypass list, is what
+#   keeps "Automatically delete head branches" from deleting the bugfix
+#   branch when its sync PR merges.
+# - A sync PR merges without an approving review only because the token's
+#   owner is in a team the review ruleset lets bypass for pull requests.
+#   The owner must not be a repo admin: admins bypass the required checks
+#   too, so the PR could merge before CI is green.
 #
 # Conflicts are checked when the bugfix branch is pushed or this workflow
 # is dispatched, not when main moves. A push run uses the bugfix branch's

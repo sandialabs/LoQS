@@ -36,11 +36,12 @@ def commit(repo, name, text=None):
     git(repo, "commit", "-m", name)
 
 
-def run_script(script, repo, *args):
+def run_script(script, repo, *args, stdin=None):
     return subprocess.run(
         ["bash", str(script), *args],
         cwd=repo,
         env=ENV,
+        input=stdin,
         capture_output=True,
         text=True,
         timeout=60,
