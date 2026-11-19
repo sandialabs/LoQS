@@ -1,0 +1,106 @@
+# The quick checks for a branch with no open, non-draft PR into main or a
+# bugfix-release-* branch: a small test matrix, the CI script tests and a
+# docs build. A branch with such a PR gets the full suite from
+# loqs-full.yml instead.
+
+name: LoQS Minimal Tests + Docs
+
+on:
+  push:
+    # main gets the full suite from loqs-full.yml on every push.
+    branches-ignore: [main]
+    tags: ['**']
+  workflow_dispatch: # Allow manual running from GitHub
+
+jobs:
+  check-pr-status:
+    # The jobs below skip themselves when the pushed branch has an open,
+    # non-draft PR against main or a bugfix-release-* branch: loqs-full.yml
+    # then runs the full suite for the same commit (via the pull_request
+    # event), making this run redundant. The filter below must count the
+    # PRs that loqs-full.yml runs its jobs for. Not run on a manual
+    # dispatch, which always runs the jobs below.
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      has-open-pr: ${{ steps.check.outputs.has-open-pr }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          # If the lookup itself fails for any reason (API hiccup, rate
+          # limit, etc.), default to "no open PR" so minimal-unit-tests
+          # still runs -- failing toward more coverage, not less.
+          COUNT=$(gh pr list --repo "$REPO" \
+                    --head "$BRANCH" \
+                    --state open \
+                    --json isDraft,baseRefName \
+                    --jq '[.[] | select(.isDraft == false and (.baseRefName == "main" or (.baseRefName | startswith("bugfix-release-"))))] | length') || COUNT=0
+          echo "has-open-pr=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  minimal-unit-tests:
+    needs: check-pr-status
+    # !cancelled() lets this run when check-pr-status was skipped (a manual
+    # dispatch) or failed.
+    if: ${{ !cancelled() && needs.check-pr-status.outputs.has-open-pr != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]  # No Mac for speed
+        python-version: ['3.12'] # stim 1.15 only has 3.12 Windows wheels, pymatching 2.3.1 only has 3.13 Windows wheels
+        loqs-optional: ["all"]
+    uses: ./.github/workflows/reusable-loqs.yml
+    name: Run minimal LoQS tests
+    with:
+      os: ${{ matrix.os }}
+      python-version: ${{ matrix.python-version }}
+      loqs-optional: ${{ matrix.loqs-optional }}
+
+  # Tests of the helper scripts under .github/scripts (Ubuntu only: they
+  # test no loqs code). Same gate as minimal-unit-tests.
+  ci-script-tests:
+    needs: check-pr-status
+    if: ${{ !cancelled() && needs.check-pr-status.outputs.has-open-pr != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - run: python -m pip install pytest
+
+    - run: python -m pytest .github/scripts/tests
+
+  # Build docs if the minimal unit tests ran and succeeded
+  docs:
+    runs-on: ubuntu-latest
+    needs: minimal-unit-tests
+    if: ${{ always() && needs.minimal-unit-tests.result == 'success' }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install deps
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r docs/requirements.txt
+
+    - name: Build documentation
+      run: |
+        python docs/serve.py --build-only --out site
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: book-html
+        path: site
