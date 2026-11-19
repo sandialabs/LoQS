@@ -34,9 +34,18 @@ about it!
 
 ## Making a contribution
 
-Want to fix a bug, add a feature, or change an existing one? Open a pull
-request against `main`. The pull request template asks for a summary, where
-reviewers should focus, and how you tested the change.
+Want to fix a bug, add a feature, or change an existing one?
+
+Open a pull request!
+- **A bugfix for released code only:** target the open [`bugfix-release-*` branch][branches].
+- **A bugfix for unreleased code in `main` or a new feature:** target `main`.
+- **A bugfix that affects both released and unreleased code:** target `main` if the bugfix can wait for next major release. If the bugfix is urgent, split it into two PRs: one for the released code targeting the open [`bugfix-release-*`][branches] that can be released right away, and one for the unreleased code that targets `main`.
+
+A maintainer will retarget your pull request if needed.
+
+The pull
+request template asks for a summary, where reviewers should focus, and how
+you tested the change.
 
 Because LoQS is a project of Sandia National Laboratories, the process
 differs for contributors working at Sandia.
@@ -70,6 +79,7 @@ If your contribution was developed with the help of generative AI tools
 - **Attest that you have thoroughly reviewed** all contributions written with
   generative AI tools.
 
+[branches]: https://github.com/sandialabs/LoQS/branches
 [email]: mailto:loqs@sandia.gov
 [license]: LICENSE
 [issues]: https://github.com/sandialabs/LoQS/issues
