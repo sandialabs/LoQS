@@ -1,0 +1,80 @@
+# Checks that a merged sync PR landed as a merge commit, and deletes its
+# branch.
+#
+# A sync PR carries a bugfix branch's commits into main. Merged with a
+# merge commit, main's history then holds those commits and the next sync
+# carries only what is new. A squash or rebase leaves them out of main's
+# history (the changes are there, the commits are not), so the next sync
+# carries them again. The job goes red, comments on the PR and labels it
+# when the PR's merge commit is not a merge commit whose second parent is
+# the PR's head.
+#
+# The job first deletes the merged sync/ branch, under a lease on the PR's
+# head: a branch a newer sync run has already reset is kept.
+#
+# Sync PRs come from this repository, so the plain pull_request event is
+# enough: its token can write.
+
+name: Check a merged sync PR
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-merge:
+    if: ${{ github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'sync/bugfix-release-') && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out the merge commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+
+      - name: Delete the merged sync branch
+        run: |
+          if git push --force-with-lease="refs/heads/$HEAD_REF:$HEAD_SHA" origin ":refs/heads/$HEAD_REF"; then
+            echo "::notice::Deleted $HEAD_REF."
+          else
+            echo "::notice::Left $HEAD_REF: it moved since the PR's head or is already gone."
+          fi
+
+      - name: Check the merge commit
+        run: |
+          kind=$(bash .github/scripts/sync-merge-kind.sh HEAD "$HEAD_SHA")
+          if [ "$kind" = merge-commit ]; then
+            echo "::notice::PR #$PR was merged with a merge commit."
+            exit 0
+          fi
+          base=${HEAD_REF#sync/}
+          cat > "$RUNNER_TEMP/not-merge-commit.md" << EOF
+          This sync PR was merged without a merge commit (a squash or a
+          rebase). \`main\` has the changes, but not the commits of
+          \`$base\`, so the next sync carries them again.
+
+          To repair it, run "Sync bugfix branch into main" for \`$base\`,
+          or wait for the next fix to \`$base\`, and merge that sync PR
+          with "Create a merge commit". Don't revert \`main\` or
+          force-push it.
+          EOF
+          gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/not-merge-commit.md"
+          gh label create sync-not-merge-commit --repo "$REPO" --force \
+            --description "A sync PR was merged without a merge commit" --color B60205
+          gh pr edit "$PR" --repo "$REPO" --add-label sync-not-merge-commit
+          echo "::error::PR #$PR was merged without a merge commit; $base's commits are not in main's history. See the PR's comment."
+          exit 1

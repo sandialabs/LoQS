@@ -1,39 +1,52 @@
 # Brings the fixes on a bugfix-release-* branch into main. When the branch
 # has commits main lacks, this opens (or keeps) one sync PR into main and
-# turns on auto-merge as a merge commit. With LOQS_SYNC_TOKEN, the run
-# then waits for the checks main's rulesets require on the PR's head
-# commit and merges the PR itself as a merge commit, because auto-merge
-# by itself would wait for an approving review. A check with no run yet,
-# or only a skipped one, counts as pending: a job that hasn't started has
-# no check, and a skipped one would count as passed. A red check, a
-# timeout or a refused merge ends the run red; the PR is then merged by
-# approving it, or by running this workflow again once its checks pass.
-# On the built-in-token fallback the run doesn't wait or merge, and an
-# approving review merges the PR. With nothing to sync it ends green. On
-# a conflict it comments once, labels the PR sync-conflict and fails red.
-# A red run or an open sync PR is what a person picks up.
+# turns on auto-merge as a merge commit. The PR's head is sync/<branch>,
+# which the run creates or resets at the bugfix tip when no sync PR is
+# open, fast-forwards to the new tip when one is, and merges the bugfix
+# branch into once it holds commits made by hand. The branch is the
+# workflow's: sync-merge-check.yml deletes it after the merge, and no
+# ruleset protects sync/*, so nothing else belongs on it.
+#
+# With LOQS_SYNC_TOKEN, the run merges the PR itself as a merge commit
+# while its head is the bugfix tip: it waits for the checks main's
+# rulesets require on the head commit, because auto-merge by itself would
+# wait for an approving review. A check with no run yet, or only a
+# skipped one, counts as pending: a job that hasn't started has no check,
+# and a skipped one would count as passed. A red check, a timeout, a head
+# that moved during the wait or a refused merge ends the run red; the PR
+# is then merged by approving it, or by running this workflow again once
+# its checks pass. Once the head holds hand-made commits the run leaves
+# the merge to an approving review. On the built-in-token fallback the
+# run warns, doesn't wait or merge, and an approving review merges the
+# PR. With nothing to sync it ends green. On a conflict it comments once,
+# labels the PR sync-conflict and fails red. A red run or an open sync PR
+# is what a person picks up.
 #
 # Up-merge rules:
-# - A sync PR is merged with a merge commit only. A squash or rebase makes
-#   the next sync conflict on the same changes.
-# - main never flows into a bugfix branch: no "Update branch", no "Resolve
-#   conflicts", no local `git merge main` on it. A conflict is resolved on
-#   a sync/ branch cut from main, with the bugfix branch merged in, and
-#   that branch is merged into main with a merge commit.
+# - A sync PR is merged with a merge commit only. A squash or rebase
+#   leaves the bugfix commits out of main's history, so the next sync
+#   carries them again; sync-merge-check.yml goes red on it.
+# - main never flows into a bugfix branch: no "Update branch", no
+#   "Resolve conflicts", no local `git merge main` on it, for any PR into
+#   a bugfix branch. A conflict on the sync PR is resolved on the PR
+#   itself, with "Resolve conflicts" or a local merge pushed to sync/<b>.
+#   That is safe because only sync/<b> is written, never the bugfix
+#   branch.
 #
 # Repo settings this depends on:
-# - main must not require branches to be up to date before merging. A sync
-#   PR that fell behind could only be updated by writing main into the
-#   bugfix branch, so it would wait for good.
+# - main must not require branches to be up to date before merging. The
+#   run merges the sync PR without updating it, so a rule that demanded
+#   an update would make it wait for good.
 # - A ruleset restricting deletions, with an empty bypass list, is what
 #   keeps "Automatically delete head branches" from deleting the bugfix
-#   branch when its sync PR merges.
-# - A sync PR merges without an approving review only because the token's
-#   owner is in a team the review ruleset lets bypass for pull requests.
-#   The owner must not be a repo admin: admins bypass the required checks
-#   too, so the PR could merge before CI is green. The bypass is on the
-#   Reviews ruleset only; the required checks hold because the owner has
-#   no bypass on the Protected branches ruleset.
+#   branch. The sync/ branch is deleted by sync-merge-check.yml.
+# - A sync PR whose head is the bugfix tip merges without an approving
+#   review only because the token's owner is in a team the review ruleset
+#   lets bypass for pull requests. The owner must not be a repo admin:
+#   admins bypass the required checks too, so the PR could merge before CI
+#   is green. The bypass is on the Reviews ruleset only; the required
+#   checks hold because the owner has no bypass on the Protected branches
+#   ruleset.
 #
 # Conflicts are checked when the bugfix branch is pushed or this workflow
 # is dispatched, not when main moves. A push run uses the bugfix branch's
@@ -41,16 +54,17 @@
 #
 # Token: LOQS_SYNC_TOKEN is a fine-grained personal access token limited
 # to this repository, with Contents, Pull requests and Workflows read and
-# write. A sync that changes files under .github/workflows/ gets
-# auto-merge only through the Workflows permission, which the built-in
-# token can't have: on the fallback such a run fails and the PR is merged
-# by hand with a merge commit. The built-in token is the fallback for the
-# rest, with costs: a PR it opens doesn't get CI without an approval, the
-# repo must allow Actions to create pull requests, the run doesn't wait
-# for checks or merge, and a merge made with it may not start main's
-# workflows. The check and rule reads use the built-in token (checks:
-# read), since the fine-grained token has no Checks permission; only the
-# merge call uses LOQS_SYNC_TOKEN.
+# write; the pushes of sync/ branches and the merge call use it, so the
+# PR's CI starts without a click. Without it the run falls back to the
+# built-in token and warns: the PR's CI starts only after someone clicks
+# "Approve workflows to run", the repo must allow Actions to create pull
+# requests, the run doesn't wait or merge, and a push that brings changes
+# to files under .github/workflows/ may be refused. The merge that
+# auto-merge then makes is the built-in token's, so it may start neither
+# main's workflows nor sync-merge-check.yml. The wait step's check and
+# rule reads use the built-in token (checks: read), since the fine-grained
+# token has no Checks permission; in that step only the merge call uses
+# LOQS_SYNC_TOKEN.
 # LOQS_SYNC_TOKEN owner: @qpl-ci-tester. Expires: 2027-11-17
 
 name: Sync bugfix branch into main
@@ -84,6 +98,7 @@ jobs:
       GH_TOKEN: ${{ secrets.LOQS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
       BRANCH: ${{ inputs.branch || github.ref_name }}
+      HAS_TOKEN: ${{ secrets.LOQS_SYNC_TOKEN != '' }}
     steps:
       - name: Refuse a branch that is not a bugfix branch
         run: |
@@ -95,10 +110,16 @@ jobs:
               ;;
           esac
 
+      - name: Warn that the run is on the built-in token
+        if: ${{ env.HAS_TOKEN != 'true' }}
+        run: |
+          echo "::warning::No LOQS_SYNC_TOKEN, so this run uses the built-in token. The sync PR's CI waits for someone to click \"Approve workflows to run\"; this run won't wait for the checks or merge the PR; and the PR needs an approving review before auto-merge merges it."
+
       - name: Check out full history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.LOQS_SYNC_TOKEN || github.token }}
 
       - name: Decide what a sync would take
         id: state
@@ -115,7 +136,7 @@ jobs:
         id: find
         if: ${{ steps.state.outputs.state != 'nothing' }}
         run: |
-          pr=$(gh pr list --repo "$REPO" --base main --head "$BRANCH" --state open \
+          pr=$(gh pr list --repo "$REPO" --base main --head "sync/$BRANCH" --state open \
             --json number,isCrossRepository,labels \
             --jq '[.[] | select(.isCrossRepository == false)] | first // empty')
           number=
@@ -135,6 +156,75 @@ jobs:
           else
             echo "No open sync PR."
           fi
+
+      - name: Update the sync branch
+        id: branch
+        if: ${{ steps.state.outputs.state != 'nothing' }}
+        env:
+          PR: ${{ steps.find.outputs.number }}
+        run: |
+          push_failed() {
+            echo "::error::Could not write sync/$BRANCH. Likely causes: LOQS_SYNC_TOKEN is waiting for the organization's approval or lacks Contents or Workflows write (delete the secret until it's approved, then re-run this run); or, on the built-in token, GitHub refuses a write that brings changes to files under .github/workflows/ onto sync/$BRANCH. By hand: git fetch origin, then git push --force origin origin/$BRANCH:refs/heads/sync/$BRANCH, then re-run the failed run. If the merge call failed instead, merge origin/$BRANCH into sync/$BRANCH locally and push it, as the conflict comment says."
+            exit 1
+          }
+
+          pr_open=false
+          if [ -n "$PR" ]; then
+            pr_open=true
+          fi
+          action=$(bash .github/scripts/sync-branch-action.sh "origin/$BRANCH" "origin/sync/$BRANCH" "$pr_open")
+          tip=$(git rev-parse "origin/$BRANCH")
+          echo "Sync branch action: $action"
+
+          state=
+          case "$action" in
+            set)
+              git push --force origin "$tip:refs/heads/sync/$BRANCH" || push_failed
+              sha=$tip
+              ;;
+            fast-forward)
+              git push origin "$tip:refs/heads/sync/$BRANCH" || push_failed
+              sha=$tip
+              ;;
+            keep)
+              sha=$(git rev-parse "origin/sync/$BRANCH")
+              ;;
+            merge)
+              sha=$(gh api -X POST "repos/$REPO/merges" -f "base=sync/$BRANCH" -f "head=$BRANCH" \
+                -f "commit_message=Merge $BRANCH into sync/$BRANCH" --jq .sha) || push_failed
+              [ -n "$sha" ] || push_failed
+              git fetch origin "refs/heads/sync/$BRANCH"
+              ;;
+            conflict)
+              sha=$(git rev-parse "origin/sync/$BRANCH")
+              state=conflict
+              ;;
+            *)
+              echo "::error::Unexpected sync branch action '$action'."
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$state" ]; then
+            state=$(bash .github/scripts/sync-state.sh origin/main "$sha")
+            case "$state" in
+              clean | conflict) ;;
+              *)
+                echo "::error::sync/$BRANCH at $sha against main is '$state', not clean or conflict; nothing was synced."
+                exit 1
+                ;;
+            esac
+          fi
+          pure=false
+          if [ "$sha" = "$tip" ]; then
+            pure=true
+          fi
+          {
+            echo "sha=$sha"
+            echo "state=$state"
+            echo "pure=$pure"
+          } >> "$GITHUB_OUTPUT"
+          echo "sync/$BRANCH is at $sha ($state against main, pure: $pure)."
 
       - name: Open the sync PR
         id: create
@@ -158,24 +248,19 @@ jobs:
 
           body=$(cat <<'EOF'
           This PR brings the fixes merged into `@BRANCH@` to `main`. It is
-          opened by the "Sync bugfix branch into main" workflow.
+          opened by the "Sync bugfix branch into main" workflow, from the
+          branch `sync/@BRANCH@`.
 
-          - **Merge it with a merge commit.** Never squash or rebase it.
-          - **Never use "Update branch" or "Resolve conflicts"** on it: both
-            write `main` into `@BRANCH@`.
-          - If it shows conflicts, resolve them on a new branch cut from
-            `main` with `@BRANCH@` merged in, open that as a PR into `main`
-            and merge it with a merge commit. This PR then shows as merged by
-            itself:
-
-            ```
-            git fetch origin
-            git switch -c sync/@BRANCH@ origin/main
-            git merge origin/@BRANCH@
-            # resolve the conflicts, then
-            git commit
-            git push -u origin sync/@BRANCH@
-            ```
+          - **Merge it with a merge commit.** Never squash or rebase it: the
+            bugfix commits would then be missing from `main`'s history, and
+            the next sync would carry them again.
+          - **Conflicts are resolved on this PR,** with GitHub's "Resolve
+            conflicts" or a local merge pushed to `sync/@BRANCH@`. That is
+            safe because only `sync/@BRANCH@` is written. Never merge `main`
+            into `@BRANCH@` itself.
+          - `sync/@BRANCH@` belongs to the workflow, which resets it when no
+            sync PR is open, so nothing else goes on it. Once it holds
+            commits made by hand, the PR needs an approving review.
 
           Fix PRs merged into `@BRANCH@`:
 
@@ -184,38 +269,40 @@ jobs:
           )
           body=${body//@BRANCH@/"$BRANCH"}
           body=${body//@LIST@/"$list"}
-          title="Sync $BRANCH into main"
+          if [ "$HAS_TOKEN" != true ]; then
+            body="$body"$'\n\n'"This run used the built-in token: click \"Approve workflows to run\" so the checks start, then approve the PR. Auto-merge merges it as a merge commit; a merge by hand uses \"Create a merge commit\"."
+          fi
+          title="Sync $BRANCH into main (merge commit only)"
 
           printf '%s\n' "$body" > "$RUNNER_TEMP/sync-body.md"
-          url=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+          url=$(gh pr create --repo "$REPO" --base main --head "sync/$BRANCH" \
             --title "$title" --body-file "$RUNNER_TEMP/sync-body.md")
           echo "Opened $url"
           echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
 
       - name: Report a conflict
-        if: ${{ steps.state.outputs.state == 'conflict' }}
+        if: ${{ steps.branch.outputs.state == 'conflict' }}
         env:
           PR: ${{ steps.create.outputs.number || steps.find.outputs.number }}
           LABELLED: ${{ steps.find.outputs.labelled }}
         run: |
           if [ "$LABELLED" != true ]; then
             comment=$(cat <<'EOF'
-          `@BRANCH@` conflicts with `main` (`CHANGELOG` is the usual place).
-          Resolve it on a new branch cut from `main`:
+          `sync/@BRANCH@` conflicts with `main` or with `@BRANCH@`
+          (`CHANGELOG` is the usual place). Resolve it on this PR: use
+          "Resolve conflicts" if GitHub offers it, or
 
           ```
           git fetch origin
-          git switch -c sync/@BRANCH@ origin/main
+          git switch -C sync/@BRANCH@ origin/sync/@BRANCH@
           git merge origin/@BRANCH@
-          # resolve the conflicts, then
-          git commit
-          git push -u origin sync/@BRANCH@
+          git merge origin/main
+          # resolve the conflicts and commit after each merge that stops
+          git push origin sync/@BRANCH@
           ```
 
-          Open a PR from `sync/@BRANCH@` into `main` and merge it with
-          "Create a merge commit". This PR then shows as merged by itself.
-          Never use "Resolve conflicts" or "Update branch" here: both write
-          `main` into `@BRANCH@`.
+          Once the checks pass, approve the PR and merge it with "Create a
+          merge commit". Never merge `main` into `@BRANCH@`.
           EOF
             )
             printf '%s\n' "${comment//@BRANCH@/"$BRANCH"}" > "$RUNNER_TEMP/sync-comment.md"
@@ -224,30 +311,40 @@ jobs:
               --description "The sync PR conflicts with main" --color B60205
             gh pr edit "$PR" --repo "$REPO" --add-label sync-conflict
           fi
-          echo "::error::$BRANCH conflicts with main; auto-merge was not enabled. Resolve it as the comment on PR #$PR says."
+          echo "::error::sync/$BRANCH conflicts with main or with $BRANCH; auto-merge was not enabled. Resolve it as the comment on PR #$PR says."
           exit 1
 
       - name: Turn on auto-merge
-        if: ${{ steps.state.outputs.state == 'clean' }}
+        if: ${{ steps.branch.outputs.state == 'clean' }}
         env:
           PR: ${{ steps.create.outputs.number || steps.find.outputs.number }}
+          LABELLED: ${{ steps.find.outputs.labelled }}
         run: |
+          if [ "$LABELLED" = true ]; then
+            gh pr edit "$PR" --repo "$REPO" --remove-label sync-conflict
+          fi
           if ! gh pr merge "$PR" --repo "$REPO" --auto --merge; then
-            echo "::error::Auto-merge could not be turned on for PR #$PR. Likely causes: the repo does not allow auto-merge or merge commits; or the sync changes files under .github/workflows/ and the run used the built-in token, or a LOQS_SYNC_TOKEN without the Workflows permission. Merge the PR by hand with \"Create a merge commit\" once its checks pass."
+            echo "::error::Auto-merge could not be turned on for PR #$PR. Likely causes: the repo does not allow auto-merge or merge commits. Merge the PR by hand with \"Create a merge commit\" once its checks pass."
             exit 1
           fi
 
       - name: Wait for the required checks and merge
-        if: ${{ steps.state.outputs.state == 'clean' }}
+        if: ${{ steps.branch.outputs.state == 'clean' }}
         env:
           PR: ${{ steps.create.outputs.number || steps.find.outputs.number }}
           GH_TOKEN: ${{ github.token }}
           MERGE_TOKEN: ${{ secrets.LOQS_SYNC_TOKEN }}
+          HEAD: ${{ steps.branch.outputs.sha }}
+          PURE: ${{ steps.branch.outputs.pure }}
           WAIT_MINUTES: 90
           POLL_SECONDS: 60
         run: |
           if [ -z "$MERGE_TOKEN" ]; then
             echo "::notice::No LOQS_SYNC_TOKEN, so this run can't merge PR #$PR itself: the built-in token has no review bypass. Auto-merge is on; an approving review merges it once its checks pass."
+            exit 0
+          fi
+          if [ "$PURE" != true ]; then
+            echo "::warning::sync/$BRANCH holds commits made on it by hand or by a merge, so this run doesn't merge PR #$PR without a review. Auto-merge is on; an approving review merges it once its checks pass."
             exit 0
           fi
 
@@ -261,25 +358,25 @@ jobs:
             exit 1
           fi
 
-          head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          head=$HEAD
           check_state() {
             gh api --paginate "repos/$REPO/commits/$head/check-runs?per_page=100" > "$runs" \
               && bash .github/scripts/required-checks-state.sh "$rules" "$runs"
           }
 
-          # Ends the run green when the PR no longer needs this run.
+          # Ends the run when the PR no longer needs it (green) or when
+          # someone pushed to the sync branch during the wait (red).
           settled() {
-            local pr state now
-            pr=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid) || return 1
-            state=$(jq -r .state <<< "$pr")
-            now=$(jq -r .headRefOid <<< "$pr")
+            local state now
+            state=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state) || return 1
             if [ "$state" != OPEN ]; then
               echo "::notice::PR #$PR is $state; nothing left to merge."
               exit 0
             fi
+            now=$(gh api "repos/$REPO/git/ref/heads/sync/$BRANCH" --jq .object.sha) || return 1
             if [ "$now" != "$head" ]; then
-              echo "::notice::PR #$PR's head moved from $head to $now; the run queued for that push takes over."
-              exit 0
+              echo "::error::sync/$BRANCH moved from $head to $now during the wait, so PR #$PR was not merged. Merge it by approving it, or run this workflow again for $BRANCH."
+              exit 1
             fi
           }
 
