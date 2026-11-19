@@ -563,12 +563,22 @@ class QuantumProgram(Displayable):
             return as_seed_sequence(self.default_base_seed)
         if stored_root is not None:
             return stored_root
+        given = self._given_root_seed()
+        if given is not None:
+            return given
+        return SeedSequence()
+
+    def _given_root_seed(self) -> SeedSequence | None:
+        """The root the user gave: `default_base_seed`, else the sequence of
+        a seeded state in the initial history's last frame, else `None`."""
+        if self.default_base_seed is not None:
+            return as_seed_sequence(self.default_base_seed)
         history = self.initial_history
         if len(history):
             state = history[-1].get("state")
             if isinstance(state, BaseQuantumState) and state.seeded:
                 return state.seed_sequence
-        return SeedSequence()
+        return None
 
     def _run_serial_checkpointed(
         self,
@@ -1123,19 +1133,20 @@ class QuantumProgram(Displayable):
 
     # Static for more efficient parallel data movement
     @staticmethod
-    def _run_shot(
+    def _run_shot(  # noqa: C901
         program: QuantumProgram,
         max_frame_limit: int,
         root: SeedSequence,
         shot_index: int,
     ):
         num_frames = 0
-        # Every state built in this shot gets its own child of the root, and
-        # the instructions share one integer from a separate child.
+        # Each state built gets its own child of the root; instruction calls
+        # that don't build a state count position in a separate stream.
         state_builds = 0
-        instruction_seed = seed_word(
-            child_seed_sequence(root, shot_index, INSTRUCTION_STREAM)
-        )
+        calls = 0
+        # States of a run whose root wasn't given are marked unseeded, so
+        # they don't seed a program they're passed into.
+        root_given = program._given_root_seed() is not None
 
         history = copy.deepcopy(program.initial_history)
 
@@ -1157,11 +1168,14 @@ class QuantumProgram(Displayable):
                     "initial History drops 'state'. Pass plain frames, or a "
                     "History that doesn't drop 'state', to save it."
                 )
-            cast(BaseQuantumState, history[-1]["state"]).reset_seed(
+            initial_state = cast(BaseQuantumState, history[-1]["state"])
+            initial_state.reset_seed(
                 child_seed_sequence(
                     root, shot_index, STATE_STREAM, state_builds
                 )
             )
+            if not root_given:
+                initial_state.seeded = False
             state_builds += 1
         except (KeyError, IndexError):
             pass
@@ -1193,14 +1207,27 @@ class QuantumProgram(Displayable):
                     root, shot_index, STATE_STREAM, state_builds
                 )
                 state_builds += 1
+                builds_state = True
             else:
-                seed = instruction_seed
+                builds_state = False
             program_data = {
                 "history": history,
                 "patch_label": patch_label,
                 "stack": stack,
-                "seed": seed,
             }
+            if builds_state:
+                program_data["seed"] = seed
+            else:
+                if any(
+                    inst.param_alias(k) == "seed"
+                    for k in inst.param_priorities
+                ):
+                    program_data["seed"] = seed_word(
+                        child_seed_sequence(
+                            root, shot_index, INSTRUCTION_STREAM, calls
+                        )
+                    )
+                calls += 1
             if program.default_noise_model is not None:
                 program_data["model"] = program.default_noise_model
 
@@ -1228,6 +1255,11 @@ class QuantumProgram(Displayable):
                     raise
 
             applied_frame = inst.apply(**apply_kwargs)
+
+            if builds_state and not root_given:
+                built = applied_frame.get(inst.data.get("frame_key", ""))
+                if isinstance(built, BaseQuantumState):
+                    built.seeded = False
 
             # Only update stack if the instruction did not
             if "stack" not in applied_frame:
@@ -1419,10 +1451,16 @@ class QuantumProgram(Displayable):
         - "patch_label": The resolved [](api:InstructionLabel)'s `"patch_label"` entry
         - "stack": The current [](api:InstructionStack) object being
             read by [](api:run).
-        - "seed": An integer, always present, one per shot. It is separate
-            from the stream of the shot's quantum state. An instruction
-            whose data holds a quantum state `obj_class` (the
-            `"Init State"` builder) gets that state's `SeedSequence` instead.
+        - "seed": An integer, one per instruction call, different on every
+            call in a shot. It is set by the root, the shot index and the
+            call's position among the calls that don't build a state, so
+            reruns agree, and so does a run whose state comes in the
+            initial history. It is separate from the stream of the shot's
+            quantum state. An instruction whose data
+            holds a quantum state `obj_class` (the `"Init State"` builder)
+            gets that state's `SeedSequence` instead. A state an instruction
+            builds itself from this integer counts as `seeded`, in an
+            unseeded run too.
         - "model": The [](api:default_noise_model) if it is not `None`,
             otherwise it is not included in the dict
 

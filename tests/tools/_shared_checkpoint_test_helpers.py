@@ -659,11 +659,14 @@ NUM_SHOTS = 2
 SWEEP_STRENGTHS = [0.3, 0.6]
 
 
-def shot_seed(index: int, base: Any = BASE_SEED) -> int:
-    """The integer an instruction receives in shot `index` of a run rooted at
-    `base` (an integer or a `SeedSequence`)."""
+def shot_seed(index: int, base: Any = BASE_SEED, call: int = 0) -> int:
+    """The integer an instruction receives in call `call` (0-based position
+    among the calls that don't build a state) of shot `index` of a run
+    rooted at `base` (an integer or a `SeedSequence`)."""
     return seed_word(
-        child_seed_sequence(as_seed_sequence(base), index, INSTRUCTION_STREAM)
+        child_seed_sequence(
+            as_seed_sequence(base), index, INSTRUCTION_STREAM, call
+        )
     )
 
 

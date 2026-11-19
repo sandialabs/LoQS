@@ -463,8 +463,12 @@ _CLOSURE_WARNING = "ignore:'apply_fn' uses names from an enclosing function"
 @pytest.mark.filterwarnings(_CLOSURE_WARNING)
 def test_program_init_paths_agree(adapter):
     """A state in the initial history and one from "Init State" draw the
-    same per-shot streams, serially or in batches, and shots differ."""
-    from tests.tools._shared_checkpoint_test_helpers import InlineExecutor
+    same per-shot streams and give the instruction the same seed, serially
+    or in batches, and shots differ."""
+    from tests.tools._shared_checkpoint_test_helpers import (
+        InlineExecutor,
+        shot_seed,
+    )
 
     run_kwargs = {"num_shots": 4, "verbose": False}
     in_history = _draw_program(
@@ -480,6 +484,9 @@ def test_program_init_paths_agree(adapter):
     assert _records(in_history) == expected
     assert _records(built_batched) == expected
     assert len({tuple(draws) for draws in expected}) == 4
+    seeds = [shot_seed(i, SEED) for i in range(4)]
+    for results in (in_history, built_serial, built_batched):
+        assert _records(results, "inst_seed") == seeds
 
 
 @pytest.mark.filterwarnings(_CLOSURE_WARNING)

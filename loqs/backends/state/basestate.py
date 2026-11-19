@@ -44,7 +44,7 @@ class BaseQuantumState(Displayable):
 
     seeded: bool = False
     """True when `seed_sequence` was given, false when it came from fresh
-    entropy."""
+    entropy. A state a run seeded from fresh entropy is not `seeded`."""
 
     _rng: np.random.Generator
     """Random number generator."""

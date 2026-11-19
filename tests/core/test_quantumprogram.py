@@ -27,8 +27,10 @@ from loqs.internal.serializable import Serializable
 from loqs.core.history import History
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from tests.tools._shared_checkpoint_test_helpers import (
+    RECORD_SEED,
     InlineExecutor,
     inline_execution_patches,
+    seeded_stack,
     shot_seed,
 )
 
@@ -36,7 +38,7 @@ from tests.tools._shared_checkpoint_test_helpers import (
 def _counters(num_shots, root=0):
     """The counters of `_build_seeded_counter_program` for shots
     `0..num_shots-1`: each shot's instruction seed plus one."""
-    return [shot_seed(i, root) + 1 for i in range(num_shots)]
+    return [shot_seed(i, root, call=1) + 1 for i in range(num_shots)]
 
 
 def _init_counter_from_seed(initial_value):
@@ -58,8 +60,9 @@ _SEED_COUNTER_INSTRUCTION = Instruction(
 def _build_seeded_counter_program(
     state_type=None, name="seeded counter", default_base_seed=0
 ):
-    """A program whose shot `i` ends with `counter == shot_seed(i, 0) + 1`.
-    With a `state_type`, the program also initializes that state."""
+    """A program whose shot `i` ends with
+    `counter == shot_seed(i, 0, call=1) + 1`. With a `state_type`, the
+    program also initializes that state."""
     trivial_code = trivial_codepack.create_qec_code()
     qubits = ["Q0"]
     stack = [
@@ -420,6 +423,57 @@ class TestRootSeed:
         assert first.collect_shot_data("counter", -1) == expected
         assert replay.collect_shot_data("counter", -1) == expected
 
+    def test_each_instruction_call_gets_its_own_seed(self):
+        program = QuantumProgram(
+            seeded_stack(0.5) * 2,
+            global_instructions={"Record Seed": RECORD_SEED},
+        )
+        results = program.run(num_shots=2, verbose=False)
+        assert results.root_seed is not None
+        for i, history in results.shot_histories.items():
+            seeds = [frame["seed"] for frame in history]
+            assert seeds[0] != seeds[1]
+            assert seeds == [
+                shot_seed(i, results.root_seed, call=k) for k in (0, 1)
+            ]
+
+    @pytest.mark.parametrize(
+        "path, base",
+        [
+            pytest.param("init_state", None, id="init_state-unseeded"),
+            pytest.param("init_state", 5, id="init_state-seeded"),
+            pytest.param("history_state", None, id="history_state-unseeded"),
+            pytest.param("history_state", 5, id="history_state-seeded"),
+        ],
+    )
+    def test_chained_state_seeds_only_from_a_seeded_run(self, path, base):
+        if path == "init_state":
+            first = _build_state_program("A", default_base_seed=base)
+        else:
+            first = _build_state_program(
+                "A",
+                initial_history=History(
+                    [Frame({"state": QSimQuantumState(1, ["Q0"])})]
+                ),
+                default_base_seed=base,
+            )
+            # Without "Init State", the state that comes out is the reset
+            # initial-History state.
+            first = QuantumProgram.from_quantum_program(
+                first, list(first.instruction_stack)[1:]
+            )
+        state = first.run(num_shots=1, verbose=False).shot_histories[0][-1][
+            "state"
+        ]
+        second = _build_state_program(
+            "B", initial_history=History([Frame({"state": state})])
+        )
+        roots = [
+            seed_sequence_to_dict(second.run(verbose=False).root_seed)
+            for _ in range(2)
+        ]
+        assert (roots[0] == roots[1]) == (base is not None)
+
 
 class TestShotWallClockTimes:
     def test_populates_shot_wall_clock_times(self):
@@ -625,7 +679,9 @@ class TestResumeFromCheckpoint:
         for shot_idx in [0, 1, 4, 5]:
             results_worker = ProgramResults(name=f"Worker {shot_idx}")
             history = History()
-            history.append(Frame({"counter": shot_seed(shot_idx, 0) + 1}))
+            history.append(
+                Frame({"counter": shot_seed(shot_idx, 0, call=1) + 1})
+            )
             results_worker.add_shot(shot_idx, history, wall_clock_time=0.05)
             results_worker.checkpoint(
                 checkpoint_dir=checkpoint_dir, worker_id=f"w{shot_idx}"
@@ -678,7 +734,9 @@ class TestResumeFromCheckpoint:
             results_worker = ProgramResults()
             for shot_idx in shots:
                 history = History()
-                history.append(Frame({"counter": shot_seed(shot_idx, 0) + 1}))
+                history.append(
+                    Frame({"counter": shot_seed(shot_idx, 0, call=1) + 1})
+                )
                 results_worker.add_shot(shot_idx, history)
             results_worker.checkpoint(
                 checkpoint_dir=checkpoint_dir, worker_id=worker_id
