@@ -1,71 +1,17 @@
 """Tests for check-main-leak.sh, run against throwaway git repositories."""
 
-import itertools
-import os
-import subprocess
 from pathlib import Path
 
 import pytest
+from gitrepo import commit, git, make_repo, run_script
 
 SCRIPT = Path(__file__).resolve().parents[1] / "check-main-leak.sh"
-
-ENV = {
-    **os.environ,
-    "GIT_CONFIG_GLOBAL": os.devnull,
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_AUTHOR_NAME": "t",
-    "GIT_AUTHOR_EMAIL": "t@example.com",
-    "GIT_COMMITTER_NAME": "t",
-    "GIT_COMMITTER_EMAIL": "t@example.com",
-}
-
-
-# Strictly increasing commit dates fix the order of `merge-base --all`.
-CLOCK = itertools.count(1_700_000_000)
-
-
-def git(repo, *args):
-    subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        env={**ENV, "GIT_COMMITTER_DATE": f"{next(CLOCK)} +0000"},
-        check=True,
-        capture_output=True,
-        timeout=60,
-    )
-
-
-def commit(repo, name):
-    (repo / name).write_text(name)
-    git(repo, "add", name)
-    git(repo, "commit", "-m", name)
-
-
-def run_script(repo, *args):
-    return subprocess.run(
-        ["bash", str(SCRIPT), *args],
-        cwd=repo,
-        env=ENV,
-        capture_output=True,
-        timeout=60,
-    ).returncode
 
 
 @pytest.fixture
 def repo(tmp_path):
     """A bugfix branch and a main that has synced part of it."""
-    git(tmp_path, "init", "-b", "main")
-    commit(tmp_path, "root")
-    git(tmp_path, "branch", "bugfix")
-    git(tmp_path, "switch", "bugfix")
-    commit(tmp_path, "fix1")
-    git(tmp_path, "tag", "fix1")
-    commit(tmp_path, "fix2")
-    git(tmp_path, "switch", "main")
-    commit(tmp_path, "feature1")
-    git(tmp_path, "merge", "--no-ff", "-m", "sync", "fix1")
-    commit(tmp_path, "feature2")
-    return tmp_path
+    return make_repo(tmp_path)
 
 
 def from_bugfix_tip(repo):
@@ -139,7 +85,9 @@ def older_main_with_bugfix_merged_in(repo):
 )
 def test_scenarios(repo, builder, expected):
     builder(repo)
-    assert run_script(repo, "main", "bugfix", "pr") == expected
+    assert (
+        run_script(SCRIPT, repo, "main", "bugfix", "pr").returncode == expected
+    )
 
 
 def no_merge_base(repo):
@@ -156,4 +104,4 @@ def unknown_ref(repo):
 @pytest.mark.parametrize("builder", [unknown_ref, no_merge_base])
 def test_undecidable_is_an_error(repo, builder):
     main_ref, head = builder(repo)
-    assert run_script(repo, main_ref, "bugfix", head) == 2
+    assert run_script(SCRIPT, repo, main_ref, "bugfix", head).returncode == 2

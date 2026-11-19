@@ -1,0 +1,245 @@
+# Brings the fixes on a bugfix-release-* branch into main. When the branch
+# has commits main lacks, this opens (or keeps) one sync PR into main and
+# turns on auto-merge as a merge commit. With nothing to sync it ends
+# green. On a conflict it comments once, labels the PR sync-conflict and
+# fails red. A red run or an open sync PR is what a person picks up.
+#
+# Up-merge rules:
+# - A sync PR is merged with a merge commit only. A squash or rebase makes
+#   the next sync conflict on the same changes.
+# - main never flows into a bugfix branch: no "Update branch", no "Resolve
+#   conflicts", no local `git merge main` on it. A conflict is resolved on
+#   a sync/ branch cut from main, with the bugfix branch merged in, and
+#   that branch is merged into main with a merge commit.
+#
+# Repo settings this depends on:
+# - main must not require branches to be up to date before merging. A sync
+#   PR that fell behind could only be updated by writing main into the
+#   bugfix branch, so it would wait for good.
+# - The bugfix ruleset's "restrict deletions" is also what keeps
+#   "Automatically delete head branches" from deleting the bugfix branch
+#   when its sync PR merges.
+#
+# Conflicts are checked when the bugfix branch is pushed or this workflow
+# is dispatched, not when main moves. A push run uses the bugfix branch's
+# copy of this file; a dispatch needs it on main.
+#
+# Token: LOQS_SYNC_TOKEN is a fine-grained personal access token limited
+# to this repository, with Contents, Pull requests and Workflows read and
+# write. A sync that changes files under .github/workflows/ gets
+# auto-merge only through the Workflows permission, which the built-in
+# token can't have: on the fallback such a run fails and the PR is merged
+# by hand with a merge commit. The built-in token is the fallback for the
+# rest, with costs: a PR it opens doesn't get CI without an approval, the
+# repo must allow Actions to create pull requests, and a merge it makes
+# may not start main's workflows.
+# LOQS_SYNC_TOKEN owner: @qpl-ci-tester. Expires: 2027-11-17
+
+name: Sync bugfix branch into main
+
+on:
+  push:
+    branches: ['bugfix-release-*']
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: The bugfix branch to sync into main
+        type: string
+        required: true
+      dry-run:
+        description: Report what would happen and write nothing
+        type: boolean
+        default: false
+
+concurrency:
+  group: sync-bugfix-${{ inputs.branch || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ secrets.LOQS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ inputs.branch || github.ref_name }}
+      DRY_RUN: ${{ inputs.dry-run || false }}
+    steps:
+      - name: Refuse a branch that is not a bugfix branch
+        run: |
+          case "$BRANCH" in
+            bugfix-release-*) ;;
+            *)
+              echo "::error::'$BRANCH' is not a bugfix-release-* branch; nothing was synced."
+              exit 1
+              ;;
+          esac
+
+      - name: Check out full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide what a sync would take
+        id: state
+        run: |
+          state=$(bash .github/scripts/sync-state.sh origin/main "origin/$BRANCH")
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = nothing ]; then
+            echo "::notice::$BRANCH has no commits main lacks; nothing to sync."
+          else
+            echo "Sync state of $BRANCH against main: $state"
+          fi
+
+      - name: Find the open sync PR
+        id: find
+        if: ${{ steps.state.outputs.state != 'nothing' }}
+        run: |
+          pr=$(gh pr list --repo "$REPO" --base main --head "$BRANCH" --state open \
+            --json number,isCrossRepository,labels \
+            --jq '[.[] | select(.isCrossRepository == false)] | first // empty')
+          number=
+          labelled=false
+          if [ -n "$pr" ]; then
+            number=$(jq -r '.number' <<< "$pr")
+            if jq -e '.labels | map(.name) | index("sync-conflict") != null' <<< "$pr" > /dev/null; then
+              labelled=true
+            fi
+          fi
+          {
+            echo "number=$number"
+            echo "labelled=$labelled"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$number" ]; then
+            echo "Open sync PR: #$number"
+          else
+            echo "No open sync PR."
+          fi
+
+      - name: Open the sync PR
+        id: create
+        if: ${{ steps.state.outputs.state != 'nothing' && steps.find.outputs.number == '' }}
+        run: |
+          fixes=
+          if prs=$(gh pr list --repo "$REPO" --base "$BRANCH" --state merged --limit 100 \
+                --json number,mergeCommit) \
+              && commits=$(git rev-list "origin/main..origin/$BRANCH") \
+              && fixes=$(jq -r --arg repo "$REPO" --arg commits "$commits" \
+                '($commits | split("\n")) as $c
+                 | sort_by(.number) | .[]
+                 | select(.mergeCommit.oid as $o | $o != null and (($c | index($o)) != null))
+                 | "- [#\(.number)](https://github.com/\($repo)/pull/\(.number))"' <<< "$prs") \
+              && [ -n "$fixes" ]; then
+            list=$fixes
+          else
+            echo "::warning::Could not list the merged fix PRs for $BRANCH; the PR body says so."
+            list="The list of merged fix PRs could not be built. See the commits of this PR."
+          fi
+
+          body=$(cat <<'EOF'
+          This PR brings the fixes merged into `@BRANCH@` to `main`. It is
+          opened by the "Sync bugfix branch into main" workflow.
+
+          - **Merge it with a merge commit.** Never squash or rebase it.
+          - **Never use "Update branch" or "Resolve conflicts"** on it: both
+            write `main` into `@BRANCH@`.
+          - If it shows conflicts, resolve them on a new branch cut from
+            `main` with `@BRANCH@` merged in, open that as a PR into `main`
+            and merge it with a merge commit. This PR then shows as merged by
+            itself:
+
+            ```
+            git fetch origin
+            git switch -c sync/@BRANCH@ origin/main
+            git merge origin/@BRANCH@
+            # resolve the conflicts, then
+            git commit
+            git push -u origin sync/@BRANCH@
+            ```
+
+          Fix PRs merged into `@BRANCH@`:
+
+          @LIST@
+          EOF
+          )
+          body=${body//@BRANCH@/"$BRANCH"}
+          body=${body//@LIST@/"$list"}
+          title="Sync $BRANCH into main"
+
+          if [ "$DRY_RUN" = true ]; then
+            echo "::notice::Dry run: would open a PR titled '$title'."
+            echo "Body that would be used:"
+            echo "$body"
+            exit 0
+          fi
+
+          printf '%s\n' "$body" > "$RUNNER_TEMP/sync-body.md"
+          url=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+            --title "$title" --body-file "$RUNNER_TEMP/sync-body.md")
+          echo "Opened $url"
+          echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Report a conflict
+        if: ${{ steps.state.outputs.state == 'conflict' }}
+        env:
+          PR: ${{ steps.create.outputs.number || steps.find.outputs.number }}
+          LABELLED: ${{ steps.find.outputs.labelled }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            echo "::notice::Dry run: $BRANCH conflicts with main (PR: ${PR:-none yet})."
+            if [ "$LABELLED" = true ]; then
+              echo "::notice::Dry run: the PR already has sync-conflict; would only fail red."
+            else
+              echo "::notice::Dry run: would comment, add the sync-conflict label and fail red."
+            fi
+            exit 0
+          fi
+
+          if [ "$LABELLED" != true ]; then
+            comment=$(cat <<'EOF'
+          `@BRANCH@` conflicts with `main` (`CHANGELOG` is the usual place).
+          Resolve it on a new branch cut from `main`:
+
+          ```
+          git fetch origin
+          git switch -c sync/@BRANCH@ origin/main
+          git merge origin/@BRANCH@
+          # resolve the conflicts, then
+          git commit
+          git push -u origin sync/@BRANCH@
+          ```
+
+          Open a PR from `sync/@BRANCH@` into `main` and merge it with
+          "Create a merge commit". This PR then shows as merged by itself.
+          Never use "Resolve conflicts" or "Update branch" here: both write
+          `main` into `@BRANCH@`.
+          EOF
+            )
+            printf '%s\n' "${comment//@BRANCH@/"$BRANCH"}" > "$RUNNER_TEMP/sync-comment.md"
+            gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/sync-comment.md"
+            gh label create sync-conflict --repo "$REPO" --force \
+              --description "The sync PR conflicts with main" --color B60205
+            gh pr edit "$PR" --repo "$REPO" --add-label sync-conflict
+          fi
+          echo "::error::$BRANCH conflicts with main; auto-merge was not enabled. Resolve it as the comment on PR #$PR says."
+          exit 1
+
+      - name: Turn on auto-merge
+        if: ${{ steps.state.outputs.state == 'clean' }}
+        env:
+          PR: ${{ steps.create.outputs.number || steps.find.outputs.number }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            echo "::notice::Dry run: $BRANCH merges cleanly (PR: ${PR:-none yet}); would enable auto-merge (merge commit)."
+            exit 0
+          fi
+          if ! gh pr merge "$PR" --repo "$REPO" --auto --merge; then
+            echo "::error::Auto-merge could not be turned on for PR #$PR. Likely causes: the repo does not allow auto-merge or merge commits; or the sync changes files under .github/workflows/ and the run used the built-in token, or a LOQS_SYNC_TOKEN without the Workflows permission. Merge the PR by hand with \"Create a merge commit\" once its checks pass."
+            exit 1
+          fi
