@@ -146,6 +146,15 @@ jobs:
   # This is just so we can have a check for ALL matrix tests passing on PRs.
   # always() makes it fail, not skip, when a needed job fails or is cancelled.
   all-tests-passed:
+    # The condition must stay the same as the `if:` below (without always()):
+    # a skipped job under the required name would count as passed.
+    name: >-
+      ${{
+        (
+          (github.event_name == 'pull_request' && (github.base_ref == 'main' || startsWith(github.base_ref, 'bugfix-release-')) && github.event.pull_request.draft == false) ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        ) && 'all-tests-passed' || 'all-tests-passed (skipped)'
+      }}
     runs-on: ubuntu-latest
     needs: [full-unit-tests, notebook-tests, ci-script-tests]
     if: >-

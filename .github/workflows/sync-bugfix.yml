@@ -1,8 +1,17 @@
 # Brings the fixes on a bugfix-release-* branch into main. When the branch
 # has commits main lacks, this opens (or keeps) one sync PR into main and
-# turns on auto-merge as a merge commit. With nothing to sync it ends
-# green. On a conflict it comments once, labels the PR sync-conflict and
-# fails red. A red run or an open sync PR is what a person picks up.
+# turns on auto-merge as a merge commit. With LOQS_SYNC_TOKEN, the run
+# then waits for the checks main's rulesets require on the PR's head
+# commit and merges the PR itself as a merge commit, because auto-merge
+# by itself would wait for an approving review. A check with no run yet,
+# or only a skipped one, counts as pending: a job that hasn't started has
+# no check, and a skipped one would count as passed. A red check, a
+# timeout or a refused merge ends the run red; the PR is then merged by
+# approving it, or by running this workflow again once its checks pass.
+# On the built-in-token fallback the run doesn't wait or merge, and an
+# approving review merges the PR. With nothing to sync it ends green. On
+# a conflict it comments once, labels the PR sync-conflict and fails red.
+# A red run or an open sync PR is what a person picks up.
 #
 # Up-merge rules:
 # - A sync PR is merged with a merge commit only. A squash or rebase makes
@@ -22,7 +31,9 @@
 # - A sync PR merges without an approving review only because the token's
 #   owner is in a team the review ruleset lets bypass for pull requests.
 #   The owner must not be a repo admin: admins bypass the required checks
-#   too, so the PR could merge before CI is green.
+#   too, so the PR could merge before CI is green. The bypass is on the
+#   Reviews ruleset only; the required checks hold because the owner has
+#   no bypass on the Protected branches ruleset.
 #
 # Conflicts are checked when the bugfix branch is pushed or this workflow
 # is dispatched, not when main moves. A push run uses the bugfix branch's
@@ -35,8 +46,11 @@
 # token can't have: on the fallback such a run fails and the PR is merged
 # by hand with a merge commit. The built-in token is the fallback for the
 # rest, with costs: a PR it opens doesn't get CI without an approval, the
-# repo must allow Actions to create pull requests, and a merge it makes
-# may not start main's workflows.
+# repo must allow Actions to create pull requests, the run doesn't wait
+# for checks or merge, and a merge made with it may not start main's
+# workflows. The check and rule reads use the built-in token (checks:
+# read), since the fine-grained token has no Checks permission; only the
+# merge call uses LOQS_SYNC_TOKEN.
 # LOQS_SYNC_TOKEN owner: @qpl-ci-tester. Expires: 2027-11-17
 
 name: Sync bugfix branch into main
@@ -50,10 +64,6 @@ on:
         description: The bugfix branch to sync into main
         type: string
         required: true
-      dry-run:
-        description: Report what would happen and write nothing
-        type: boolean
-        default: false
 
 concurrency:
   group: sync-bugfix-${{ inputs.branch || github.ref_name }}
@@ -62,6 +72,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  checks: read
 
 jobs:
   sync:
@@ -73,7 +84,6 @@ jobs:
       GH_TOKEN: ${{ secrets.LOQS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
       BRANCH: ${{ inputs.branch || github.ref_name }}
-      DRY_RUN: ${{ inputs.dry-run || false }}
     steps:
       - name: Refuse a branch that is not a bugfix branch
         run: |
@@ -176,13 +186,6 @@ jobs:
           body=${body//@LIST@/"$list"}
           title="Sync $BRANCH into main"
 
-          if [ "$DRY_RUN" = true ]; then
-            echo "::notice::Dry run: would open a PR titled '$title'."
-            echo "Body that would be used:"
-            echo "$body"
-            exit 0
-          fi
-
           printf '%s\n' "$body" > "$RUNNER_TEMP/sync-body.md"
           url=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
             --title "$title" --body-file "$RUNNER_TEMP/sync-body.md")
@@ -195,16 +198,6 @@ jobs:
           PR: ${{ steps.create.outputs.number || steps.find.outputs.number }}
           LABELLED: ${{ steps.find.outputs.labelled }}
         run: |
-          if [ "$DRY_RUN" = true ]; then
-            echo "::notice::Dry run: $BRANCH conflicts with main (PR: ${PR:-none yet})."
-            if [ "$LABELLED" = true ]; then
-              echo "::notice::Dry run: the PR already has sync-conflict; would only fail red."
-            else
-              echo "::notice::Dry run: would comment, add the sync-conflict label and fail red."
-            fi
-            exit 0
-          fi
-
           if [ "$LABELLED" != true ]; then
             comment=$(cat <<'EOF'
           `@BRANCH@` conflicts with `main` (`CHANGELOG` is the usual place).
@@ -239,11 +232,83 @@ jobs:
         env:
           PR: ${{ steps.create.outputs.number || steps.find.outputs.number }}
         run: |
-          if [ "$DRY_RUN" = true ]; then
-            echo "::notice::Dry run: $BRANCH merges cleanly (PR: ${PR:-none yet}); would enable auto-merge (merge commit)."
-            exit 0
-          fi
           if ! gh pr merge "$PR" --repo "$REPO" --auto --merge; then
             echo "::error::Auto-merge could not be turned on for PR #$PR. Likely causes: the repo does not allow auto-merge or merge commits; or the sync changes files under .github/workflows/ and the run used the built-in token, or a LOQS_SYNC_TOKEN without the Workflows permission. Merge the PR by hand with \"Create a merge commit\" once its checks pass."
             exit 1
           fi
+
+      - name: Wait for the required checks and merge
+        if: ${{ steps.state.outputs.state == 'clean' }}
+        env:
+          PR: ${{ steps.create.outputs.number || steps.find.outputs.number }}
+          GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ secrets.LOQS_SYNC_TOKEN }}
+          WAIT_MINUTES: 90
+          POLL_SECONDS: 60
+        run: |
+          if [ -z "$MERGE_TOKEN" ]; then
+            echo "::notice::No LOQS_SYNC_TOKEN, so this run can't merge PR #$PR itself: the built-in token has no review bypass. Auto-merge is on; an approving review merges it once its checks pass."
+            exit 0
+          fi
+
+          rules="$RUNNER_TEMP/sync-rules.json"
+          runs="$RUNNER_TEMP/sync-check-runs.json"
+          gh api "repos/$REPO/rules/branches/main" > "$rules"
+          names=$(jq -r '[.[] | select(.type == "required_status_checks")
+            | .parameters.required_status_checks[].context] | unique | join(", ")' "$rules")
+          if [ -z "$names" ]; then
+            echo "::error::main's rulesets require no status check, so nothing would gate the merge; PR #$PR was not merged. Check the Protected branches ruleset."
+            exit 1
+          fi
+
+          head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          check_state() {
+            gh api --paginate "repos/$REPO/commits/$head/check-runs?per_page=100" > "$runs" \
+              && bash .github/scripts/required-checks-state.sh "$rules" "$runs"
+          }
+
+          # Ends the run green when the PR no longer needs this run.
+          settled() {
+            local pr state now
+            pr=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid) || return 1
+            state=$(jq -r .state <<< "$pr")
+            now=$(jq -r .headRefOid <<< "$pr")
+            if [ "$state" != OPEN ]; then
+              echo "::notice::PR #$PR is $state; nothing left to merge."
+              exit 0
+            fi
+            if [ "$now" != "$head" ]; then
+              echo "::notice::PR #$PR's head moved from $head to $now; the run queued for that push takes over."
+              exit 0
+            fi
+          }
+
+          deadline=$((SECONDS + WAIT_MINUTES * 60))
+          while :; do
+            settled || echo "::warning::Could not read PR #$PR; trying again."
+            state=pending
+            state=$(check_state) || echo "::warning::Could not read the checks of $head; trying again."
+            case "$state" in
+              green) break ;;
+              red)
+                echo "::error::A required check ($names) failed on $head, so PR #$PR was not merged. Fix it on $BRANCH, or re-run the failed jobs and then run this workflow again for $BRANCH (or approve the PR: auto-merge is on)."
+                exit 1
+                ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::The required checks ($names) on $head did not finish within $WAIT_MINUTES minutes, so PR #$PR was not merged. Once they pass, run this workflow again for $BRANCH (or approve the PR: auto-merge is on)."
+              exit 1
+            fi
+            sleep "$POLL_SECONDS"
+          done
+
+          if GH_TOKEN=$MERGE_TOKEN gh api -X PUT "repos/$REPO/pulls/$PR/merge" \
+              -f merge_method=merge -f sha="$head"; then
+            echo
+            echo "::notice::Merged PR #$PR at $head as a merge commit."
+            exit 0
+          fi
+          echo
+          settled || true
+          echo "::error::GitHub refused to merge PR #$PR at $head though its required checks ($names) passed. Likely causes: the team of LOQS_SYNC_TOKEN's owner no longer bypasses the Reviews ruleset for pull requests; main gained a rule the token can't meet; or the PR now conflicts with main. Merge it by hand with \"Create a merge commit\"."
+          exit 1
