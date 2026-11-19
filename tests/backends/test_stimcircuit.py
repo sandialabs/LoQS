@@ -3,6 +3,8 @@
 Behaviour shared with the other circuit backends is in test_circuits.py.
 """
 
+import warnings
+
 import pytest
 
 stim = pytest.importorskip("stim")
@@ -149,6 +151,15 @@ def test_unroll_repeats(circ_str, counts):
 def test_no_tick_warning_emitted():
     with pytest.warns(UserWarning):
         STIMPhysicalCircuit("H 0\nCX 0 1", ["Q0", "Q1"])
+
+
+def test_copy_keeps_tick_suppression():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        circ = STIMPhysicalCircuit(
+            "H 0\nCX 0 1", ["Q0", "Q1"], suppress_tick_warning=True
+        )
+        circ.copy()
 
 
 @pytest.mark.parametrize("case", ["spp", "merge-collision"])

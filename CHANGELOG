@@ -18,9 +18,10 @@
   - **`M(p)`-style measurement arguments:** They are applied on `STIMQuantumState` and refused on the dense states, instead of being dropped with a warning.
   - **No `PatchLayout` needed:** A physical-circuit instruction runs without patches unless it updates a Pauli frame.
   - **stim floor:** The `stim` extra requires `stim>=1.12`.
-- **No frame limit by default (#187, @sserita):** `max_frame_limit` now defaults to `None`, meaning no limit.
+- **No frame limit by default (#187, @sserita):** `max_frame_limit` now defaults to `None`, meaning no limit. A checkpoint written before the change resumes when you pass the limit it was written with (100, or 1_000_000 for `MultiProgramRunner`) or `force_resume=True`.
 
 ### Fixed
+- **`suppress_tick_warning` survives `copy()` (#187, @sserita):** A `STIMPhysicalCircuit` built with `suppress_tick_warning=True` keeps the flag through `copy()`.
 - **`applied_stim_circuit_str` fixes (@sserita):** A physical-circuit instruction's `applied_stim_circuit_str` now holds its own circuit whether or not the state is updated in place, includes `ZBasis*` measurements, and is no longer wiped by an instrument's pre and post operations.
 
 ## [1.3.1] - 2026-11-11

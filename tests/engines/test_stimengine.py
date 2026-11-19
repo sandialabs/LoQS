@@ -928,6 +928,27 @@ class TestFastPath:
             program, default_noise_model=model, default_base_seed=3
         )
 
+    def test_noisy_measurement_against_stim(self):
+        text = "H 1\nTICK\nM(0.2) 0\nMX(0.3) 1\n"
+        n = 2000
+        program = simple_program(text, [0, 1], default_base_seed=5)
+        # A stack-reading classical step sends `run` down the fast path
+        extra = InstructionLabel(
+            Instruction(lambda stack: Frame({}), name="classical")
+        )
+        program = QuantumProgram.from_quantum_program(
+            program,
+            InstructionStack(list(program.instruction_stack) + [extra]),
+            default_noise_model=build_stim_model(
+                stim.Circuit("H 0\nM 0\nMX 0")
+            ),
+        )
+        got = np.asarray(StimEngine().run(program, n)["measurements"])
+        expected = stim.Circuit(text).compile_sampler(seed=1).sample(n)
+        assert got.shape == (n, 2)
+        for i in range(2):
+            assert_agree(got[:, [i]], expected[:, [i]])
+
     def test_choice_node(self):
         program = self._choice_program([("X 0", 0.2), ("I 0", 0.8)])
         n = 2000
