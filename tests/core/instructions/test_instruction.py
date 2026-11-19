@@ -1,5 +1,6 @@
 """Tester for loqs.core.instructions.instruction"""
 
+import linecache
 import warnings
 
 import numpy as np
@@ -199,12 +200,28 @@ _EXEC_SOURCE = (
 )
 
 
-def test_source_unavailable_warns():
+@pytest.mark.parametrize(
+    "in_linecache", [False, True], ids=["exec", "notebook"]
+)
+def test_source_unavailable_warns(in_linecache, monkeypatch):
+    # An exec'd function has no source at all. A notebook cell's source sits
+    # in linecache (as IPython puts it) under a file name not on disk.
+    filename = "/nonexistent/ipykernel/cell.py"
+    if in_linecache:
+        lines = _EXEC_SOURCE.splitlines(True)
+        entry = (len(_EXEC_SOURCE), None, lines, filename)
+        monkeypatch.setitem(linecache.cache, filename, entry)
     env = {}
-    exec(_EXEC_SOURCE, env)
+    exec(compile(_EXEC_SOURCE, filename, "exec"), env)
 
     with pytest.warns(UserWarning):
-        Instruction(env["apply_fn"], {}, name="test")
+        inst = Instruction(env["apply_fn"], {}, name="test")
+
+    # Later copies and remaps of it warn again
+    with pytest.warns(UserWarning):
+        inst.copy()
+    with pytest.warns(UserWarning):
+        inst.map_qubits({})
 
     # A module-level function, or one given its source explicitly (as the
     # decode path does), has nothing to warn about
@@ -218,6 +235,43 @@ def test_source_unavailable_warns():
             serialized_apply_fn="def apply_fn():\n    pass\n",
         )
     assert len(caught) == 0
+
+
+def test_copy_does_not_reread_source(monkeypatch):
+    import inspect
+
+    def apply_fn(state=0, **kwargs):
+        return state
+
+    def map_qubits_fn(qubit_mapping, **kwargs):
+        return kwargs
+
+    read = []
+    real_getsource = inspect.getsource
+
+    def recording_getsource(obj):
+        read.append(obj)
+        return real_getsource(obj)
+
+    monkeypatch.setattr(inspect, "getsource", recording_getsource)
+
+    inst = Instruction(apply_fn, {}, map_qubits_fn, name="test")
+    for _ in range(3):
+        inst = inst.copy().map_qubits({})
+
+    assert read.count(apply_fn) == 1
+    assert read.count(map_qubits_fn) == 1
+
+
+def test_unhashable_callable_still_warns():
+    class Unhashable:
+        __hash__ = None
+
+        def __call__(self, state=0, **kwargs):
+            return state
+
+    with pytest.warns(UserWarning):
+        Instruction(Unhashable(), {}, name="test")
 
 
 @pytest.mark.parametrize("closure_param", ["apply_fn", "map_qubits_fn"])
