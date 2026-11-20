@@ -1301,13 +1301,15 @@ class CheckpointStore(_ReadableStore):
         names: Iterable[str],
         *,
         decode_cache: Any = None,
+        optional: Iterable[str] = (),
     ) -> dict[str, Any]:
         """Decode the named non-streamed attributes of the committed
         canonical file, without decoding any streamed entry.
 
         Raises `CheckpointReadError` naming the file if the file, marker or
         a name is missing or decoding fails, and `ValueError` for a
-        streamed attribute. A given `decode_cache` is re-rooted at the file.
+        streamed attribute. A name in `optional` that the file lacks comes
+        back as None. A given `decode_cache` is re-rooted at the file.
         """
         wanted = list(names)
         streamed_names = {s.canonical for s in self.layout.attrs}
@@ -1319,11 +1321,18 @@ class CheckpointStore(_ReadableStore):
                 )
         with self._committed_object(decode_cache) as (group, cache):
             result = decode_object_attrs(group, wanted, cache)
-        absent = [name for name in wanted if name not in result]
+        optional = set(optional)
+        absent = [
+            name
+            for name in wanted
+            if name not in result and name not in optional
+        ]
         if absent:
             raise CheckpointReadError(
                 self.canonical_path, f"attributes {absent} are missing"
             )
+        for name in optional:
+            result.setdefault(name, None)
         return result
 
     def read_config(self) -> Serializable:
@@ -1877,14 +1886,19 @@ class _NestedStore(_ReadOnlyStore):
         raise KeyError(key)
 
     def read_attrs(
-        self, names: Iterable[str], *, decode_cache: Any = None
+        self,
+        names: Iterable[str],
+        *,
+        decode_cache: Any = None,
+        optional: Iterable[str] = (),
     ) -> dict[str, Any]:
         """Decode the named non-streamed attributes of the nested object,
         with the enclosing file's decode cache.
 
         Streamed attributes are never touched: naming one raises
         `ValueError`. A missing enclosing entry, a missing name or a decode
-        failure raises `CheckpointReadError` naming the enclosing file.
+        failure raises `CheckpointReadError` naming the enclosing file. A
+        name in `optional` that the entry lacks comes back as None.
         """
         wanted = list(names)
         streamed_names = {s.canonical for s in self.layout.attrs}
@@ -1906,9 +1920,16 @@ class _NestedStore(_ReadOnlyStore):
                 f"entry {self._key} of {self._parent_attr.canonical!r} "
                 "is missing",
             ) from exc
-        absent = [name for name in wanted if name not in result]
+        optional = set(optional)
+        absent = [
+            name
+            for name in wanted
+            if name not in result and name not in optional
+        ]
         if absent:
             raise CheckpointReadError(path, f"attributes {absent} are missing")
+        for name in optional:
+            result.setdefault(name, None)
         return result
 
 

@@ -2,7 +2,22 @@
 
 ## [1.3.2] - Unreleased
 
+### Changed
+- **Seeded results change, once (#74, #118, #154, #195, @sserita):** Each shot now draws from independent NumPy `SeedSequence` streams keyed by the run's root seed and the shot index, not `default_base_seed + i`, so serial, parallel and resumed runs agree shot for shot. Seeded runs won't reproduce pre-1.3.2 outcomes (which were inconsistently reproducible anyway).
+  - **Root seed:** `default_base_seed` (an integer or a `SeedSequence`), else a seeded state in the initial `History`, else fresh entropy. `ProgramResults.root_seed` records it; pass it as `default_base_seed` to replay a run.
+  - **Resume checks the root:** An unseeded run resumes on its stored root; a different `default_base_seed` (even with `force_resume`) or a pre-1.3.2 checkpoint is refused.
+  - **Noise sweeps:** Point `i` runs on the child of `base_seed` keyed by `i`. Older sweep files still read.
+  - **Instruction `"seed"`:** One integer per instruction call from its own stream, so repeated calls in a shot draw different values, now set in unseeded runs too; a state-building instruction (`"Init State"`) gets the state's `SeedSequence`.
+- **Saved states carry their RNG (#118, #195, @sserita):** NumPy-statevector, QSim and STIM states keep their generator through `write`/`read` and pickling; NumPy generators continue exactly, and STIM's tableau reseeds deterministically (Stim can't export it). LoQS 1.3.1 can't read a 1.3.2 file holding a NumPy-statevector state. Files that keep states grow by about 60 to 330 bytes per stored state (about 260 in the measured case); files that keep none don't change.
+
+### Removed
+- **`NoiseSweepRunner`'s `seed_stride` (#154, #195, @sserita):** Points get independent streams, so the stride and its `num_shots` check are gone.
+- **The states' `seed` attribute (#154, #195, @sserita):** Use `seed_sequence` instead.
+
 ### Fixed
+- **Initial-`History` states and `"Init State"` agree (#74, #195, @sserita):** On every backend they give the same per-shot outcomes for the same root, and shots no longer repeat one outcome.
+- **`STIMQuantumState.copy()` continues the tableau stream (#154, #195, @sserita):** A seeded state's copy no longer restarts it.
+- **Copy-constructing a NumPy-statevector state honours a given seed (#154, #195, @sserita):** The seed was ignored before.
 - **Faster instruction copies and remaps (#192, @sserita):** An `Instruction` checks each function's source once, not on every copy, so codepack programs run several times faster per shot.
 
 ## [1.3.1] - 2026-11-11

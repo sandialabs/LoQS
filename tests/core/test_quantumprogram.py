@@ -4,6 +4,7 @@ import warnings
 
 import pytest
 from concurrent.futures import ThreadPoolExecutor
+from numpy.random import SeedSequence
 from pathlib import Path
 
 # TODO: Rework to run with native backend only if failure to import
@@ -21,13 +22,23 @@ from loqs.internal.checkpointstore import (
     CheckpointReadError,
     CheckpointStore,
 )
+from loqs.internal.seeding import child_seed_sequence, seed_sequence_to_dict
 from loqs.internal.serializable import Serializable
 from loqs.core.history import History
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from tests.tools._shared_checkpoint_test_helpers import (
+    RECORD_SEED,
     InlineExecutor,
     inline_execution_patches,
+    seeded_stack,
+    shot_seed,
 )
+
+
+def _counters(num_shots, root=0):
+    """The counters of `_build_seeded_counter_program` for shots
+    `0..num_shots-1`: each shot's instruction seed plus one."""
+    return [shot_seed(i, root, call=1) + 1 for i in range(num_shots)]
 
 
 def _init_counter_from_seed(initial_value):
@@ -46,9 +57,12 @@ _SEED_COUNTER_INSTRUCTION = Instruction(
 )
 
 
-def _build_seeded_counter_program(state_type=None, name="seeded counter"):
-    """A program whose shot `i` ends with `counter == i + 1`. With a
-    `state_type`, the program also initializes that state."""
+def _build_seeded_counter_program(
+    state_type=None, name="seeded counter", default_base_seed=0
+):
+    """A program whose shot `i` ends with
+    `counter == shot_seed(i, 0, call=1) + 1`. With a `state_type`, the
+    program also initializes that state."""
     trivial_code = trivial_codepack.create_qec_code()
     qubits = ["Q0"]
     stack = [
@@ -82,7 +96,7 @@ def _build_seeded_counter_program(state_type=None, name="seeded counter"):
         global_instructions={
             "Init Counter From Seed": _SEED_COUNTER_INSTRUCTION
         },
-        default_base_seed=0,
+        default_base_seed=default_base_seed,
         name=name,
         **kwargs,
     )
@@ -147,11 +161,11 @@ def _spy_run_shot(monkeypatch, crash_after=None):
     calls = []
     original = QuantumProgram._run_shot
 
-    def spy(self, max_frame_limit, seed, shot_index):
+    def spy(self, max_frame_limit, root, shot_index):
         calls.append(shot_index)
         if crash_after is not None and len(calls) > crash_after:
             raise RuntimeError("Simulated crash")
-        return original(self, max_frame_limit, seed, shot_index)
+        return original(self, max_frame_limit, root, shot_index)
 
     monkeypatch.setattr(QuantumProgram, "_run_shot", spy)
     return calls
@@ -245,7 +259,10 @@ class TestQuantumProgram:
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_program_serialization_parameterized(self, format, make_temp_path):
-        program = _build_state_program("Trivial counter test", increments=(1,))
+        root = child_seed_sequence(SeedSequence(), 3)
+        program = _build_state_program(
+            "Trivial counter test", increments=(1,), default_base_seed=root
+        )
         stack_length = len(program.instruction_stack)
         patch_type_count = len(program.patch_types)
 
@@ -260,6 +277,9 @@ class TestQuantumProgram:
 
             assert len(loaded_program.run().shot_histories) == 1
             assert loaded_program.name == "Trivial counter test"
+            assert seed_sequence_to_dict(
+                loaded_program.default_base_seed
+            ) == seed_sequence_to_dict(root)
             assert len(loaded_program.instruction_stack) == stack_length
             assert loaded_program.state_type == QSimQuantumState
             assert loaded_program.patch_types is not None
@@ -352,6 +372,107 @@ class TestExecutorParallelism:
             else:
                 results = program.run(shot_executor=pool, **run_kwargs)
                 assert len(results.shot_histories) == 4
+
+
+class TestRootSeed:
+    """The run's root seed: its precedence, and replay from the record."""
+
+    @pytest.mark.parametrize(
+        "base, state_seed, expected",
+        [
+            pytest.param(5, 9, 5, id="base_seed_wins"),
+            pytest.param(None, 9, 9, id="seeded_state"),
+            pytest.param(None, None, None, id="unseeded_state"),
+        ],
+    )
+    def test_root_seed_precedence(self, base, state_seed, expected):
+        state = QSimQuantumState(1, ["Q0"], seed=state_seed)
+        program = _build_state_program(
+            "Root precedence",
+            initial_history=History([Frame({"state": state})]),
+            default_base_seed=base,
+        )
+        roots = [
+            seed_sequence_to_dict(program.run(verbose=False).root_seed)
+            for _ in range(2)
+        ]
+        if expected is None:
+            assert roots[0] != roots[1]
+        else:
+            assert roots == [seed_sequence_to_dict(SeedSequence(expected))] * 2
+
+    def test_init_state_run_draws_a_new_root_each_time(self):
+        program = _build_state_program("Root of Init State")
+        roots = [
+            seed_sequence_to_dict(program.run(verbose=False).root_seed)
+            for _ in range(2)
+        ]
+        assert roots[0] != roots[1]
+
+    def test_replay_from_recorded_root(self):
+        num_shots = 4
+        first = _build_seeded_counter_program(default_base_seed=None).run(
+            num_shots=num_shots, verbose=False
+        )
+        assert first.root_seed is not None
+        replay = _build_seeded_counter_program(
+            default_base_seed=first.root_seed
+        ).run(num_shots=num_shots, verbose=False)
+
+        expected = _counters(num_shots, first.root_seed)
+        assert first.collect_shot_data("counter", -1) == expected
+        assert replay.collect_shot_data("counter", -1) == expected
+
+    def test_each_instruction_call_gets_its_own_seed(self):
+        program = QuantumProgram(
+            seeded_stack(0.5) * 2,
+            global_instructions={"Record Seed": RECORD_SEED},
+        )
+        results = program.run(num_shots=2, verbose=False)
+        assert results.root_seed is not None
+        for i, history in results.shot_histories.items():
+            seeds = [frame["seed"] for frame in history]
+            assert seeds[0] != seeds[1]
+            assert seeds == [
+                shot_seed(i, results.root_seed, call=k) for k in (0, 1)
+            ]
+
+    @pytest.mark.parametrize(
+        "path, base",
+        [
+            pytest.param("init_state", None, id="init_state-unseeded"),
+            pytest.param("init_state", 5, id="init_state-seeded"),
+            pytest.param("history_state", None, id="history_state-unseeded"),
+            pytest.param("history_state", 5, id="history_state-seeded"),
+        ],
+    )
+    def test_chained_state_seeds_only_from_a_seeded_run(self, path, base):
+        if path == "init_state":
+            first = _build_state_program("A", default_base_seed=base)
+        else:
+            first = _build_state_program(
+                "A",
+                initial_history=History(
+                    [Frame({"state": QSimQuantumState(1, ["Q0"])})]
+                ),
+                default_base_seed=base,
+            )
+            # Without "Init State", the state that comes out is the reset
+            # initial-History state.
+            first = QuantumProgram.from_quantum_program(
+                first, list(first.instruction_stack)[1:]
+            )
+        state = first.run(num_shots=1, verbose=False).shot_histories[0][-1][
+            "state"
+        ]
+        second = _build_state_program(
+            "B", initial_history=History([Frame({"state": state})])
+        )
+        roots = [
+            seed_sequence_to_dict(second.run(verbose=False).root_seed)
+            for _ in range(2)
+        ]
+        assert (roots[0] == roots[1]) == (base is not None)
 
 
 class TestShotWallClockTimes:
@@ -485,7 +606,7 @@ class TestResumeFromCheckpoint:
 
         assert len(calls) == 2
         _assert_wall_clock_times(results, 4)
-        assert results.collect_shot_data("counter", -1) == [1, 2, 3, 4]
+        assert results.collect_shot_data("counter", -1) == _counters(4)
 
     @pytest.mark.parametrize(
         "run_kwargs",
@@ -550,6 +671,7 @@ class TestResumeFromCheckpoint:
             max_frame_limit=100,
             checkpoint_enabled=True,
             checkpoint_dir=checkpoint_dir,
+            root_seed=0,
         )
 
         # Stage a partial checkpoint: shots {0,1} and {4,5} done, {2,3}
@@ -557,7 +679,9 @@ class TestResumeFromCheckpoint:
         for shot_idx in [0, 1, 4, 5]:
             results_worker = ProgramResults(name=f"Worker {shot_idx}")
             history = History()
-            history.append(Frame({"counter": shot_idx + 1}))
+            history.append(
+                Frame({"counter": shot_seed(shot_idx, 0, call=1) + 1})
+            )
             results_worker.add_shot(shot_idx, history, wall_clock_time=0.05)
             results_worker.checkpoint(
                 checkpoint_dir=checkpoint_dir, worker_id=f"w{shot_idx}"
@@ -576,7 +700,7 @@ class TestResumeFromCheckpoint:
         )
 
         assert sorted(calls) == [2, 3]
-        assert results.collect_shot_data("counter", -1) == [1, 2, 3, 4, 5, 6]
+        assert results.collect_shot_data("counter", -1) == _counters(6)
 
         # Worker files were cleaned up and results.h5 consolidated
         leftovers = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
@@ -603,13 +727,16 @@ class TestResumeFromCheckpoint:
             max_frame_limit=100,
             checkpoint_enabled=True,
             checkpoint_dir=checkpoint_dir,
+            root_seed=0,
         )
 
         for worker_id, shots in (("w0", [0, 1]), ("w1", [2, 3])):
             results_worker = ProgramResults()
             for shot_idx in shots:
                 history = History()
-                history.append(Frame({"counter": shot_idx + 1}))
+                history.append(
+                    Frame({"counter": shot_seed(shot_idx, 0, call=1) + 1})
+                )
                 results_worker.add_shot(shot_idx, history)
             results_worker.checkpoint(
                 checkpoint_dir=checkpoint_dir, worker_id=worker_id
@@ -631,7 +758,7 @@ class TestResumeFromCheckpoint:
             verbose=False,
         )
 
-        assert results.collect_shot_data("counter", -1) == [1, 2, 3, 4]
+        assert results.collect_shot_data("counter", -1) == _counters(4)
         assert (checkpoint_dir / "results.h5").exists()
         leftovers = CheckpointStore(checkpoint_dir, SHOT_LAYOUT)
         assert not leftovers.payload_paths()
@@ -699,11 +826,12 @@ class TestResumeFromCheckpoint:
         assert results.shot_histories == {}
         assert len(results.shot_wall_clock_times) == 5
 
+    @pytest.mark.parametrize("force_resume", [False, True])
     def test_resume_seed_mismatch_raises_without_decoding_a_shot(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, force_resume
     ):
-        """The resume config check still compares `default_base_seed`, and
-        reads no shot to do it."""
+        """A `default_base_seed` that differs from the recorded root always
+        raises, `force_resume` or not, and reads no shot to do it."""
         program = _build_seeded_counter_program()
         program.run(num_shots=3, checkpoint=True, checkpoint_dir=tmp_path)
         other = _build_seeded_counter_program()
@@ -715,8 +843,73 @@ class TestResumeFromCheckpoint:
                 num_shots=3,
                 checkpoint=True,
                 resume=True,
+                force_resume=force_resume,
                 checkpoint_dir=tmp_path,
             )
+
+    @pytest.mark.parametrize("force_resume", [False, True])
+    def test_resume_of_pre_1_3_2_checkpoint_raises(
+        self, tmp_path, monkeypatch, force_resume
+    ):
+        """A checkpoint with no recorded root can't be resumed, but its
+        shots still load, with no root."""
+        program = _build_seeded_counter_program()
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                ProgramResults,
+                "_SERIALIZE_ATTRS",
+                [
+                    a
+                    for a in ProgramResults._SERIALIZE_ATTRS
+                    if a != "root_seed"
+                ],
+            )
+            program.run(num_shots=3, checkpoint=True, checkpoint_dir=tmp_path)
+
+        unseeded = _build_seeded_counter_program(default_base_seed=None)
+        with pytest.raises(ValueError):
+            unseeded.run(
+                num_shots=3,
+                checkpoint=True,
+                resume=True,
+                force_resume=force_resume,
+                checkpoint_dir=tmp_path,
+            )
+
+        loaded = ProgramResults()
+        loaded.load_checkpoint(checkpoint_dir=tmp_path)
+        assert loaded.root_seed is None
+        assert loaded.collect_shot_data("counter", -1) == _counters(3)
+
+    def test_unseeded_resume_reuses_stored_root(self, monkeypatch, tmp_path):
+        program = _build_seeded_counter_program(default_base_seed=None)
+        _spy_run_shot(monkeypatch, crash_after=2)
+        with pytest.raises(RuntimeError):
+            program.run(
+                num_shots=4,
+                checkpoint=True,
+                checkpoint_batch_size=1,
+                checkpoint_dir=tmp_path,
+                verbose=False,
+            )
+        monkeypatch.undo()
+        stored = ProgramResults()
+        stored.load_checkpoint(checkpoint_dir=tmp_path)
+
+        results = program.run(
+            num_shots=4,
+            checkpoint=True,
+            resume=True,
+            checkpoint_batch_size=1,
+            checkpoint_dir=tmp_path,
+            verbose=False,
+        )
+        assert seed_sequence_to_dict(results.root_seed) == (
+            seed_sequence_to_dict(stored.root_seed)
+        )
+        assert results.collect_shot_data("counter", -1) == _counters(
+            4, stored.root_seed
+        )
 
     def test_loky_executor_checkpointed_run_reads_back_from_store(
         self, tmp_path
@@ -735,7 +928,7 @@ class TestResumeFromCheckpoint:
             results_filename="custom.h5",
             verbose=False,
         )
-        assert results.collect_shot_data("counter", -1) == [1, 2, 3, 4]
+        assert results.collect_shot_data("counter", -1) == _counters(4)
         assert sorted(p.name for p in tmp_path.iterdir()) == ["custom.h5"]
 
     def test_resume_over_a_corrupt_payload_raises_before_any_shot(
@@ -941,6 +1134,20 @@ def test_checkpoint_state_dropped_unless_kept(case, tmp_path):
                     isinstance(v, BaseQuantumState)
                     for v in _label_values(frame)
                 )
+
+
+def test_checkpoint_collect_keeps_each_shots_rng(tmp_path):
+    from loqs.internal.seeding import seed_sequence_to_dict
+
+    program = _state_composite_program(initial_history=History([]))
+    with pytest.warns(UserWarning, match="no_serialize_keys"):
+        results = program.run(
+            num_shots=2, checkpoint=True, checkpoint_dir=tmp_path / "ckpt"
+        )
+    assert not results.shot_histories
+    states = results.collect_shot_data("state", -1)
+    seqs = {repr(seed_sequence_to_dict(s.seed_sequence)) for s in states}
+    assert len(seqs) == 2
 
 
 @pytest.mark.parametrize("case", ["frames", "history", "dropped"])

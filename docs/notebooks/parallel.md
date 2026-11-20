@@ -151,7 +151,12 @@ len(results.shot_histories)
 ```
 
 Omitting `shot_executor` (the default) runs shots serially in the calling
-process, exactly as before.
+process, exactly as before. Either way the outcomes match shot for shot:
+each shot draws from its own NumPy `SeedSequence` streams, keyed by the
+run's root seed and the shot index, never by which worker ran it or in
+what order. (A counter-based generator such as Philox, which could let a
+batched executor compute each shot's draws with no per-shot state, is
+future work; it would stay inside the state backends.)
 
 ### Program-level
 
@@ -563,7 +568,7 @@ with tempfile.TemporaryDirectory() as resume_checkpoint_dir:
     print(f"shots after resuming call: {len(finished.collect_shot_data('counter', -1))}")
 ```
 
-If a resuming call's own `num_shots`/`max_frame_limit`/RNG seed happen to exactly match the original call, no mismatch is detected and `force_resume` isn't needed at all.
+If a resuming call's own `num_shots`/`max_frame_limit` happen to exactly match the original call, no mismatch is detected and `force_resume` isn't needed at all. The root seed is checked separately and `force_resume` doesn't cover it: an unseeded run resumes on its stored root, a different `default_base_seed` is refused, and a checkpoint written before 1.3.2 is refused.
 
 This mechanism is scoped to `QuantumProgram`/`ProgramResults`'s own
 shot-level checkpointing. The program-level call sites ([EdesignRunner](api:EdesignRunner),

@@ -25,15 +25,22 @@ from loqs.internal.serializable import (
     EncodablePrimitives,
     IncorrectDecodableTypeError,
     MisformedDecodableError,
+    _restore_subtree_instance_attrs,
 )
 
 NUMPY_SCALAR_TYPES = (np.number, np.bool_)
 """The numpy scalar types the encoders tag, so they read back with their dtype."""
 
 
-def copy_cached_reference(reference_obj):
+def copy_cached_reference(reference_obj, instance_attrs=None):
     """Copy an already-decoded object for a "copy"-type cached reference,
     used by both encoders' `decode_cached_obj`.
+
+    With `instance_attrs` (the list a `copy` record stores, see
+    `Serializable._subtree_instance_attrs`), the copy is always a
+    `copy.deepcopy`, since the cheap branches below share nested content
+    and putting the values back would change the source's too. The values
+    are then restored onto the copy's own objects.
 
     For classes confirmed to treat their own nested content as immutable
     once constructed -- [](api:History) and
@@ -61,6 +68,10 @@ def copy_cached_reference(reference_obj):
     from loqs.core.recordables.patchlayout import PatchLayout
     from loqs.core.recordables.qeccodepatch import QECCodePatch
 
+    if instance_attrs is not None:
+        copied = copy.deepcopy(reference_obj)
+        _restore_subtree_instance_attrs(copied, instance_attrs)
+        return copied
     if isinstance(reference_obj, (History, InstructionStack)):
         return type(reference_obj)(reference_obj)
     if isinstance(reference_obj, (Instruction, QECCode)):

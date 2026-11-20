@@ -22,6 +22,7 @@ from loqs.backends.reps import (
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
+from loqs.internal.seeding import child_seed_sequence
 
 LABELS = ["Q0", "Q1"]
 SEED = 20241016
@@ -357,3 +358,241 @@ def test_serialization_after_instrument(adapter, make_temp_path):
         loaded = adapter.cls.read(tmp_path)
 
     assert adapter.probe(loaded) == [0]
+
+
+def _draw(adapter, state, n=64):
+    """`n` outcomes drawn from a one-qubit state, advancing its generators.
+
+    Each shot applies H then a projection reset to 0, which draws from the
+    tableau on STIM and from the NumPy generator on the other backends.
+    """
+    q = ["Q0"]
+    reps = [adapter.gate("H", q), ZBasisProjectionInstrumentRep(0, True, q)]
+    return state.apply_reps_inplace(reps * n)["Q0"]
+
+
+def test_copy_continues_stream(adapter):
+    state = adapter.make(1, ["Q0"], seed=SEED)
+    _draw(adapter, state)
+    copies = [state.copy(), copy.deepcopy(state)]
+
+    expected = _draw(adapter, state)
+    for dup in copies:
+        assert dup.seeded
+        assert _draw(adapter, dup) == expected
+
+
+def test_seed_sequence_seeding(adapter):
+    q = ["Q0"]
+    seq = np.random.SeedSequence(SEED)
+
+    from_int = adapter.make(1, q, seed=SEED)
+    from_seq = adapter.make(1, q, seed=seq)
+    assert from_seq.seed_sequence is seq
+    reference = _draw(adapter, from_int)
+    assert _draw(adapter, from_seq) == reference
+
+    unseeded = adapter.make(1, q)
+    replay = adapter.make(1, q, seed=unseeded.seed_sequence)
+    assert _draw(adapter, replay) == _draw(adapter, unseeded)
+
+    _draw(adapter, from_int)
+    from_int.reset_seed(np.random.SeedSequence(SEED))
+    assert _draw(adapter, from_int) == reference
+
+
+def test_copy_construct_honours_seed(adapter):
+    q = ["Q0"]
+    source = adapter.make(1, q, seed=SEED + 1)
+    _draw(adapter, source)
+
+    built = adapter.cls(source, q, seed=SEED)
+    assert _draw(adapter, built) == _draw(
+        adapter, adapter.make(1, q, seed=SEED)
+    )
+
+
+def test_child_seed_sequence_matches_spawn():
+    def parent():
+        return np.random.SeedSequence(SEED, spawn_key=(3,), pool_size=8)
+
+    expected = parent().spawn(2)[1].generate_state(4)
+    child = child_seed_sequence(parent(), 1)
+    assert child.generate_state(4).tolist() == expected.tolist()
+
+
+def _draw_program(adapter, initial_state=None, stack=None, **kwargs):
+    """A program whose instruction draws 64 outcomes from its state in
+    place and records them with the seed it received. With `initial_state`
+    it starts from that state; otherwise `stack` (default one `"Init State"`
+    then the draw) builds it."""
+    from loqs.core import Frame, Instruction, QuantumProgram
+    from loqs.core.history import History
+
+    def draw(state, seed):
+        return Frame({"draws": _draw(adapter, state), "inst_seed": seed})
+
+    draw_instruction = Instruction(
+        draw,
+        param_priorities={"state": ["history[-1]"], "seed": ["program"]},
+        name="Draw",
+    )
+    init = {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}
+    if stack is None:
+        stack = [{"instruction": "Draw"}]
+        if initial_state is None:
+            stack.insert(0, init)
+    if initial_state is not None:
+        kwargs["initial_history"] = History([Frame({"state": initial_state})])
+    return QuantumProgram(
+        stack,
+        state_type=adapter.cls,
+        global_instructions={"Draw": draw_instruction},
+        **kwargs,
+    )
+
+
+def _records(results, key="draws"):
+    histories = results.shot_histories
+    return [histories[i][-1][key] for i in sorted(histories)]
+
+
+_CLOSURE_WARNING = "ignore:'apply_fn' uses names from an enclosing function"
+
+
+@pytest.mark.filterwarnings(_CLOSURE_WARNING)
+def test_program_init_paths_agree(adapter):
+    """A state in the initial history and one from "Init State" draw the
+    same per-shot streams and give the instruction the same seed, serially
+    or in batches, and shots differ."""
+    from tests.tools._shared_checkpoint_test_helpers import (
+        InlineExecutor,
+        shot_seed,
+    )
+
+    run_kwargs = {"num_shots": 4, "verbose": False}
+    in_history = _draw_program(
+        adapter, adapter.make(1, ["Q0"]), default_base_seed=SEED
+    ).run(**run_kwargs)
+    built = _draw_program(adapter, default_base_seed=SEED)
+    built_serial = built.run(**run_kwargs)
+    built_batched = built.run(
+        shot_executor=InlineExecutor(), n_shot_batches=2, **run_kwargs
+    )
+
+    expected = _records(built_serial)
+    assert _records(in_history) == expected
+    assert _records(built_batched) == expected
+    assert len({tuple(draws) for draws in expected}) == 4
+    seeds = [shot_seed(i, SEED) for i in range(4)]
+    for results in (in_history, built_serial, built_batched):
+        assert _records(results, "inst_seed") == seeds
+
+
+@pytest.mark.filterwarnings(_CLOSURE_WARNING)
+def test_program_consumers_draw_own_streams(adapter):
+    """The state and the instructions don't share a seed, and a second
+    state built in one shot doesn't replay the first's stream."""
+    init = {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}
+    program = _draw_program(
+        adapter,
+        stack=[init, {"instruction": "Draw"}, init, {"instruction": "Draw"}],
+        default_base_seed=SEED,
+    )
+    history = program.run(num_shots=1, verbose=False).shot_histories[0]
+    draws = [f["draws"] for f in history if f.get("draws") is not None]
+    inst_seed = history[-1]["inst_seed"]
+
+    fresh = _draw(adapter, adapter.make(1, ["Q0"], seed=inst_seed))
+    assert len(draws) == 2
+    assert draws[0] != draws[1]
+    assert fresh not in draws
+
+
+def _advanced(adapter, seed, extra):
+    """A seeded state whose generator has moved on by a seed-dependent
+    amount."""
+    state = adapter.make(1, ["Q0"], seed=seed)
+    _draw(adapter, state, n=4)
+    for _ in range(extra):
+        state._rng.random()
+    return state
+
+
+def _next_values(state, n=8):
+    return [state._rng.random() for _ in range(n)]
+
+
+def _send(obj, how, make_temp_path):
+    import pickle
+
+    from loqs.internal.serializable import Serializable
+
+    if how == "pickle":
+        return pickle.loads(pickle.dumps(obj))
+    suffix = ".json" if how == "json" else ".h5"
+    with make_temp_path(suffix=suffix) as path:
+        obj.write(path)
+        return Serializable.read(path)
+
+
+@pytest.mark.parametrize("how", ["json", "hdf5", "pickle"])
+def test_rng_survives_round_trip(adapter, how, make_temp_path):
+    from loqs.internal.seeding import seed_sequence_to_dict
+
+    state = _advanced(adapter, SEED, 3)
+    loaded = _send(state, how, make_temp_path)
+
+    assert loaded.seeded
+    assert seed_sequence_to_dict(loaded.seed_sequence) == (
+        seed_sequence_to_dict(state.seed_sequence)
+    )
+    assert _next_values(loaded) == _next_values(state)
+    if not adapter.cls.name.startswith("STIM"):
+        assert _draw(adapter, loaded) == _draw(adapter, state)
+
+
+def test_states_differing_in_rng_share_storage(adapter, make_temp_path):
+    from loqs.core import Frame
+
+    a = _advanced(adapter, SEED, 2)
+    b = _advanced(adapter, SEED + 1, 5)
+    from loqs.internal.serializable import Serializable
+
+    assert Serializable._serial_hash(a) == Serializable._serial_hash(b)
+
+    loaded = _send(Frame({"a": a, "b": b}), "hdf5", make_temp_path)
+    assert loaded["a"] is not loaded["b"]
+    assert _next_values(loaded["a"]) == _next_values(a)
+    assert _next_values(loaded["b"]) == _next_values(b)
+
+
+@pytest.mark.parametrize("how", ["json", "hdf5"])
+def test_states_in_shared_histories_keep_own_rng(adapter, how, make_temp_path):
+    from loqs.core import Frame
+    from loqs.core.history import History
+
+    a = _advanced(adapter, SEED, 2)
+    b = _advanced(adapter, SEED + 1, 5)
+    holder = Frame(
+        {"h1": History(Frame({"s": a})), "h2": History(Frame({"s": b}))}
+    )
+
+    loaded = _send(holder, how, make_temp_path)
+    sa, sb = loaded["h1"][0]["s"], loaded["h2"][0]["s"]
+    assert sa is not sb
+    assert _next_values(sa) == _next_values(a)
+    assert _next_values(sb) == _next_values(b)
+
+
+def test_state_file_without_saved_rng_reads(adapter):
+    from loqs.internal.serializable import INSTANCE_ATTRS_KEY, Serializable
+
+    state = _advanced(adapter, SEED, 1)
+    encoded = Serializable.encode(state, format="json")
+    assert INSTANCE_ATTRS_KEY in encoded
+    del encoded[INSTANCE_ATTRS_KEY]
+
+    loaded = Serializable.decode(encoded, format="json")
+    assert not loaded.seeded
+    assert len(adapter.probe(loaded)) == 1

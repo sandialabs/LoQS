@@ -25,6 +25,7 @@ from typing import Any
 
 import h5py
 import numpy as np
+from numpy.random import SeedSequence
 import pytest
 
 import loqs.internal
@@ -33,6 +34,12 @@ from loqs.core.history import History
 from loqs.core.programresults import ProgramResults
 from loqs.internal.encoder import HDF5Encoder, JSONEncoder
 from loqs.internal.encoder.hdf5encoder import _COLLAPSED_BLOB_NAME
+from loqs.internal.seeding import (
+    INSTRUCTION_STREAM,
+    as_seed_sequence,
+    child_seed_sequence,
+    seed_word,
+)
 from loqs.tools import multiprogramrunner, paralleltools
 from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.noisesweeptools import NoiseSweepRunner
@@ -650,7 +657,17 @@ def inline_execution_patches() -> Iterator[None]:
 BASE_SEED = 1000
 NUM_SHOTS = 2
 SWEEP_STRENGTHS = [0.3, 0.6]
-SEED_STRIDE = 100
+
+
+def shot_seed(index: int, base: Any = BASE_SEED, call: int = 0) -> int:
+    """The integer an instruction receives in call `call` (0-based position
+    among the calls that don't build a state) of shot `index` of a run
+    rooted at `base` (an integer or a `SeedSequence`)."""
+    return seed_word(
+        child_seed_sequence(
+            as_seed_sequence(base), index, INSTRUCTION_STREAM, call
+        )
+    )
 
 
 def record_seed_apply(seed, fail_prob=0.5) -> Frame:
@@ -747,7 +764,6 @@ def build_sweep_runner(
         collect_shot_data_args=[("failed", -1)],
         expected_outcomes=[False],
         base_seed=BASE_SEED,
-        seed_stride=SEED_STRIDE,
         instruction_stack=seeded_stack,
         global_instructions={"Record Seed": RECORD_SEED},
         verbose=False,
@@ -845,18 +861,18 @@ def shot_signature(
 def assert_shot_results_match(
     results: ProgramResults,
     reference: ShotSignature,
-    base_seed: int = BASE_SEED,
+    base_seed: Any = BASE_SEED,
     num_shots: int = NUM_SHOTS,
     checkpoint_dir: Path | None = None,
 ) -> ShotSignature:
     """Check `results` against a reference run: exact keys (see
-    `shot_signature`), each shot's seed equal to `base_seed + index`, and
+    `shot_signature`), each shot's seed equal to `shot_seed(index, base_seed)`, and
     each shot's outcome equal to the reference's."""
     signature = shot_signature(results, num_shots, checkpoint_dir)
     for index, (seed, _) in signature.items():
-        assert seed == base_seed + index, (
+        assert seed == shot_seed(index, base_seed), (
             f"shot {index} recorded seed {seed}, expected "
-            f"{base_seed + index}"
+            f"{shot_seed(index, base_seed)}"
         )
     assert signature == reference
     return signature
@@ -872,8 +888,9 @@ class RunnerReference:
     kept: dict[int, ShotSignature]
 
 
-def _item_base_seed(index: int) -> int:
-    return BASE_SEED + index * SEED_STRIDE
+def _item_base_seed(index: int) -> SeedSequence:
+    """The root of sweep point `index`: the child of the sweep's base seed."""
+    return child_seed_sequence(as_seed_sequence(BASE_SEED), index)
 
 
 def kept_shot_signatures(
@@ -896,7 +913,7 @@ def runner_reference(runner: NoiseSweepRunner, result) -> RunnerReference:
     signatures = kept_shot_signatures(runner)
     for index, signature in signatures.items():
         for shot, (seed, _) in signature.items():
-            assert seed == _item_base_seed(index) + shot
+            assert seed == shot_seed(shot, _item_base_seed(index))
     return RunnerReference(
         list(result.failure_rates), list(result.stderrs), signatures
     )

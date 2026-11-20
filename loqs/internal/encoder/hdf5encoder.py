@@ -23,6 +23,7 @@ from loqs.internal.serializable import (
     EncodableIterables,
     EncodablePrimitives,
     Encoded,
+    INSTANCE_ATTRS_KEY,
     IncorrectDecodableTypeError,
 )
 from loqs.types import NDArray
@@ -563,6 +564,9 @@ class HDF5Encoder(BaseEncoder):
             )
             for serial_attr in to_encode._SERIALIZE_ATTRS
         }
+        instance_attrs = to_encode._instance_encoding_attrs()
+        if instance_attrs is not None:
+            attrs[INSTANCE_ATTRS_KEY] = instance_attrs
         _partition_and_encode_children(
             obj_group,
             attrs,
@@ -638,6 +642,7 @@ class HDF5Encoder(BaseEncoder):
         # collapsed blob (if present) back into its own individual named
         # entries alongside any attrs that kept their own real HDF5 group.
         attr_dict = dict(_decode_partitioned_children(encoded, decode_cache))
+        instance_attrs = attr_dict.pop(INSTANCE_ATTRS_KEY, None)
 
         # If our class is an Instruction, we also need to pass in version
         # so that imports can be updated properly on apply_fn/map_qubits_fn creation
@@ -648,6 +653,8 @@ class HDF5Encoder(BaseEncoder):
 
         # Create the object using its _from_decoded_attrs method
         decoded = cls._from_decoded_attrs(attr_dict)
+        if instance_attrs is not None:
+            decoded._restore_instance_attrs(instance_attrs)
 
         # Replace the placeholder with the actual object
         if (
@@ -666,6 +673,7 @@ class HDF5Encoder(BaseEncoder):
         cache_type="reference",
         reference_cache_id=None,
         source_cache_id=None,
+        instance_attrs=None,
     ):
         """Encode a cached object reference in HDF5 format.
 
@@ -686,6 +694,10 @@ class HDF5Encoder(BaseEncoder):
             For copy-type caching, the cache ID of the reference object.
         source_cache_id : int, optional
             For copy-type caching, the cache ID to assign to the copied object.
+        instance_attrs : list[dict], optional
+            For copy-type caching, the per-object values of the copied
+            object and everything beneath it
+            (`Serializable._subtree_instance_attrs`).
 
         Returns
         -------
@@ -706,6 +718,13 @@ class HDF5Encoder(BaseEncoder):
         elif cache_type == "copy":
             obj_group.attrs["reference_cache_id"] = reference_cache_id
             obj_group.attrs["source_cache_id"] = source_cache_id
+            if instance_attrs is not None:
+                _partition_and_encode_children(
+                    obj_group,
+                    {INSTANCE_ATTRS_KEY: instance_attrs},
+                    None,
+                    False,
+                )
 
         return obj_group
 
@@ -790,11 +809,21 @@ class HDF5Encoder(BaseEncoder):
             else:
                 reference_obj = decode_cache[reference_cache_id]
 
+            instance_attrs = dict(
+                _decode_partitioned_children(encoded, decode_cache)
+            ).get(INSTANCE_ATTRS_KEY)
             if isinstance(reference_obj, DeferredRef):
+                if instance_attrs is not None:
+                    raise RuntimeError(
+                        "A copy with instance attributes was read before "
+                        "its source object, which cannot be copied yet."
+                    )
                 # Reference object not available, create a placeholder
                 copied_obj = DeferredRef(reference_obj.cache_id)
             else:
-                copied_obj = copy_cached_reference(reference_obj)
+                copied_obj = copy_cached_reference(
+                    reference_obj, instance_attrs
+                )
 
             # Add the copy to cache
             decode_cache[source_cache_id] = copied_obj

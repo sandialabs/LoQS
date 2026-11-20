@@ -236,6 +236,14 @@ results4 = program4.run(num_shots=150) # Let's also collect more statistics!
 Counter(results4.collect_shot_data("logical_measurement", -1))
 ```
 
+Each shot draws its randomness from its own streams, derived from the run's *root seed* and the shot's index, so a seeded run gives the same outcomes shot for shot whether it runs serially, in parallel or resumed from a checkpoint. The root is `default_base_seed` if set (an integer or a NumPy `SeedSequence`); else, on a resume, the root stored in the checkpoint; else the seed of a state passed in the initial `History`, if it was created with one; else fresh entropy. The results record the root as `root_seed`, unseeded runs included, so any run can be replayed:
+
+```python
+results = program.run(num_shots=150)  # unseeded
+replay = QuantumProgram.from_quantum_program(program, default_base_seed=results.root_seed)
+replay.run(num_shots=150)  # same outcomes, shot for shot
+```
+
 ## Saving a QuantumProgram and its ProgramResults
 
 Any object that is derived from `loqs.internal.Serializable` can be easily serialized with the following API:
@@ -323,8 +331,14 @@ program7 = QuantumProgram(
 
 A checkpointed run whose `History` keeps the state warns that every shot checkpoint will hold it. To silence the warning on purpose, use `warnings.filterwarnings("ignore", message=".*no_serialize_keys.*")`.
 
+A kept state also carries its random number generator through `write`/`read` and pickling, so a NumPy-based state (statevector or QSim) continues its stream exactly when read back. That adds about 60 to 330 bytes per stored state; files that keep no states don't change.
+
 ```{note}
-`run()` also supports genuine resume: calling it again with `checkpoint=True, resume=True` against the same `checkpoint_dir` picks up right where an interrupted run left off, computing only the shots not yet checkpointed rather than starting over from 0 (pass `force_resume=True` if the resuming call's own `num_shots`/`max_frame_limit`/RNG seed intentionally differ from the original -- otherwise a mismatch raises `ValueError`). Checkpointing is also useful even without resuming, for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`).
+STIM can't export its tableau simulator's RNG state, so a STIM state read back or unpickled restarts its tableau on a stream set by its seed and a restore count. Reading one file twice gives the same draws, but not the draws the original would have made next, and two snapshots of one state saved with no read-back between them (two frames of one shot, say) come back on the same stream, so don't treat their continuations as independent samples. To get the original draws, rerun the shot from the results' `root_seed`. An in-memory `copy()` of a STIM state does continue the original's stream.
+```
+
+```{note}
+`run()` also supports genuine resume: calling it again with `checkpoint=True, resume=True` against the same `checkpoint_dir` picks up right where an interrupted run left off, computing only the shots not yet checkpointed rather than starting over from 0 (pass `force_resume=True` if the resuming call's own `num_shots`/`max_frame_limit` intentionally differ from the original -- otherwise a mismatch raises `ValueError`; the root seed is checked separately: an unseeded run resumes on its stored root, while a different `default_base_seed` or a checkpoint written before LoQS 1.3.2 is always refused). Checkpointing is also useful even without resuming, for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`).
 ```
 
 ```{code-cell} ipython3

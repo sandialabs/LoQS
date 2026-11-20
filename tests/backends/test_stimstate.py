@@ -105,6 +105,29 @@ class TestSTIMQuantumState:
             sigma = np.sqrt(p * (1 - p) / n_trials)
             assert abs(count / n_trials - p) < 5 * sigma
 
+    def test_numpy_stream_seeding_and_copy(self):
+        """The NumPy generator behind probabilistic reps is built from the
+        state's seed sequence and carried by copy()."""
+        rep = ProbabilisticStimGateRep([("", 0.5), ("X 0", 0.5)], ["Q0"])
+
+        def draw(state, n=64):
+            out = []
+            for _ in range(n):
+                state.apply_reps_inplace([rep])
+                out.append(state.state.peek_z(0))
+                state.state.do_circuit(stim.Circuit("R 0"))  # type: ignore
+            return out
+
+        seq = np.random.SeedSequence(20260712)
+        first = draw(STIMState([0], ["Q0"], seed=seq))
+        assert draw(STIMState([0], ["Q0"], seed=seq)) == first
+        assert len(set(first)) == 2
+
+        state = STIMState([0], ["Q0"], seed=seq)
+        draw(state)
+        dup = state.copy()
+        assert draw(dup) == draw(state)
+
     def test_probabilistic_stim_operations_bad_sum_raises(self):
         with pytest.raises(RepConstructionError):
             ProbabilisticStimGateRep([("", 0.5), ("X 0", 0.6)], ["Q0"])
@@ -201,3 +224,36 @@ class TestSTIMQuantumState:
             state2.state.current_inverse_tableau()
             == state.state.current_inverse_tableau()
         )
+
+    def test_read_back_reseeds_tableau_deterministically(self, make_temp_path):
+        from loqs.backends.reps import ZBasisProjectionInstrumentRep
+        from loqs.backends.reps import StimCircuitGateRep
+
+        q = ["Q0"]
+        reps = [
+            StimCircuitGateRep("H 0", q),
+            ZBasisProjectionInstrumentRep(0, True, q),
+        ] * 64
+
+        def draw(state):
+            return list(state.apply_reps_inplace(reps)["Q0"])
+
+        def roundtrip(state):
+            with make_temp_path(suffix=".json") as path:
+                state.write(path)
+                return STIMState.read(path)
+
+        original = STIMState(1, q, seed=7)
+        fresh = draw(STIMState(1, q, seed=7))
+        draw(original)
+
+        first, second = roundtrip(original), roundtrip(original)
+        out1, out2 = draw(first), draw(second)
+        assert out1 == out2
+        assert out1 != fresh
+
+        second.reset_seed(7)
+        assert draw(second) == fresh
+
+        again = roundtrip(roundtrip(original).copy())
+        assert draw(again) not in (out1, fresh)
