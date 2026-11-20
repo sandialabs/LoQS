@@ -2,7 +2,7 @@
 """
 Execute every tutorial notebook under docs/notebooks/*.md and report any
 that fail. This is the same check the "notebook-tests" CI job in
-.github/workflows/loqs.yml runs, so it doubles as a way to reproduce a CI
+.github/workflows/loqs-full.yml runs, so it doubles as a way to reproduce a CI
 notebook failure locally.
 
 Uses jupytext and nbclient directly, rather than the `jupytext --execute`

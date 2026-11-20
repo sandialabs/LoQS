@@ -1,0 +1,38 @@
+# Fails a PR into a bugfix-release-* branch that carries commits of main
+# that the bugfix branch lacks. The job runs on every PR (so the check can
+# be required) and only its steps are skipped for other base branches.
+
+name: No main leak
+
+on:
+  pull_request:
+    # "edited" is the event GitHub sends when a PR's base branch changes.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  no-main-leak:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse a retarget until the tests are re-run
+        if: ${{ startsWith(github.base_ref, 'bugfix-release-') && github.event.action == 'edited' && github.event.changes.base }}
+        env:
+          OLD_BASE: ${{ github.event.changes.base.ref.from }}
+        run: |
+          echo "::error::This PR's base changed from '$OLD_BASE' to a bugfix branch, so its test results are from the old base. Close and reopen the PR (or push to it) to re-run the tests against the new base. Editing the title or body does not clear this; only a reopen or a push does."
+          exit 1
+
+      - name: Check out full history
+        if: ${{ startsWith(github.base_ref, 'bugfix-release-') }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for main's commits
+        if: ${{ startsWith(github.base_ref, 'bugfix-release-') }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/check-main-leak.sh origin/main "origin/$BASE_REF" "$HEAD_SHA"
