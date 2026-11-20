@@ -7,11 +7,11 @@ name: LoQS Full Tests + Docs
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'bugfix-release-*']
   pull_request:
     # Keep in step with check-pr-status in loqs-minimal.yml.
     branches: [main, 'bugfix-release-*']
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, reopened]
 
 jobs:
   # GitHub can't filter draft PRs in the trigger, so each job skips itself

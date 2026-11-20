@@ -8,7 +8,7 @@ name: LoQS Minimal Tests + Docs
 on:
   push:
     # main gets the full suite from loqs-full.yml on every push.
-    branches-ignore: [main]
+    branches-ignore: [main, 'bugfix-release-*']
     tags: ['**']
   workflow_dispatch: # Allow manual running from GitHub
 
