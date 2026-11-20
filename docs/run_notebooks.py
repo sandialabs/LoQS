@@ -14,7 +14,9 @@ expected failure by nbclient and does not stop execution. Each notebook
 runs in its own throwaway scratch working directory, since some tutorials
 (e.g. workflow.md's checkpointing example) write relative-path scratch
 files of their own that would otherwise collide across notebooks sharing
-one directory.
+one directory. Because each kernel starts in such a scratch directory,
+relative `PYTHONPATH` entries are resolved against the directory this script
+is called from before any kernel starts.
 
 Requires the `docs` extra (`pip install ".[docs]"` or `".[all]"`), which
 includes jupytext, nbclient, and ipykernel.
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 import tempfile
 import time
@@ -121,6 +124,13 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+
+    pythonpath = os.environ.get("PYTHONPATH")
+    if pythonpath:
+        os.environ["PYTHONPATH"] = os.pathsep.join(
+            os.path.abspath(entry) if entry else entry
+            for entry in pythonpath.split(os.pathsep)
+        )
 
     if args.notebooks:
         candidates = [NOTEBOOKS_DIR / f"{name}.md" for name in args.notebooks]

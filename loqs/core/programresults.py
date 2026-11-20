@@ -179,6 +179,7 @@ class ProgramResults(Displayable):
 
         max_frame_limit:
             The maximum frame limit used in this run (for resume detection).
+            `None` means no limit, or not set.
 
         results_filename:
             Filename to use for the canonical results checkpoint file.

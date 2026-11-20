@@ -92,7 +92,6 @@ we split the circuit by hand at its `REPEAT` block, into a prep circuit (the
 operations before it), one round and a readout circuit (the operations after
 it). Each is a `STIMPhysicalCircuit` wrapped by
 [build_physical_circuit_instruction](api:build_physical_circuit_instruction).
-The readout gets a closing `TICK`, which keeps the notebook free of warnings.
 
 ```{code-cell} ipython3
 prep, readout = stim.Circuit(), stim.Circuit()
@@ -104,7 +103,6 @@ for op in ideal:
         prep.append(op)
     else:
         readout.append(op)
-readout.append("TICK")
 
 labels = list(range(ideal.num_qubits))
 

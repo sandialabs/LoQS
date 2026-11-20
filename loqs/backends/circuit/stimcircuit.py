@@ -581,6 +581,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             msg = f"STIM circuit contains a LoQS-unsupported instruction {unsupported}"
             raise ValueError(msg)
 
+        self._suppress_tick_warning = suppress_tick_warning
         if not suppress_tick_warning and "TICK" not in str(self.circuit):
             warnings.warn(
                 "No TICK instructions, layer-based functionality will not work as intended if this is more than one layer."
@@ -609,7 +610,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         return self._qubit_labels
 
     def copy(self) -> STIMPhysicalCircuit:
-        return STIMPhysicalCircuit(self)
+        return STIMPhysicalCircuit(
+            self, suppress_tick_warning=self._suppress_tick_warning
+        )
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
