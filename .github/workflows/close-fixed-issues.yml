@@ -9,33 +9,19 @@
 # not. HTML comments, such as the pull request template's, are ignored.
 # Each issue gets a comment linking the pull request.
 #
-# This runs as pull_request_target, so the copy of this file and of
-# closing-issues.sh on main is the one that runs, whatever the bugfix
-# branch holds, and with a write token even for a pull request from a
-# fork. It must therefore never check out or run the pull request's code;
-# it reads the pull request only through the API.
+# The run is triggered by the push a merge makes. It looks up the merged
+# pull request whose merge commit is the pushed commit, and runs the
+# bugfix branch's own copy of this file and of closing-issues.sh. Its
+# token can write for a pull request from a fork too, and it never runs
+# the pull request's code. A failed run is re-run from the Actions page.
 #
 # Token: the built-in one, so issues are closed by github-actions[bot].
-#
-# A dispatch with a pull request number closes the issues of a pull
-# request merged before this workflow reached main.
 
 name: Close issues fixed on a bugfix branch
 
 on:
-  pull_request_target:
-    types: [closed]
+  push:
     branches: ['bugfix-release-*']
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: Number of a pull request merged into a bugfix branch
-        type: number
-        required: true
-      dry-run:
-        description: Report what would happen and write nothing
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -44,7 +30,6 @@ permissions:
 
 jobs:
   close-issues:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -52,55 +37,48 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
-      PR: ${{ inputs.pr || github.event.pull_request.number }}
-      DRY_RUN: ${{ inputs.dry-run || false }}
+      BRANCH: ${{ github.ref_name }}
+      SHA: ${{ github.sha }}
     steps:
-      - name: Check out the default branch
+      - name: Check out the pushed commit
         uses: actions/checkout@v4
 
-      - name: Close the issues the pull request names
+      - name: Close the issues the merged pull request names
         run: |
-          pr=$(gh pr view "$PR" --repo "$REPO" --json number,state,baseRefName,body,url)
-          state=$(jq -r '.state' <<< "$pr")
-          base=$(jq -r '.baseRefName' <<< "$pr")
-          url=$(jq -r '.url' <<< "$pr")
-          number=$(jq -r '.number' <<< "$pr")
-          issues=$(jq -r '.body // ""' <<< "$pr" | bash .github/scripts/closing-issues.sh)
-          echo "PR #$number ($state, base $base) names: ${issues:-no issues}" | tr '\n' ' '
-          echo
-
-          applies=true
-          case "$base" in bugfix-release-*) ;; *) applies=false ;; esac
-          [ "$state" = MERGED ] || applies=false
-          if [ "$applies" != true ]; then
-            if [ "$DRY_RUN" != true ]; then
-              echo "::error::PR #$number is not merged into a bugfix-release-* branch; no issue was closed."
-              exit 1
-            fi
-            echo "::notice::Dry run: PR #$number is not merged into a bugfix-release-* branch; a real run would refuse."
-          fi
-          if [ -z "$issues" ]; then
-            echo "::notice::PR #$number names no issue with a closing keyword; nothing to close."
+          prs=$(gh pr list --repo "$REPO" --base "$BRANCH" --state merged --limit 100 \
+            --json number,mergeCommit,body,url)
+          prs=$(jq -c --arg sha "$SHA" '[.[] | select(.mergeCommit.oid == $sha)]' <<< "$prs")
+          if [ "$(jq 'length' <<< "$prs")" -eq 0 ]; then
+            echo "::notice::No merged pull request into $BRANCH has $SHA as its merge commit (a direct push or a new branch); nothing to close."
             exit 0
           fi
 
           failed=0
-          for n in $issues; do
-            if ! issue=$(gh api "repos/$REPO/issues/$n"); then
-              echo "::error::Could not read #$n; it was not closed."
-              failed=1
-            elif jq -e '.pull_request != null' <<< "$issue" > /dev/null; then
-              echo "::notice::#$n is a pull request, not an issue; left alone."
-            elif [ "$(jq -r '.state' <<< "$issue")" != open ]; then
-              echo "::notice::#$n is already closed; left alone."
-            elif [ "$DRY_RUN" = true ]; then
-              echo "::notice::Dry run: would close #$n with a comment pointing at $url."
-            elif gh issue close "$n" --repo "$REPO" --reason completed \
-                --comment "Fixed by [#$number]($url), merged into \`$base\`. The fix ships in the release made from that branch."; then
-              echo "::notice::Closed #$n."
-            else
-              echo "::error::Could not close #$n."
-              failed=1
+          while read -r pr; do
+            number=$(jq -r '.number' <<< "$pr")
+            url=$(jq -r '.url' <<< "$pr")
+            issues=$(jq -r '.body // ""' <<< "$pr" | bash .github/scripts/closing-issues.sh)
+            echo "PR #$number names: ${issues:-no issues}" | tr '\n' ' '
+            echo
+            if [ -z "$issues" ]; then
+              echo "::notice::PR #$number names no issue with a closing keyword; nothing to close."
+              continue
             fi
-          done
+            for n in $issues; do
+              if ! issue=$(gh api "repos/$REPO/issues/$n"); then
+                echo "::error::Could not read #$n; it was not closed."
+                failed=1
+              elif jq -e '.pull_request != null' <<< "$issue" > /dev/null; then
+                echo "::notice::#$n is a pull request, not an issue; left alone."
+              elif [ "$(jq -r '.state' <<< "$issue")" != open ]; then
+                echo "::notice::#$n is already closed; left alone."
+              elif gh issue close "$n" --repo "$REPO" --reason completed \
+                  --comment "Fixed by [#$number]($url), merged into \`$BRANCH\`. The fix ships in the release made from that branch."; then
+                echo "::notice::Closed #$n."
+              else
+                echo "::error::Could not close #$n."
+                failed=1
+              fi
+            done
+          done < <(jq -c '.[]' <<< "$prs")
           exit "$failed"

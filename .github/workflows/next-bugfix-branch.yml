@@ -31,10 +31,6 @@ on:
         description: The release tag to open the next bugfix branch for
         type: string
         required: true
-      dry-run:
-        description: Report what would happen and write nothing
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -50,7 +46,6 @@ jobs:
       REPO: ${{ github.repository }}
       TAG: ${{ inputs.tag || github.event.release.tag_name }}
       PRERELEASE: ${{ github.event.release.prerelease || false }}
-      DRY_RUN: ${{ inputs.dry-run || false }}
     steps:
       - name: Check out full history
         uses: actions/checkout@v4
@@ -91,10 +86,6 @@ jobs:
           BRANCH: ${{ steps.decide.outputs.branch }}
           SHA: ${{ steps.decide.outputs.sha }}
         run: |
-          if [ "$DRY_RUN" = true ]; then
-            echo "::notice::Dry run: would create $BRANCH at $SHA (tag $TAG)."
-            exit 0
-          fi
           gh api --method POST "repos/$REPO/git/refs" \
             -f "ref=refs/heads/$BRANCH" -f "sha=$SHA" > /dev/null
           echo "::notice::Created $BRANCH at $SHA (tag $TAG)."
