@@ -8,7 +8,7 @@ from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.recordables import MeasurementOutcomes, PatchLayout
+from loqs.core.recordables import MeasurementOutcomes, PatchLayout, PauliFrame
 
 
 def _leaf_apply_needing_model(model, patch_label=None):
@@ -207,6 +207,41 @@ class TestRepeatUntilSuccessInstruction:
         assert new.data["expected"] == mapped
 
 
+class TestPauliFrameUpdated:
+    """`_pauli_frame_updated` routes each form of update to its
+    `PauliFrame` method, on a copied layout."""
+
+    QUBITS = ["D0", "D1", "D2"]
+
+    @pytest.mark.parametrize(
+        "update, expected",
+        [
+            ("H", lambda f: f.update_from_transversal_clifford("H")),
+            (
+                ["H", "S", "I"],
+                lambda f: f.update_from_clifford_conjugation(["H", "S", "I"]),
+            ),
+            (
+                {"I": "I", "X": "Z", "Y": "Y", "Z": "X"},
+                lambda f: f.map_frame(
+                    {"I": "I", "X": "Z", "Y": "Y", "Z": "X"}
+                ),
+            ),
+            ("reset", lambda f: PauliFrame(TestPauliFrameUpdated.QUBITS)),
+        ],
+        ids=["transversal", "conjugation", "map", "reset"],
+    )
+    def test_matches_pauli_frame_method(self, update, expected):
+        code = QECCode({}, self.QUBITS, self.QUBITS)
+        frame = PauliFrame(self.QUBITS, ["X", "Z", "I"])
+        layout = PatchLayout({"L0": code.create_patch(self.QUBITS, frame)})
+
+        new = builders._pauli_frame_updated(layout, "L0", update)
+
+        assert new["L0"].pauli_frame.pauli_frame == expected(frame).pauli_frame
+        assert layout["L0"].pauli_frame.pauli_frame == ["X", "Z", "I"]
+
+
 class TestLookupDecoderInstruction:
     """The lookup decoder reads its syndrome from the history slice its
     priorities name, XORs with the previous raw syndrome, applies the
@@ -382,7 +417,8 @@ class TestPhysicalCircuitInstructionSTIM:
     label mapping.
     """
 
-    def test_applied_stim_circuit_str_is_populated(self):
+    @pytest.mark.parametrize("inplace", [True, False])
+    def test_applied_stim_circuit_str_is_populated(self, inplace):
         pytest.importorskip("stim")
         from loqs.backends import STIMQuantumState, DictNoiseModel
         from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
@@ -399,7 +435,7 @@ class TestPhysicalCircuitInstructionSTIM:
             model=model,
             circuit=circuit,
             state=state,
-            inplace=True,
+            inplace=inplace,
             error_injections=None,
             pauli_frame_update=None,
             patch_label="L0",
@@ -409,6 +445,37 @@ class TestPhysicalCircuitInstructionSTIM:
         applied_str = frame["applied_stim_circuit_str"]
         assert applied_str == str(frame["state"].latest_applied_circuit)
         assert "H 0" in applied_str
+
+    def test_circuit_instruction_runs_without_patch_layout(self):
+        pytest.importorskip("stim")
+        from loqs.backends import STIMQuantumState, DictNoiseModel
+        from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+        from loqs.backends.reps import (
+            StimCircuitGateRep,
+            StimCircuitInstrumentRep,
+        )
+
+        circuit = STIMPhysicalCircuit("X 0\nM 0", ["Q0"])
+        model = DictNoiseModel(
+            {"X": StimCircuitGateRep("X 0", ())},
+            {"M": StimCircuitInstrumentRep("M 0", ())},
+            gatereps=[StimCircuitGateRep],
+            instreps=[StimCircuitInstrumentRep],
+        )
+        inst = builders.build_physical_circuit_instruction(
+            circuit=circuit, name="Run"
+        )
+        program = QuantumProgram(
+            [{"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}]
+            + [{"instruction": "Run"}],
+            global_instructions={"Run": inst},
+            default_noise_model=model,
+            state_type=STIMQuantumState,
+            name="bare circuit",
+        )
+        results = program.run(num_shots=1)
+        mo = results.collect_shot_data("measurement_outcomes", -1)
+        assert mo[0]["Q0"] == [1]
 
     def test_error_injection_targets_correct_qubit_with_non_positional_labels(
         self,

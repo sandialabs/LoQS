@@ -21,6 +21,7 @@ from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 from loqs.backends import is_backend_available
 from loqs.backends.circuit.stimcircuit import (
     _STIM_LINE,
+    _reindex_stim_circuit_lines,
     _separate_stimcircuit_instruction,
 )
 from loqs.backends.reps import (
@@ -91,6 +92,10 @@ class STIMQuantumState(BaseQuantumState):
             "HERALDED_PAULI_CHANNEL_1",
         }
     )
+
+    # Whether a line with a `rec[-k]` target may run. Only a subclass that
+    # tracks the whole record turns it on; here it is refused.
+    _feed_forward: ClassVar[bool] = False
 
     _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
     _INSTANCE_ATTRS = BaseQuantumState._INSTANCE_ATTRS + ["_tableau_restores"]
@@ -354,10 +359,31 @@ class STIMQuantumState(BaseQuantumState):
             targets = rest.split()
 
             # Refuse before mapping targets or running anything
+            has_rec = any(t.startswith("rec[") for t in targets)
+            if has_rec and not self._feed_forward:
+                raise NotImplementedError(
+                    f"STIMQuantumState can't feed {command} forward from "
+                    "a measurement record"
+                )
             if command in self._unrecorded_measurements:
                 raise NotImplementedError(
                     f"STIMQuantumState can't record the outcomes of {command}"
                 )
+
+            if command == "MPP" or has_rec:
+                # The line's own qubit indices are the local ones
+                text = "\n".join(
+                    _reindex_stim_circuit_lines(
+                        _Circuit(instruction),
+                        {
+                            int(k): int(v.strip("!"))
+                            for k, v in local_to_internal.items()
+                        },
+                    )
+                )
+                internal_lines.append(text)
+                global_lines.append(text)
+                continue
 
             # Pull measurement labels, if they exist
             if command in self._recorded_measurements:
@@ -384,14 +410,20 @@ class STIMQuantumState(BaseQuantumState):
         internal_circuit = _Circuit("\n".join(internal_lines))
         self.state.do_circuit(internal_circuit)
 
-        # Save executed circuit, needed for decoding via pymatching
-        # This one we do in global labels since we don't need the smaller internal space,
-        # and this is less confusing to read off
+        self._record_applied(global_lines, internal_circuit)
+
+    def _record_applied(
+        self, global_lines: list[str], internal_circuit: _Circuit
+    ) -> None:
+        """Append what was run to the applied circuit, for decoding.
+
+        This is in global labels, which are less confusing to read off, and
+        falls back to the internal indices when STIM can't parse the labels
+        (probably non-int strings).
+        """
         try:
             self.latest_applied_circuit += _Circuit("\n".join(global_lines))
         except ValueError:
-            # STIM failed to convert, our global labels are probably non-int strings
-            # Fall back to internal representation
             self.latest_applied_circuit += internal_circuit
 
     @_apply_gate_rep.register
@@ -447,7 +479,7 @@ class STIMQuantumState(BaseQuantumState):
         assert is_rep_compatible(type(postop), self.input_reps)
 
         # Apply the pre-op
-        self.apply_reps_inplace([preop])
+        self.apply_reps_inplace([preop], reset_latest_circ=False)
 
         # Do perfect measurement
         for qbit in qubits:
@@ -456,7 +488,7 @@ class STIMQuantumState(BaseQuantumState):
                 outcomes[qbit].append(cbit)
 
         # Apply the post-op
-        self.apply_reps_inplace([postop])
+        self.apply_reps_inplace([postop], reset_latest_circ=False)
         return outcomes
 
     @_apply_instrument_rep.register
@@ -497,6 +529,9 @@ class STIMQuantumState(BaseQuantumState):
         qidx = self.qubit_labels.index(qubit)
         cbit = int(self.state.measure(qidx))
 
+        # The simulator writes a record bit whether or not the outcome is kept
+        commands = ["M" if reset is None else "MR"]
+
         if reset is not None:
             # Reset to 0
             self.state.reset(qidx)
@@ -504,7 +539,12 @@ class STIMQuantumState(BaseQuantumState):
             # Reset to 1, if needed
             if reset == 1:
                 self.state.x(qidx)
+                commands.append("X")
 
+        self._record_applied(
+            [f"{c} {qubit}" for c in commands],
+            _Circuit("\n".join(f"{c} {qidx}" for c in commands)),
+        )
         return cbit
 
     def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):

@@ -356,26 +356,35 @@ class TestSTIMGetReps:
         circuit = STIMPhysicalCircuit("X 0\nM 0", ["Q0"])
         assert len(self._get_reps(model, circuit)) == 2
 
-    @pytest.mark.parametrize("kind", ["channel", "measure"])
-    def test_double_noise_warns(self, kind):
-        if kind == "channel":
-            model = DictNoiseModel({}, {})
-            circuit = STIMPhysicalCircuit("X_ERROR(0.1) 0", ["Q0"])
-        else:
-            inst_dict = {
-                "M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))
-            }
-            model = DictNoiseModel(
-                {},
-                inst_dict,
-                instreps=[
-                    StimCircuitInstrumentRep,
-                    ZBasisProjectionInstrumentRep,
-                ],
-            )
-            circuit = STIMPhysicalCircuit("M(0.1) 0", ["Q0"])
+    def test_double_noise_warns(self):
+        model = DictNoiseModel({}, {})
+        circuit = STIMPhysicalCircuit("X_ERROR(0.1) 0", ["Q0"])
         with pytest.warns(UserWarning):
             self._get_reps(model, circuit)
+
+    def test_measure_argument_on_zbasis_entry_refused(self):
+        inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
+        model = DictNoiseModel(
+            {},
+            inst_dict,
+            instreps=[
+                StimCircuitInstrumentRep,
+                ZBasisProjectionInstrumentRep,
+            ],
+        )
+        circuit = STIMPhysicalCircuit("M(0.1) 0", ["Q0"])
+        with pytest.raises(NotImplementedError):
+            self._get_reps(model, circuit)
+
+    def test_measure_argument_leaves_entry_unchanged(self):
+        entry = StimCircuitInstrumentRep("X_ERROR(0.2) 0\nM 0", ("Q0",))
+        model = DictNoiseModel(
+            {}, {("M", ("Q0",)): entry}, instreps=[StimCircuitInstrumentRep]
+        )
+        circuit = STIMPhysicalCircuit("M(0.1) 0", ["Q0"])
+        (rep,) = model.get_reps(circuit, [], [StimCircuitInstrumentRep])
+        assert rep.circuit_str == "X_ERROR(0.2) 0\nM(0.1) 0"
+        assert entry.circuit_str == "X_ERROR(0.2) 0\nM 0"
 
     def test_qubit_label_mapping(self):
         gate_dict = {"X": StimCircuitGateRep("X 0", ("Q0",))}

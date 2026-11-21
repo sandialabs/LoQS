@@ -212,6 +212,14 @@ class TestQuantumProgram:
         assert len(program_results.shot_histories) == 1
         assert len(program_results.shot_histories[0]) > 0
 
+    def test_explicit_frame_limit_stops_run(self):
+        program = _build_state_program("Long", increments=(1,) * 120)
+        with pytest.warns(UserWarning):
+            results = program.run(max_frame_limit=5)
+        assert (
+            len(results.shot_histories[0]) == len(program.initial_history) + 5
+        )
+
     @pytest.mark.parametrize(
         "make_initial",
         [
@@ -610,7 +618,7 @@ class TestResumeFromCheckpoint:
 
     @pytest.mark.parametrize(
         "run_kwargs",
-        [{"num_shots": 6}, {"num_shots": 4, "max_frame_limit": 200}],
+        [{"num_shots": 6}, {"num_shots": 4, "max_frame_limit": None}],
         ids=["num_shots", "max_frame_limit"],
     )
     def test_resume_config_mismatch_raises(self, tmp_path, run_kwargs):
@@ -691,6 +699,7 @@ class TestResumeFromCheckpoint:
         calls = _spy_run_shot(monkeypatch)
         results = program.run(
             num_shots=6,
+            max_frame_limit=100,
             checkpoint=True,
             resume=True,
             n_shot_batches=3,
@@ -724,7 +733,6 @@ class TestResumeFromCheckpoint:
             name="Config snapshot",
             parent_program=program,
             num_shots=4,
-            max_frame_limit=100,
             checkpoint_enabled=True,
             checkpoint_dir=checkpoint_dir,
             root_seed=0,

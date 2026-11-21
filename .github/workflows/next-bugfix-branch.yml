@@ -1,0 +1,91 @@
+# Opens the next bugfix branch when a release is published. A plain tag
+# vX.Y or vX.Y.Z gets the branch bugfix-release-vX.Y.(Z+1), with X.Y read
+# as X.Y.0: v1.3 opens bugfix-release-v1.3.1 and v1.3.1 opens
+# bugfix-release-v1.3.2. The branch starts at the commit the tag points
+# at, with no version bump.
+#
+# The run skips, ending green with a notice that says why, when the
+# release is a pre-release, when the tag isn't plain (v1.4rc1, rtd-1.1),
+# or when the branch already exists.
+#
+# A release run uses the copy of this file at the release's tag; a
+# dispatch needs it on main.
+#
+# Token: the same one as sync-bugfix.yml, whose header holds its owner
+# and expiry. A branch created with the built-in fallback token starts no
+# workflows.
+#
+# Rulesets: none covering bugfix-release-* may restrict creations or
+# require linear history (limit merges to squash and rebase instead), and
+# the one with the required checks must have "Do not require status checks
+# on creation" ticked, or GitHub refuses the new branch.
+
+name: Open the next bugfix branch
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag to open the next bugfix branch for
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  next-branch:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ secrets.LOQS_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      PRERELEASE: ${{ github.event.release.prerelease || false }}
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide the next branch
+        id: decide
+        run: |
+          if [ "$PRERELEASE" = true ]; then
+            echo "::notice::Release '$TAG' is a pre-release; no bugfix branch was opened."
+            exit 0
+          fi
+          rc=0
+          branch=$(bash .github/scripts/next-bugfix-branch.sh "$TAG") || rc=$?
+          if [ "$rc" -eq 1 ]; then
+            echo "::notice::'$TAG' is not a plain vX.Y or vX.Y.Z tag; no bugfix branch was opened."
+            exit 0
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+          if ! sha=$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}"); then
+            echo "::error::Tag '$TAG' does not exist in this repository."
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/remotes/origin/$branch" > /dev/null; then
+            echo "::notice::$branch already exists; nothing to do for '$TAG'."
+            exit 0
+          fi
+          {
+            echo "branch=$branch"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create the branch
+        if: ${{ steps.decide.outputs.branch != '' }}
+        env:
+          BRANCH: ${{ steps.decide.outputs.branch }}
+          SHA: ${{ steps.decide.outputs.sha }}
+        run: |
+          gh api --method POST "repos/$REPO/git/refs" \
+            -f "ref=refs/heads/$BRANCH" -f "sha=$SHA" > /dev/null
+          echo "::notice::Created $BRANCH at $SHA (tag $TAG)."

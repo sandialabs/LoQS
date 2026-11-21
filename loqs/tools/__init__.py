@@ -20,3 +20,9 @@ try:
 except ImportError:
     # pygsti not available, but that's okay for basic functionality
     pass
+
+try:
+    from . import stimtools
+except ImportError:
+    # stim not available
+    pass

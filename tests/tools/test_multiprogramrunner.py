@@ -498,7 +498,7 @@ class TestItemAndShotWallClockTimes:
         items = list(range(4))
         num_shots = 3
 
-        run_kwargs = {"num_shots": num_shots, "max_frame_limit": 1_000_000}
+        run_kwargs = {"num_shots": num_shots}
         checkpoint_dir = tmp_path / "checkpoints" if checkpoint else None
 
         strategy = None
@@ -1764,7 +1764,7 @@ class TestShotProgressBar:
         [
             (None, 15, 10),
             (
-                {"num_shots": _shots_for_item, "max_frame_limit": 1_000_000},
+                {"num_shots": _shots_for_item},
                 9,
                 6,
             ),
@@ -2027,10 +2027,7 @@ class TestShotProgressBar:
                     item_checkpoint_dir=tmp_path / "item",
                     show_progress=True,
                 ),
-                run_kwargs={
-                    "num_shots": num_shots,
-                    "max_frame_limit": 1_000_000,
-                },
+                run_kwargs={"num_shots": num_shots},
             ).run()
 
         assert totals == [total]
@@ -2046,9 +2043,7 @@ class TestShotProgressBar:
         def _raise(item):
             raise ValueError(item)
 
-        runner = _ShotProgressTestRunner(
-            [1], run_kwargs={"num_shots": _raise, "max_frame_limit": 1_000_000}
-        )
+        runner = _ShotProgressTestRunner([1], run_kwargs={"num_shots": _raise})
         assert runner._item_shot_counts([(0, 1)]) is None
 
     @pytest.mark.parametrize(
@@ -2686,12 +2681,6 @@ class TestBaseClassMechanisms:
                 run_kwargs={"checkpoint_dir": tmp_path / "other"},
             )
 
-    def test_run_kwargs_max_frame_limit_warning_on_missing(self):
-        """Warning fires when max_frame_limit not in run_kwargs."""
-        with pytest.warns(UserWarning):
-            runner = _SimpleDoubleRunner([1], run_kwargs=None)
-        assert "max_frame_limit" in runner.run_kwargs
-
     def test_run_kwargs_reach_program_run(self):
         """`run_kwargs` reach `program.run`: a callable value is resolved
         against the item (not its index), `n_shot_batches` is kept, and a
@@ -2725,6 +2714,7 @@ class TestBaseClassMechanisms:
             config=CheckpointConfig(item_checkpoint_dir=None),
         ).run()
         assert "progress_callback" not in plain_log[0]
+        assert "max_frame_limit" not in plain_log[0]
 
     def test_force_resume_propagation_with_shot_checkpoint(self, tmp_path):
         """force_resume=True is genuinely forwarded into program.run() (via

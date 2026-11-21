@@ -448,7 +448,7 @@ class QuantumProgram(Displayable):
         self,
         checkpoint_dir: str | Path | None,
         num_shots: int,
-        max_frame_limit: int,
+        max_frame_limit: int | None,
         resume: bool,
         force_resume: bool,
         results_filename: str = "results.h5",
@@ -583,7 +583,7 @@ class QuantumProgram(Displayable):
     def _run_serial_checkpointed(
         self,
         remaining: list[int],
-        max_frame_limit: int,
+        max_frame_limit: int | None,
         root: SeedSequence,
         checkpoint_batch_size: int,
         checkpoint_dir: str | Path | None,
@@ -624,7 +624,7 @@ class QuantumProgram(Displayable):
     def _run_parallel_checkpointed(
         self,
         remaining: list[int],
-        max_frame_limit: int,
+        max_frame_limit: int | None,
         root: SeedSequence,
         checkpoint_batch_size: int,
         checkpoint_dir: str | Path | None,
@@ -743,7 +743,7 @@ class QuantumProgram(Displayable):
     def run(
         self,
         num_shots: int = 1,
-        max_frame_limit: int = 100,
+        max_frame_limit: int | None = None,
         shot_executor: SubmitExecutor | None = None,
         verbose: bool = True,
         checkpoint: bool = False,
@@ -766,9 +766,10 @@ class QuantumProgram(Displayable):
 
         max_frame_limit:
             A maximum number of frames to execute before terminating.
-            Defaults to 100, which is sufficient for most small circuits,
-            but this may need to be (significantly) increased for long
-            circuits.
+            The default `None` means no limit; with no limit, a program
+            that never empties its stack runs until interrupted. An
+            integer stops the shot after that many frames with a warning
+            and a truncated history.
 
         shot_executor:
             A [](api:SubmitExecutor) (e.g. a `loky.get_reusable_executor()`
@@ -1095,7 +1096,7 @@ class QuantumProgram(Displayable):
     @staticmethod
     def _run_shot_batch_worker(
         program: "QuantumProgram",
-        max_frame_limit: int,
+        max_frame_limit: int | None,
         root: SeedSequence,
         shot_indices: list[int],
         checkpoint_dir: str | Path | None,
@@ -1135,7 +1136,7 @@ class QuantumProgram(Displayable):
     @staticmethod
     def _run_shot(  # noqa: C901
         program: QuantumProgram,
-        max_frame_limit: int,
+        max_frame_limit: int | None,
         root: SeedSequence,
         shot_index: int,
     ):
@@ -1182,7 +1183,9 @@ class QuantumProgram(Displayable):
 
         stack = program.instruction_stack
 
-        while num_frames < max_frame_limit and len(stack):
+        while len(stack) and (
+            max_frame_limit is None or num_frames < max_frame_limit
+        ):
 
             inst_label, stack = stack.pop_instruction()
 

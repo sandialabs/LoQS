@@ -1,0 +1,84 @@
+# Closes the issues a fix names when its pull request is merged into a
+# bugfix-release-* branch. GitHub closes issues by keyword only for pull
+# requests into the default branch, so a fix merged into a bugfix branch
+# would leave its issues open.
+#
+# Counted: "KEYWORD #N" with one of GitHub's nine keywords (close, fix,
+# resolve and their -s and -d forms; any case; optional colon). Full issue
+# URLs, owner/repo#N, Markdown links and keywords in commit messages are
+# not. HTML comments, such as the pull request template's, are ignored.
+# Each issue gets a comment linking the pull request.
+#
+# The run is triggered by the push a merge makes. It looks up the merged
+# pull request whose merge commit is the pushed commit, and runs the
+# bugfix branch's own copy of this file and of closing-issues.sh. Its
+# token can write for a pull request from a fork too, and it never runs
+# the pull request's code. A failed run is re-run from the Actions page.
+#
+# Token: the built-in one, so issues are closed by github-actions[bot].
+
+name: Close issues fixed on a bugfix branch
+
+on:
+  push:
+    branches: ['bugfix-release-*']
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  close-issues:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.ref_name }}
+      SHA: ${{ github.sha }}
+    steps:
+      - name: Check out the pushed commit
+        uses: actions/checkout@v4
+
+      - name: Close the issues the merged pull request names
+        run: |
+          prs=$(gh pr list --repo "$REPO" --base "$BRANCH" --state merged --limit 100 \
+            --json number,mergeCommit,body,url)
+          prs=$(jq -c --arg sha "$SHA" '[.[] | select(.mergeCommit.oid == $sha)]' <<< "$prs")
+          if [ "$(jq 'length' <<< "$prs")" -eq 0 ]; then
+            echo "::notice::No merged pull request into $BRANCH has $SHA as its merge commit (a direct push or a new branch); nothing to close."
+            exit 0
+          fi
+
+          failed=0
+          while read -r pr; do
+            number=$(jq -r '.number' <<< "$pr")
+            url=$(jq -r '.url' <<< "$pr")
+            issues=$(jq -r '.body // ""' <<< "$pr" | bash .github/scripts/closing-issues.sh)
+            echo "PR #$number names: ${issues:-no issues}" | tr '\n' ' '
+            echo
+            if [ -z "$issues" ]; then
+              echo "::notice::PR #$number names no issue with a closing keyword; nothing to close."
+              continue
+            fi
+            for n in $issues; do
+              if ! issue=$(gh api "repos/$REPO/issues/$n"); then
+                echo "::error::Could not read #$n; it was not closed."
+                failed=1
+              elif jq -e '.pull_request != null' <<< "$issue" > /dev/null; then
+                echo "::notice::#$n is a pull request, not an issue; left alone."
+              elif [ "$(jq -r '.state' <<< "$issue")" != open ]; then
+                echo "::notice::#$n is already closed; left alone."
+              elif gh issue close "$n" --repo "$REPO" --reason completed \
+                  --comment "Fixed by [#$number]($url), merged into \`$BRANCH\`. The fix ships in the release made from that branch."; then
+                echo "::notice::Closed #$n."
+              else
+                echo "::error::Could not close #$n."
+                failed=1
+              fi
+            done
+          done < <(jq -c '.[]' <<< "$prs")
+          exit "$failed"
