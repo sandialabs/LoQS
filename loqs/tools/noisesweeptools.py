@@ -41,6 +41,7 @@ from loqs.core.instructions.instructionstack import (
 from loqs.core.programresults import ProgramResults
 from loqs.core.qeccode import QECCode
 from loqs.internal import Displayable
+from loqs.internal.seeding import as_seed_sequence, child_seed_sequence
 from loqs.internal.serializable import Serializable
 from loqs.tools.paralleltools import (
     ParallelStrategy,
@@ -129,7 +130,7 @@ def _compute_failure_rate(
 class NoiseSweepRunner(MultiProgramRunner[Any]):
     """Builds and runs one `QuantumProgram` per value in a range of noise-parameter values.
 
-    RNG seeding is controlled entirely here (`base_seed + index * seed_stride`), never touched by
+    RNG seeding is controlled entirely here (point `i` runs on a child of `base_seed`), never touched by
     any of the QuantumProgram-forwarding parameters below -- this class is the sole owner of
     `QuantumProgram` construction, so a sweep is deterministic regardless of what those parameters
     (fixed or callable) do internally.
@@ -147,7 +148,7 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "strengths",
         "base_seed",
-        "seed_stride",
+        "_seeding_scheme",
         "_quantum_program_values",
         "_quantum_program_serialized_callables",
         "num_shots",
@@ -164,7 +165,6 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
         collect_shot_data_args: Sequence[HistoryDataCollectorLike],
         expected_outcomes: Sequence,
         base_seed: int = 0,
-        seed_stride: int | None = None,
         instruction_stack: (
             InstructionStackLike | Callable[[Any], InstructionStackLike]
         ) = None,
@@ -206,15 +206,9 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
             works too, for multi-dimensional sweeps.
 
         base_seed:
-            Base seed for the whole sweep. Point `i` uses seed `base_seed + i * seed_stride`.
-
-        seed_stride:
-            Spacing between sweep points' seed ranges. Defaults to `None`, meaning "use
-            `num_shots`" (resolved in `__init__` since `num_shots` is now always known upfront).
-            This keeps each point's seed range exactly as wide as the shots that will use it and
-            no wider, with no arbitrary constant.
-            # TODO(#74): revisit once shot-level seeding itself is revisited; `seed_stride` still
-            # assumes one seed per shot (`default_base_seed + shot index`, per QuantumProgram.run).
+            Base seed (an integer) for the whole sweep. Point `i` runs on the child of the base
+            seed keyed by `i`, and its shots draw from that, so there is no limit tying
+            `num_shots` to the seeds.
 
         instruction_stack, initial_history, default_noise_model, expiring_state,
         global_instructions, state_type, patch_types, override_global_instructions, name:
@@ -269,11 +263,7 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
         self.strengths = list(strengths)
         self.items = self.strengths
         self.base_seed = base_seed
-        self.seed_stride = seed_stride
-        # Resolved immediately since num_shots is now always known upfront
-        self._resolved_seed_stride: int = (
-            seed_stride if seed_stride is not None else num_shots
-        )
+        self._seeding_scheme = "seed sequence"
 
         self.instruction_stack = instruction_stack
         self.initial_history = initial_history
@@ -291,14 +281,6 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
         self.expected_outcomes = tuple(expected_outcomes)
         self.verbose = verbose
         self.metadata = metadata or {}
-
-        # Validation: moved from run() to __init__
-        if self.num_shots > self._resolved_seed_stride:
-            raise ValueError(
-                f"num_shots ({self.num_shots}) must be <= seed_stride "
-                f"({self._resolved_seed_stride}), or seed ranges from adjacent sweep "
-                "points would overlap."
-            )
 
         serialized_callables = (
             dict(serialized_callables) if serialized_callables else {}
@@ -326,6 +308,9 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
     ) -> "NoiseSweepRunner":
         """Create a NoiseSweepRunner from decoded attributes dictionary."""
         attr_dict = dict(attr_dict)
+        # A file from before 1.3.2 seeded points by a stride and lacks the scheme.
+        attr_dict.pop("seed_stride", None)
+        seeding_scheme = attr_dict.pop("_seeding_scheme", "seed stride")
         values = attr_dict["_quantum_program_values"]
         serialized_callables = attr_dict[
             "_quantum_program_serialized_callables"
@@ -355,19 +340,21 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
         attr_dict.pop("_quantum_program_values", None)
         attr_dict.pop("_quantum_program_serialized_callables", None)
 
-        return cast("NoiseSweepRunner", super()._from_decoded_attrs(attr_dict))
+        obj = cast("NoiseSweepRunner", super()._from_decoded_attrs(attr_dict))
+        obj._seeding_scheme = seeding_scheme
+        return obj
 
     def build_program(self, index: int) -> QuantumProgram:
         """Resolve each QuantumProgram-forwarding parameter at `self.strengths[index]` (calling it
         if it's a per-point callable, using it as-is otherwise) and construct the QuantumProgram
-        for that sweep point, using seed `self.base_seed + index * self._resolved_seed_stride`.
+        for that sweep point, rooted at the child of `self.base_seed` keyed by `index`.
         """
         strength = self.strengths[index]
         resolved = {
             param_name: _resolve_value(getattr(self, param_name), strength)
             for param_name in _QUANTUM_PROGRAM_PARAM_NAMES
         }
-        seed = self.base_seed + index * self._resolved_seed_stride
+        seed = child_seed_sequence(as_seed_sequence(self.base_seed), index)
         return QuantumProgram(default_base_seed=seed, **resolved)
 
     def reduce_program_outcomes(
@@ -410,7 +397,7 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
         return [
             "strengths",
             "base_seed",
-            "_resolved_seed_stride",
+            "_seeding_scheme",
             "num_shots",
             "_normalized_collect_shot_data_args",
             "expected_outcomes",
@@ -419,8 +406,8 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
 
     def _mismatch_field_display_name(self, field: str) -> str:
         """Map internal comparison-only field names to public names."""
-        if field == "_resolved_seed_stride":
-            return "seed_stride"
+        if field == "_seeding_scheme":
+            return "seeding scheme"
         return super()._mismatch_field_display_name(field)
 
 

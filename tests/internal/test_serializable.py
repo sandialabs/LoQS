@@ -12,6 +12,7 @@ from loqs.internal.serializable import (
     ResolvingDecodeCache,
     DeferredRef,
     _rebuild_from_encoding_attrs,
+    _restore_subtree_instance_attrs,
 )
 from loqs.types import NDArray
 
@@ -44,6 +45,98 @@ class MockSerializable(Serializable):
             value=attr_dict["value"],
             data=attr_dict["data"],
         )
+
+
+class TaggedMock(MockSerializable):
+    """A mock with one per-object value that stays out of the cache key
+    and out of `__eq__`."""
+
+    _INSTANCE_ATTRS = ["tag"]
+
+    def __init__(self, name="test", value=42, data=None, tag=None):
+        super().__init__(name, value, data)
+        self.tag = tag
+
+
+class MockHolder(Serializable):
+    """A cache-eligible container of mocks, each with its own HDF5 group."""
+
+    _CACHE_ON_SERIALIZE = True
+    _SERIALIZE_ATTRS = ["objs"]
+    _NO_COLLAPSE_ATTRS = frozenset({"objs"})
+
+    def __init__(self, objs):
+        self.objs = objs
+
+    @classmethod
+    def _from_decoded_attrs(cls, attr_dict):
+        return cls(attr_dict["objs"])
+
+
+class TestInstanceAttrs:
+    @pytest.fixture(params=["json", "hdf5"])
+    def fmt(self, request):
+        return request.param
+
+    def _round_trip(self, obj, fmt, make_temp_path):
+        with make_temp_path(suffix=f".{fmt if fmt == 'json' else 'h5'}") as p:
+            obj.write(p)
+            return type(obj).read(p)
+
+    def test_instance_attrs_ride_copy_records(self, fmt, make_temp_path):
+        a = TaggedMock(name="same", tag="A")
+        b = TaggedMock(name="same", tag="B")
+        assert Serializable._serial_hash(a) == Serializable._serial_hash(b)
+        holder = MockHolder([a, b])
+
+        if fmt == "json":
+            enc = Serializable.encode(holder, format="json", encode_cache={})
+            assert "'cache_type': 'copy'" in str(enc)
+
+        decoded = self._round_trip(holder, fmt, make_temp_path)
+        da, db = decoded.objs
+        assert da is not db
+        assert (da.tag, db.tag) == ("A", "B")
+
+    def test_instance_attrs_ride_container_copy_records(
+        self, fmt, make_temp_path
+    ):
+        def make(tags):
+            return MockHolder([TaggedMock(name="x", tag=t) for t in tags])
+
+        c1, c2 = make(["a", "b"]), make(["c", "d"])
+        assert Serializable._serial_hash(c1) == Serializable._serial_hash(c2)
+        outer = MockHolder([c1, c2])
+
+        if fmt == "json":
+            enc = Serializable.encode(outer, format="json", encode_cache={})
+            assert "'cache_type': 'copy'" in str(enc)
+
+        decoded = self._round_trip(outer, fmt, make_temp_path)
+        d1, d2 = decoded.objs
+        objs = d1.objs + d2.objs
+        assert len({id(o) for o in objs}) == 4
+        assert [o.tag for o in objs] == ["a", "b", "c", "d"]
+
+    def test_copy_with_instance_attrs_before_its_source_raises(self):
+        a = TaggedMock(name="same", tag="A")
+        b = TaggedMock(name="same", tag="B")
+        cache: dict = {}
+        Serializable.encode(a, format="json", encode_cache=cache)
+        record = Serializable.encode(b, format="json", encode_cache=cache)
+        assert record["cache_type"] == "copy"
+        with pytest.raises(RuntimeError):
+            Serializable.decode(record, format="json", decode_cache={})
+
+    def test_restore_subtree_mismatch_raises(self):
+        shared = TaggedMock(name="x", tag=0)
+        holder = MockHolder([shared, shared])
+        with pytest.raises(ValueError):
+            _restore_subtree_instance_attrs(holder, [{"tag": 1}, {"tag": 2}])
+        with pytest.raises(ValueError):
+            _restore_subtree_instance_attrs(holder, [{"tag": 1}])
+        _restore_subtree_instance_attrs(holder, [{"tag": 3}, {"tag": 3}])
+        assert shared.tag == 3
 
 
 class TestPickleBridge:

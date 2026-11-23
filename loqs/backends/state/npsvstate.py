@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from copy import deepcopy
 from functools import singledispatchmethod
 import numpy as np
+from numpy.random import SeedSequence
 from typing import ClassVar, TypeAlias, TypeVar
 
 
@@ -109,8 +110,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         "contraction",
         "d",
     ]
-    """`seed` is deliberately not here to avoid triggering re-caching."""
-
     _SERIALIZE_ATTRS_MAP = {"_state": "state"}
 
     _state: np.ndarray
@@ -127,12 +126,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     d: list[int]
     """List of dimensions of each subsystem (e.g. 2 for qubits, 3 for qutrits)."""
-
-    seed: int | None
-    """RNG seed; None indicates default NumPy behavior."""
-
-    _rng: np.random.Generator
-    """Random number generator."""
 
     @property
     def state(self) -> np.ndarray:
@@ -159,7 +152,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         self,
         state: NumpyStatevectorLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
-        seed: int | None = None,
+        seed: int | SeedSequence | None = None,
         kraus_sampling: str | None = None,
         contraction: str | None = None,
         d: int | Sequence[int] = 2,
@@ -176,7 +169,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             is used.
 
         seed:
-            Optional RNG seed. If not provided, default NumPy RNG behavior applies.
+            Optional RNG seed: an integer or a NumPy `SeedSequence`. If None,
+            fresh entropy is used. The sequence is kept in `seed_sequence`.
 
         kraus_sampling:
             Kraus sampling mode; see [](api:KRAUS_SAMPLING_MODES). If not
@@ -196,6 +190,11 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             kraus_sampling, contraction = self._init_from_existing_state(
                 state, kraus_sampling, contraction
             )
+            if seed is None:
+                # Without a seed, share the source's generator
+                self.seed_sequence = state.seed_sequence
+                self.seeded = state.seeded
+                self._rng = state._rng
         else:
             num_subsystems = self._infer_num_subsystems(state, qubit_labels, d)
             self.d = self._resolve_dimensions(num_subsystems, d)
@@ -235,15 +234,13 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     ) -> tuple[str | None, str | None]:
         """Initialize from an existing NumpyStatevectorQuantumState.
 
-        Adopts the state's internal array, qubit labels, RNG, and dimensions
+        Adopts the state's internal array, qubit labels and dimensions
         by reference (not copies), inheriting kraus_sampling and contraction
         modes if not explicitly provided. Returns the resolved modes for
         assignment in __init__.
         """
         self._state = state._state
         self.qubit_labels = state.qubit_labels
-        self.seed = state.seed
-        self._rng = state._rng
         self.d = state.d
         if kraus_sampling is None:
             kraus_sampling = state.kraus_sampling
@@ -697,19 +694,16 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
         return cbit
 
-    def reset_seed(self, new_seed: int | None) -> None:
-        self.seed = new_seed
-        self._rng = np.random.default_rng(new_seed)
-
     def copy(self) -> NumpyStatevectorQuantumState:
         new_state = NumpyStatevectorQuantumState(
             deepcopy(self.state),
             qubit_labels=self.qubit_labels,
-            seed=self.seed,
             kraus_sampling=self.kraus_sampling,
             contraction=self.contraction,
             d=self.d,
         )
+        new_state.seed_sequence = self.seed_sequence
+        new_state.seeded = self.seeded
         new_state._rng = deepcopy(self._rng)
         return new_state
 

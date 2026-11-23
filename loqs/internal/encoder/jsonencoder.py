@@ -14,6 +14,7 @@ import scipy.sparse as sps
 from loqs.internal.serializable import (
     DeferredRef,
     EncodablePrimitives,
+    INSTANCE_ATTRS_KEY,
     IncorrectDecodableTypeError,
     MisformedDecodableError,
 )
@@ -294,6 +295,15 @@ class JSONEncoder(BaseEncoder):
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
 
+        instance_attrs = to_encode._instance_encoding_attrs()
+        if instance_attrs is not None:
+            state[INSTANCE_ATTRS_KEY] = Serializable.encode(
+                instance_attrs,
+                format="json",
+                encode_cache=encode_cache,
+                ignore_no_serialize_flags=ignore_no_serialize_flags,
+            )
+
         return state
 
     @staticmethod
@@ -373,6 +383,7 @@ class JSONEncoder(BaseEncoder):
 
         # Create the attribute dictionary for deserialization
         attr_dict = {}
+        instance_attrs = None
         for k, v in encoded.items():
             # Skip metadata keys
             if version == 0:
@@ -402,6 +413,12 @@ class JSONEncoder(BaseEncoder):
             if k in metadata_keys:
                 continue
 
+            if k == INSTANCE_ATTRS_KEY:
+                instance_attrs = Serializable.decode(
+                    v, format="json", decode_cache=decode_cache
+                )
+                continue
+
             attr_dict[k] = Serializable.decode(
                 v, format="json", decode_cache=decode_cache
             )
@@ -419,6 +436,8 @@ class JSONEncoder(BaseEncoder):
 
         # Create the object using its _from_decoded_attrs method
         decoded = cls._from_decoded_attrs(attr_dict)
+        if instance_attrs is not None:
+            decoded._restore_instance_attrs(instance_attrs)
 
         # Replace the placeholder with the actual object
         if cache_id is not None and cache_id in decode_cache:
@@ -432,6 +451,7 @@ class JSONEncoder(BaseEncoder):
         cache_type="reference",
         reference_cache_id=None,
         source_cache_id=None,
+        instance_attrs=None,
     ):
         """Encode a cached object reference in JSON format.
 
@@ -450,6 +470,10 @@ class JSONEncoder(BaseEncoder):
             For copy-type caching, the cache ID of the reference object.
         source_cache_id : int, optional
             For copy-type caching, the cache ID to assign to the copied object.
+        instance_attrs : list[dict], optional
+            For copy-type caching, the per-object values of the copied
+            object and everything beneath it
+            (`Serializable._subtree_instance_attrs`).
 
         Returns
         -------
@@ -467,6 +491,10 @@ class JSONEncoder(BaseEncoder):
         elif cache_type == "copy":
             result["reference_cache_id"] = reference_cache_id
             result["source_cache_id"] = source_cache_id
+            if instance_attrs is not None:
+                result[INSTANCE_ATTRS_KEY] = Serializable.encode(
+                    instance_attrs, format="json"
+                )
 
         return result
 
@@ -557,12 +585,27 @@ class JSONEncoder(BaseEncoder):
                 else:
                     reference_obj = decode_cache[reference_cache_id]
 
+                instance_attrs = None
+                if INSTANCE_ATTRS_KEY in encoded:
+                    instance_attrs = Serializable.decode(
+                        encoded[INSTANCE_ATTRS_KEY],
+                        format="json",
+                        decode_cache=decode_cache,
+                    )
+
                 # Check if reference is a placeholder
                 if isinstance(reference_obj, DeferredRef):
+                    if instance_attrs is not None:
+                        raise RuntimeError(
+                            "A copy with instance attributes was read before "
+                            "its source object, which cannot be copied yet."
+                        )
                     # Create a new placeholder for the copy
                     copied_obj = DeferredRef(reference_obj.cache_id)
                 else:
-                    copied_obj = copy_cached_reference(reference_obj)
+                    copied_obj = copy_cached_reference(
+                        reference_obj, instance_attrs
+                    )
 
                 # Add the copy to cache
                 decode_cache[source_cache_id] = copied_obj

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+from numpy.random import SeedSequence
 import pytest
 
 stim = pytest.importorskip("stim")
@@ -40,6 +41,12 @@ from loqs.core.instructions.builders import (
 )
 from loqs.core.instructions.instruction import Instruction
 from loqs.engines import StimEngine
+from loqs.internal.seeding import (
+    INSTRUCTION_STREAM,
+    child_seed_sequence,
+    seed_sequence_to_dict,
+    seed_word,
+)
 from loqs.tools.stimtools import (
     _label_order,
     _shot_record,
@@ -255,6 +262,20 @@ class TestRefusals:
         )
 
     @staticmethod
+    def _setup_seed_reader():
+        program = simple_program("X 0\nM 0\n", [0])
+        init, circuit = list(program.instruction_stack)
+        reader = Instruction(
+            lambda seed: Frame({"seed_seen": seed}),
+            name="seeded setup",
+            type="Object builder",
+        )
+        return QuantumProgram.from_quantum_program(
+            program,
+            InstructionStack([init, InstructionLabel(reader), circuit]),
+        )
+
+    @staticmethod
     def _unreported():
         model = DictNoiseModel(
             {"X": StimCircuitGateRep("X 0", ())},
@@ -324,6 +345,7 @@ class TestRefusals:
             "_state_reader_in_composite",
             "_composite_forwards_outcomes",
             "_custom_circuit",
+            "_setup_seed_reader",
         ],
         ids=[
             "statevector-state",
@@ -338,6 +360,7 @@ class TestRefusals:
             "state-reader-in-composite",
             "composite-forwards-outcomes",
             "custom-circuit",
+            "setup-seed-reader",
         ],
     )
     def test_refused(self, make):
@@ -531,12 +554,14 @@ class TestRun:
 
     @pytest.mark.parametrize("path", ["batched", "fast-path"])
     def test_same_seed_same_arrays(self, path):
+        # One object for both runs, so a run that spawns from it shows
+        seed = SeedSequence(7)
         if path == "batched":
-            program, _, _ = split_program(seed=7)
+            program, _, _ = split_program(seed=seed)
             outputs, keys = None, ("measurements", "detectors", "observables")
             shots = 1_000
         else:
-            program = _outcome_dependent_program(seed=7)
+            program = _outcome_dependent_program(seed=seed)
             outputs, keys = _FAST_OUTPUTS, ("measurements", "branch")
             shots = 10
         first = StimEngine().run(program, shots, outputs=outputs)
@@ -544,6 +569,40 @@ class TestRun:
         for key in keys:
             for a, b in zip(first.records(key), second.records(key)):
                 assert np.array_equal(a, b)
+
+    @pytest.mark.parametrize("path", ["batched", "fast-path"])
+    def test_replay_from_recorded_root(self, path):
+        if path == "batched":
+            program, _, _ = split_program()
+            outputs, keys = None, ("measurements", "detectors", "observables")
+            shots = 1_000
+        else:
+            program = _outcome_dependent_program()
+            outputs, keys = _FAST_OUTPUTS, ("measurements", "branch")
+            shots = 10
+        first = StimEngine().run(program, shots, outputs=outputs)
+        assert isinstance(first.root_seed, SeedSequence)
+        replay = QuantumProgram.from_quantum_program(
+            program, default_base_seed=first.root_seed
+        )
+        second = StimEngine().run(replay, shots, outputs=outputs)
+        for key in keys:
+            for a, b in zip(first.records(key), second.records(key)):
+                assert np.array_equal(a, b)
+
+    def test_seeded_initial_state_is_root(self):
+        # The traced copy's state has lost this seed
+        insts = list(simple_program("H 0\nM 0\n", [0]).instruction_stack)[1:]
+        state = STIMQuantumState(1, qubit_labels=[0], seed=5)
+        program = QuantumProgram(
+            insts,
+            initial_history=History([Frame({"state": state, "stack": insts})]),
+            default_noise_model=build_stim_model(stim.Circuit("H 0\nM 0\n")),
+        )
+        results = StimEngine().run(program, 2)
+        assert seed_sequence_to_dict(results.root_seed) == (
+            seed_sequence_to_dict(state.seed_sequence)
+        )
 
     def test_read_back_program_runs(self, tmp_path):
         path = str(tmp_path / "program.json")
@@ -841,10 +900,13 @@ def _outcome_dependent_stack():
     ]
 
 
-def _outcome_dependent_program(*tail, seed=None):
+def _outcome_dependent_program(*tail, seed=None, branch=True):
     model = build_stim_model(stim.Circuit("H 0\nX 0\nM 0\nMR 0\n"))
+    stack = _outcome_dependent_stack()
+    if not branch:
+        stack = stack[:-1]
     return QuantumProgram(
-        _outcome_dependent_stack() + [InstructionLabel(t) for t in tail],
+        stack + [InstructionLabel(t) for t in tail],
         default_noise_model=model,
         state_type=STIMQuantumState,
         default_base_seed=seed,
@@ -897,12 +959,51 @@ def _peeking_reader(seed, stack):
     return Frame({"stack": stack})
 
 
+def _loop(stack):
+    return Frame(
+        {
+            "stack": stack.insert_instruction(
+                0, InstructionLabel(Instruction(_loop, name="loop"))
+            )
+        }
+    )
+
+
 def _looping_reader(seed, stack):
     if seed % 2:
         stack = stack.insert_instruction(
-            0, InstructionLabel(Instruction(_looping_reader, name="loop"))
+            0, InstructionLabel(Instruction(_loop, name="loop"))
         )
     return Frame({"stack": stack})
+
+
+def _peek_stack(stack):
+    """A classical step that reads the stack and leaves it alone."""
+    return Frame({})
+
+
+def _draw(seed):
+    return Frame({"draw": seed})
+
+
+_TAIL_CALL = 3
+"""The tail's call index in `_outcome_dependent_program(branch=False)`:
+after the circuit step, the composite and the circuit, which are calls 0 to 2
+(the state builder isn't counted)."""
+
+
+def _tail_root(call):
+    """The first integer root whose instruction seed at `call` is even on
+    shot 0 and odd on shot 1."""
+    for root in range(1000):
+        seq = SeedSequence(root)
+        words = [
+            seed_word(child_seed_sequence(seq, shot, INSTRUCTION_STREAM, call))
+            for shot in (0, 1)
+        ]
+        if words[0] % 2 == 0 and words[1] % 2 == 1:
+            return root
+    raise AssertionError("no root found")
 
 
 _FAST_OUTPUTS = [
@@ -948,6 +1049,87 @@ class TestFastPath:
         assert got.shape == (n, 2)
         for i in range(2):
             assert_agree(got[:, [i]], expected[:, [i]])
+
+    @staticmethod
+    def _seed_reading_program(qubits, seed, reads=1):
+        """`MX` on every qubit, a stack-reading step (so `run` takes the
+        fast path), then `reads` steps that record their seed as `draw`."""
+        labels = list(range(qubits))
+        program = simple_program(
+            "MX " + " ".join(map(str, labels)) + "\n",
+            labels,
+            default_base_seed=seed,
+        )
+        steps = [InstructionLabel(Instruction(_peek_stack, name="classical"))]
+        steps += [InstructionLabel(Instruction(_draw, name="Draw"))] * reads
+        return QuantumProgram.from_quantum_program(
+            program,
+            InstructionStack(list(program.instruction_stack) + steps),
+            default_noise_model=build_stim_model(
+                stim.Circuit("H 0\nM 0\nMX 0")
+            ),
+        )
+
+    def test_nearby_integer_seeds_differ(self):
+        shots = 10
+        outputs = [
+            {"key": "draw", "indices": "all", "strip_none_entries": True}
+        ]
+        runs = []
+        for seed in (1, 2):
+            program = self._seed_reading_program(20, seed)
+            results = StimEngine().run(program, shots, outputs=outputs)
+            runs.append(
+                (
+                    np.array([np.asarray(r) for r in results["measurements"]]),
+                    np.array([np.asarray(r) for r in results.records("draw")]),
+                )
+            )
+        for a, b in zip(*runs):
+            assert not np.array_equal(a[1:], b[:-1])
+            assert not np.array_equal(a[:-1], b[1:])
+
+    def test_instruction_seed_per_call(self):
+        # The setup holds a step that builds no state, after "Init State"
+        labels = ["D0", "D1", "D2"]
+        physical = STIMPhysicalCircuit(
+            "MX 0 1 2\n", qubit_labels=labels, suppress_tick_warning=True
+        )
+        circuit = build_physical_circuit_instruction(physical, name="MX")
+        stack = [
+            {"instruction": "Init State", "state": 3, "qubit_labels": labels},
+            {
+                "instruction": "Init Patch Rep",
+                "new_patch_label": "L0",
+                "qubits": labels,
+            },
+            InstructionLabel(circuit, patch_label="L0"),
+            InstructionLabel(Instruction(_peek_stack, name="classical")),
+            InstructionLabel(Instruction(_draw, name="Draw")),
+            InstructionLabel(Instruction(_draw, name="Draw")),
+        ]
+        program = QuantumProgram(
+            stack,
+            default_noise_model=build_stim_model(
+                stim.Circuit("H 0\nM 0\nMX 0")
+            ),
+            state_type=STIMQuantumState,
+            patch_types={"Rep": QECCode({}, labels, labels)},
+            default_base_seed=5,
+        )
+        collectors = [
+            {"key": "draw", "indices": "all", "strip_none_entries": True}
+        ]
+        shots = 6
+        per_shot = program.run(shots, verbose=False)
+        results = StimEngine().run(program, shots, outputs=collectors)
+        expected = HistoryDataCollector.from_raw(collectors[0]).collect(
+            per_shot
+        )
+        records = results.records("draw")
+        assert len(records) == shots
+        for e, g in zip(expected, records):
+            _assert_record(e, g)
 
     def test_choice_node(self):
         program = self._choice_program([("X 0", 0.2), ("I 0", 0.8)])
@@ -1030,8 +1212,11 @@ class TestFastPath:
         ids=["state-reader", "state-rebuilt", "frame-limit", "custom-circuit"],
     )
     def test_refused(self, apply_fn, engine, error):
+        # The tail's seed is even on the traced shot and odd on the next
         program = _outcome_dependent_program(
-            Instruction(apply_fn, name="tail"), seed=0
+            Instruction(apply_fn, name="tail"),
+            seed=_tail_root(_TAIL_CALL),
+            branch=False,
         )
         with pytest.raises(error):
             engine.run(program, 2)

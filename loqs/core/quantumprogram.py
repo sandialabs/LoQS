@@ -21,6 +21,7 @@ import time
 from typing import ClassVar, Literal, TypeVar, cast
 import warnings
 
+from numpy.random import SeedSequence
 from tqdm import tqdm
 
 from loqs.backends.model import BaseNoiseModel
@@ -30,6 +31,15 @@ from loqs.core.executors import SubmitExecutor, _refuse_thread_executor
 from loqs.core.history import (
     History,
     HistoryLike,
+)
+from loqs.internal.seeding import (
+    INSTRUCTION_STREAM,
+    STATE_STREAM,
+    as_seed_sequence,
+    child_seed_sequence,
+    seed_sequence_from_dict,
+    seed_sequence_to_dict,
+    seed_word,
 )
 from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
@@ -121,7 +131,7 @@ class QuantumProgram(Displayable):
         instruction_stack: InstructionStackLike = None,
         initial_history: HistoryLike = None,
         default_noise_model: BaseNoiseModel | str | None = None,
-        default_base_seed: int | None = None,
+        default_base_seed: int | SeedSequence | None = None,
         expiring_state: bool = True,
         global_instructions: Mapping[str, Instruction] | None = None,
         state_type: type[BaseQuantumState] | None = None,
@@ -154,8 +164,11 @@ class QuantumProgram(Displayable):
             in its [][](api:Instruction.data).
 
         default_base_seed:
-            Base seed to use for RNG. Each shot will use a seed as
-            `default_base_seed` + <shot index>.
+            An integer, a NumPy `SeedSequence` or None. If set, it is the
+            run's root seed and wins over the seed of a state passed in the
+            initial history. Each shot draws independent streams from the
+            root, keyed by shot index, so serial, parallel and resumed runs
+            agree shot for shot.
 
         expiring_state:
             Whether to set `"state"` as an expiring key in the
@@ -235,11 +248,11 @@ class QuantumProgram(Displayable):
             )
             self._noise_model_filename = default_noise_model
         self.default_base_seed = default_base_seed
-        """A default base seed value for shot RNG.
+        """The run's root seed (integer, `SeedSequence` or None).
 
-        Each shot actually uses `default_base_seed + i`, where
-        `i` is the index of the shot. This ensures consistent
-        RNG even when running shots in parallel.
+        When set, it wins over the seed of a state passed in the initial
+        history. Shot `i` draws its own independent streams from the root,
+        keyed by `i`, so the shots are the same however they are run.
         """
 
         # Create the instruction stack and add it to the history
@@ -342,7 +355,7 @@ class QuantumProgram(Displayable):
         other: QuantumProgram,
         instruction_stack: InstructionStackLike = None,
         default_noise_model: BaseNoiseModel | str | None = None,
-        default_base_seed: int | None = None,
+        default_base_seed: int | SeedSequence | None = None,
         global_instructions: Mapping[str, Instruction] | None = None,
         state_type: type[BaseQuantumState] | None = None,
         patch_types: Mapping[str, QECCode] | None = None,
@@ -439,16 +452,18 @@ class QuantumProgram(Displayable):
         resume: bool,
         force_resume: bool,
         results_filename: str = "results.h5",
-    ) -> Path:
+    ) -> tuple[Path, SeedSequence | None]:
         """Resolve `checkpoint_dir` and implement the checkpoint/resume state
-        machine based on explicit `resume` flag and on-disk state.
+        machine based on explicit `resume` flag and on-disk state. Returns the
+        directory and the stored root seed (None for a fresh run).
 
         State machine (cases a-d):
         - (a) no on-disk state, resume=False -> free to create and start
         - (b) on-disk state exists with valid checkpoint, resume=False -> error
           (never silently overwrite)
         - (c) on-disk state with valid checkpoint and resume=True -> resume,
-          subject to mismatch check (force_resume bypasses)
+          subject to the seed refusals (never bypassed) and the mismatch check
+          (force_resume bypasses)
         - (d) resume=True but no on-disk state -> error (nothing to resume
           from; covers the case of a caller pointing resume=True at a filename
           the original run never used)
@@ -480,7 +495,7 @@ class QuantumProgram(Displayable):
                     "to resume from. Pass resume=False to start a fresh run, or "
                     "use a different checkpoint_dir with existing state."
                 )
-            return resolved_checkpoint_dir
+            return resolved_checkpoint_dir, None
 
         # Check for foreign content first (before checking resume flag)
         if not results_path.exists():
@@ -502,32 +517,74 @@ class QuantumProgram(Displayable):
 
         # Only the config attributes are read; no shot is decoded.
         stored = store.read_attrs(
-            ("num_shots", "max_frame_limit", "parent_program")
+            ("num_shots", "max_frame_limit", "root_seed"),
+            optional=("root_seed",),
         )
-        stored_parent = stored["parent_program"]
+        # Shots from two roots can't share one recorded root, so neither
+        # seed refusal is bypassed by force_resume.
+        stored_root = stored["root_seed"]
+        if stored_root is None:
+            raise ValueError(
+                f"Cannot resume {resolved_checkpoint_dir}: the checkpoint was "
+                "written before LoQS 1.3.2 and has no recorded root seed. "
+                "Start a fresh run in a new checkpoint_dir."
+            )
+        if (
+            self.default_base_seed is not None
+            and seed_sequence_to_dict(as_seed_sequence(self.default_base_seed))
+            != stored_root
+        ):
+            raise ValueError(
+                f"Cannot resume {resolved_checkpoint_dir}: default_base_seed "
+                "differs from the checkpoint's recorded root seed. Leave "
+                "default_base_seed unset to resume on the stored root."
+            )
         mismatches = []
         if stored["num_shots"] != num_shots:
             mismatches.append("num_shots")
         if stored["max_frame_limit"] != max_frame_limit:
             mismatches.append("max_frame_limit")
-        if (
-            stored_parent is not None
-            and isinstance(stored_parent, QuantumProgram)
-            and stored_parent.default_base_seed != self.default_base_seed
-        ):
-            mismatches.append("default_base_seed")
         if mismatches and not force_resume:
             raise ValueError(
                 f"Cannot resume: stored config differs in "
                 f"{', '.join(mismatches)}. Pass force_resume=True to "
                 "resume anyway."
             )
-        return resolved_checkpoint_dir
+        return resolved_checkpoint_dir, seed_sequence_from_dict(stored_root)
+
+    def _resolve_root_seed(
+        self, stored_root: SeedSequence | None = None
+    ) -> SeedSequence:
+        """The run's root: `default_base_seed` if set, else a resumed
+        checkpoint's stored root, else the seed of a seeded state in the
+        initial history's last frame, else fresh entropy.
+        """
+        if self.default_base_seed is not None:
+            return as_seed_sequence(self.default_base_seed)
+        if stored_root is not None:
+            return stored_root
+        given = self._given_root_seed()
+        if given is not None:
+            return given
+        return SeedSequence()
+
+    def _given_root_seed(self) -> SeedSequence | None:
+        """The root the user gave: `default_base_seed`, else the sequence of
+        a seeded state in the initial history's last frame, else `None`."""
+        if self.default_base_seed is not None:
+            return as_seed_sequence(self.default_base_seed)
+        history = self.initial_history
+        if len(history):
+            state = history[-1].get("state")
+            if isinstance(state, BaseQuantumState) and state.seeded:
+                return state.seed_sequence
+        return None
 
     def _run_serial_checkpointed(
         self,
         remaining: list[int],
         max_frame_limit: int | None,
+        root: SeedSequence,
         checkpoint_batch_size: int,
         checkpoint_dir: str | Path | None,
         program_results: ProgramResults,
@@ -548,14 +605,9 @@ class QuantumProgram(Displayable):
         )
         with held_ledger:
             for i in remaining:
-                seed = (
-                    None
-                    if self.default_base_seed is None
-                    else self.default_base_seed + i
-                )
                 start_time = time.perf_counter()
                 result = QuantumProgram._run_shot(
-                    self, max_frame_limit, seed, i
+                    self, max_frame_limit, root, i
                 )
                 wall_clock_time = time.perf_counter() - start_time
                 program_results.add_shot(
@@ -573,6 +625,7 @@ class QuantumProgram(Displayable):
         self,
         remaining: list[int],
         max_frame_limit: int | None,
+        root: SeedSequence,
         checkpoint_batch_size: int,
         checkpoint_dir: str | Path | None,
         shot_executor: SubmitExecutor,
@@ -595,17 +648,8 @@ class QuantumProgram(Displayable):
                 QuantumProgram._run_shot_batch_worker,
                 self,
                 max_frame_limit,
-                [
-                    (
-                        (
-                            None
-                            if self.default_base_seed is None
-                            else self.default_base_seed + i
-                        ),
-                        i,
-                    )
-                    for i in batch_indices
-                ],
+                root,
+                batch_indices,
                 checkpoint_dir,
                 program_results._results_filename,
             ): batch_indices
@@ -803,10 +847,12 @@ class QuantumProgram(Displayable):
         force_resume:
             When resuming a checkpoint-enabled call (rerunning against a
             `checkpoint_dir` with prior partial results), if this is `False`
-            (default) and the stored `num_shots`/`max_frame_limit`/
-            `default_base_seed` differ from this call's own, raise
-            `ValueError` naming the mismatches. Set to `True` to resume
-            anyway, trusting the already-checkpointed data as-is. Has no
+            (default) and the stored `num_shots`/`max_frame_limit` differ
+            from this call's own, raise `ValueError` naming the mismatches.
+            Set to `True` to resume anyway, trusting the already-checkpointed
+            data as-is. It bypasses `num_shots` and `max_frame_limit` only: a
+            checkpoint without a recorded root seed, or a `default_base_seed`
+            that differs from the recorded root, always raises. Has no
             effect when `checkpoint` is `False`.
 
         n_shot_batches:
@@ -863,8 +909,9 @@ class QuantumProgram(Displayable):
         checkpoint_enabled = checkpoint
 
         resolved_checkpoint_dir = None
+        stored_root = None
         if checkpoint_enabled:
-            resolved_checkpoint_dir = (
+            resolved_checkpoint_dir, stored_root = (
                 self._check_resume_and_resolve_checkpoint_dir(
                     checkpoint_dir,
                     num_shots,
@@ -887,6 +934,8 @@ class QuantumProgram(Displayable):
             )
         )
 
+        root = self._resolve_root_seed(stored_root)
+
         program_results = ProgramResults(
             name=f"Results for {self.name}",
             parent_program=self,
@@ -895,21 +944,12 @@ class QuantumProgram(Displayable):
             num_shots=num_shots,
             max_frame_limit=max_frame_limit,
             results_filename=results_filename,
+            root_seed=root,
         )
-
-        def _seed_for_shot(shot_index: int) -> int | None:
-            # For RNG seeding, use the shot's own absolute index directly.
-            if self.default_base_seed is None:
-                return None
-            return self.default_base_seed + shot_index
 
         if not checkpoint_enabled:
             if shot_executor is None:
                 # Execute serially
-                tasks = [
-                    (self, max_frame_limit, _seed_for_shot(i), i)
-                    for i in range(num_shots)
-                ]
                 with tqdm(
                     total=num_shots,
                     desc=f"Program {self.name}",
@@ -918,13 +958,15 @@ class QuantumProgram(Displayable):
                     progress = _ShotProgress(
                         pbar, num_shots, progress_callback
                     )
-                    for task in tasks:
+                    for i in range(num_shots):
                         start_time = time.perf_counter()
-                        result = QuantumProgram._run_shot(*task)
+                        result = QuantumProgram._run_shot(
+                            self, max_frame_limit, root, i
+                        )
                         wall_clock_time = time.perf_counter() - start_time
                         program_results.add_shot(
-                            task[3], result, wall_clock_time=wall_clock_time
-                        )  # task[3] is shot index
+                            i, result, wall_clock_time=wall_clock_time
+                        )
                         progress.update(1)
             else:
                 # Dispatch shots in batches (resolved_n_shot_batches is
@@ -946,7 +988,8 @@ class QuantumProgram(Displayable):
                         QuantumProgram._run_shot_batch_worker,
                         self,
                         max_frame_limit,
-                        [(_seed_for_shot(i), i) for i in batch_indices],
+                        root,
+                        batch_indices,
                         None,
                     ): batch_indices
                     for batch_indices in batches
@@ -1001,6 +1044,7 @@ class QuantumProgram(Displayable):
                 self._run_serial_checkpointed(
                     remaining,
                     max_frame_limit,
+                    root,
                     checkpoint_batch_size,
                     resolved_checkpoint_dir,
                     program_results,
@@ -1010,6 +1054,7 @@ class QuantumProgram(Displayable):
                 self._run_parallel_checkpointed(
                     remaining,
                     max_frame_limit,
+                    root,
                     checkpoint_batch_size,
                     resolved_checkpoint_dir,
                     shot_executor,
@@ -1052,7 +1097,8 @@ class QuantumProgram(Displayable):
     def _run_shot_batch_worker(
         program: "QuantumProgram",
         max_frame_limit: int | None,
-        shot_specs: list[tuple[int | None, int]],
+        root: SeedSequence,
+        shot_indices: list[int],
         checkpoint_dir: str | Path | None,
         results_filename: str = "results.h5",
     ) -> tuple[dict[int, HistoryLike] | BatchReceipt, dict[int, float]]:
@@ -1061,10 +1107,10 @@ class QuantumProgram(Displayable):
         # Named after the run's canonical file, so checkpoint() finds the
         # driver's snapshot.
         batch_results = ProgramResults(results_filename=results_filename)
-        for seed, shot_index in shot_specs:
+        for shot_index in shot_indices:
             start_time = time.perf_counter()
             history = QuantumProgram._run_shot(
-                program, max_frame_limit, seed, shot_index
+                program, max_frame_limit, root, shot_index
             )
             wall_clock_time = time.perf_counter() - start_time
             batch_results.add_shot(
@@ -1088,13 +1134,20 @@ class QuantumProgram(Displayable):
 
     # Static for more efficient parallel data movement
     @staticmethod
-    def _run_shot(
+    def _run_shot(  # noqa: C901
         program: QuantumProgram,
-        max_frame_limit: int | None = None,
-        seed: int | None = None,
-        shot_index: int | None = None,
+        max_frame_limit: int | None,
+        root: SeedSequence,
+        shot_index: int,
     ):
         num_frames = 0
+        # Each state built gets its own child of the root; instruction calls
+        # that don't build a state count position in a separate stream.
+        state_builds = 0
+        calls = 0
+        # States of a run whose root wasn't given are marked unseeded, so
+        # they don't seed a program they're passed into.
+        root_given = program._given_root_seed() is not None
 
         history = copy.deepcopy(program.initial_history)
 
@@ -1116,7 +1169,15 @@ class QuantumProgram(Displayable):
                     "initial History drops 'state'. Pass plain frames, or a "
                     "History that doesn't drop 'state', to save it."
                 )
-            cast(BaseQuantumState, history[-1]["state"]).reset_seed(seed)
+            initial_state = cast(BaseQuantumState, history[-1]["state"])
+            initial_state.reset_seed(
+                child_seed_sequence(
+                    root, shot_index, STATE_STREAM, state_builds
+                )
+            )
+            if not root_given:
+                initial_state.seeded = False
+            state_builds += 1
         except (KeyError, IndexError):
             pass
 
@@ -1141,12 +1202,35 @@ class QuantumProgram(Displayable):
             label_kwargs = QuantumProgram._label_kwargs(inst_label, inst)
 
             # Collect data that the QuantumProgram can give
+            obj_class = inst.data.get("obj_class")
+            if isinstance(obj_class, type) and issubclass(
+                obj_class, BaseQuantumState
+            ):
+                seed: int | SeedSequence = child_seed_sequence(
+                    root, shot_index, STATE_STREAM, state_builds
+                )
+                state_builds += 1
+                builds_state = True
+            else:
+                builds_state = False
             program_data = {
                 "history": history,
                 "patch_label": patch_label,
                 "stack": stack,
-                "seed": seed,
             }
+            if builds_state:
+                program_data["seed"] = seed
+            else:
+                if any(
+                    inst.param_alias(k) == "seed"
+                    for k in inst.param_priorities
+                ):
+                    program_data["seed"] = seed_word(
+                        child_seed_sequence(
+                            root, shot_index, INSTRUCTION_STREAM, calls
+                        )
+                    )
+                calls += 1
             if program.default_noise_model is not None:
                 program_data["model"] = program.default_noise_model
 
@@ -1174,6 +1258,11 @@ class QuantumProgram(Displayable):
                     raise
 
             applied_frame = inst.apply(**apply_kwargs)
+
+            if builds_state and not root_given:
+                built = applied_frame.get(inst.data.get("frame_key", ""))
+                if isinstance(built, BaseQuantumState):
+                    built.seeded = False
 
             # Only update stack if the instruction did not
             if "stack" not in applied_frame:
@@ -1365,8 +1454,16 @@ class QuantumProgram(Displayable):
         - "patch_label": The resolved [](api:InstructionLabel)'s `"patch_label"` entry
         - "stack": The current [](api:InstructionStack) object being
             read by [](api:run).
-        - "seed": The shot of the seed, as [](api:default_base_seed) is
-            not `None`, or `None` otherwise.
+        - "seed": An integer, one per instruction call, different on every
+            call in a shot. It is set by the root, the shot index and the
+            call's position among the calls that don't build a state, so
+            reruns agree, and so does a run whose state comes in the
+            initial history. It is separate from the stream of the shot's
+            quantum state. An instruction whose data
+            holds a quantum state `obj_class` (the `"Init State"` builder)
+            gets that state's `SeedSequence` instead. A state an instruction
+            builds itself from this integer counts as `seeded`, in an
+            unseeded run too.
         - "model": The [](api:default_noise_model) if it is not `None`,
             otherwise it is not included in the dict
 
@@ -1523,12 +1620,20 @@ class QuantumProgram(Displayable):
             and self._noise_model_filename is not None
         ):
             return self._noise_model_filename
+        if attr == "default_base_seed" and isinstance(
+            self.default_base_seed, SeedSequence
+        ):
+            return seed_sequence_to_dict(self.default_base_seed)
 
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
     def _from_decoded_attrs(cls, attr_dict) -> "QuantumProgram":
         """Create a QuantumProgram from decoded attributes dictionary."""
+
+        base_seed = attr_dict["default_base_seed"]
+        if isinstance(base_seed, dict):
+            base_seed = seed_sequence_from_dict(base_seed)
 
         with warnings.catch_warnings():
             # Filter out warnings about pre-existing Init State/Init Patch instructions
@@ -1542,7 +1647,7 @@ class QuantumProgram(Displayable):
             obj = cls(
                 instruction_stack=attr_dict["instruction_stack"],
                 initial_history=attr_dict["initial_history"],
-                default_base_seed=attr_dict["default_base_seed"],
+                default_base_seed=base_seed,
                 default_noise_model=attr_dict["default_noise_model"],
                 state_type=attr_dict["state_type"],
                 patch_types=attr_dict["patch_types"],

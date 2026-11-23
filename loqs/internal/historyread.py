@@ -28,7 +28,11 @@ from loqs.internal.encoder.hdf5encoder import (
     _COLLAPSED_BLOB_NAME,
     _get_version,
 )
-from loqs.internal.serializable import SERIALIZATION_VERSION, Serializable
+from loqs.internal.serializable import (
+    INSTANCE_ATTRS_KEY,
+    SERIALIZATION_VERSION,
+    Serializable,
+)
 
 
 class Unnavigable(Exception):
@@ -196,6 +200,13 @@ def lazy_history(
     if cache_type in ("copy", "reference"):
         if locate is None:
             raise Unnavigable("stub without a locator")
+        # A copy carrying its states' RNG would read back with the source's
+        if isinstance(top, dict):
+            carries_values = INSTANCE_ATTRS_KEY in top
+        else:
+            carries_values = len(top) > 0
+        if carries_values:
+            raise Unnavigable("copy with instance attributes")
         key = "reference_cache_id" if cache_type == "copy" else "cache_id"
         return lazy_history(locate(int(attrs[key])), cache)
 

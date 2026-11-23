@@ -199,12 +199,24 @@ print(f"per-shot time {per_shot_time * 1e3:.2f} ms, "
 
 The two runs agree in distribution only, never shot for shot: they draw their
 randomness differently. Within `StimEngine` the same seed gives the same
-arrays.
+arrays. The root of a run is `default_base_seed` (an integer or a
+`SeedSequence`), else a seeded state in the initial history, else fresh
+entropy; the result records it as `root_seed`, and passing that back as
+`default_base_seed` replays the run, an unseeded one included.
 
 ```{code-cell} ipython3
 again = StimEngine().run(program, 1000, outputs=["logical_error"])
 once_more = StimEngine().run(program, 1000, outputs=["logical_error"])
 print(np.array_equal(again["detectors"], once_more["detectors"]))
+
+replayed = StimEngine().run(
+    QuantumProgram.from_quantum_program(
+        program, default_base_seed=again.root_seed
+    ),
+    1000,
+    outputs=["logical_error"],
+)
+print(np.array_equal(again["detectors"], replayed["detectors"]))
 ```
 
 ## Save the result

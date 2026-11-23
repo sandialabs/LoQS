@@ -11,12 +11,20 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import textwrap
-from typing import ClassVar, TypeAlias, TypeVar
+from typing import Any, ClassVar, TypeAlias, TypeVar
+
+import numpy as np
+from numpy.random import SeedSequence
 
 from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
 from loqs.internal import Displayable
+from loqs.internal.seeding import (
+    as_seed_sequence,
+    seed_sequence_from_dict,
+    seed_sequence_to_dict,
+)
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BaseQuantumState")
@@ -31,7 +39,32 @@ class BaseQuantumState(Displayable):
     name: ClassVar[str]
     """Name of state backend"""
 
+    seed_sequence: SeedSequence
+    """Seed sequence the state's generators are built from."""
+
+    seeded: bool = False
+    """True when `seed_sequence` was given, false when it came from fresh
+    entropy. A state a run seeded from fresh entropy is not `seeded`."""
+
+    _rng: np.random.Generator
+    """Random number generator."""
+
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    _INSTANCE_ATTRS = ["seed_sequence", "seeded", "_rng_state"]
+
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        if attr == "seed_sequence":
+            return seed_sequence_to_dict(self.seed_sequence)
+        if attr == "_rng_state":
+            return self._rng.bit_generator.state
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    def _restore_instance_attrs(self, attrs: Mapping[str, Any]) -> None:
+        self.seed_sequence = seed_sequence_from_dict(attrs["seed_sequence"])
+        self.seeded = attrs["seeded"]
+        self._rng = np.random.default_rng(self.seed_sequence)
+        self._rng.bit_generator.state = attrs["_rng_state"]
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
@@ -116,7 +149,17 @@ class BaseQuantumState(Displayable):
         """
         pass
 
-    @abstractmethod
-    def reset_seed(self, new_seed: int | None) -> None:
-        """Reset the RNG seed."""
-        pass
+    def reset_seed(self, new_seed: int | SeedSequence | None) -> None:
+        """Reset the RNG seed.
+
+        Parameters
+        ----------
+        new_seed:
+            An integer, a NumPy `SeedSequence` (used as is), or None for
+            fresh entropy. The state keeps the resulting sequence in
+            `seed_sequence`, so a run can be replayed from it. A backend with
+            generators besides `_rng` overrides this to seed them too.
+        """
+        self.seed_sequence = as_seed_sequence(new_seed)
+        self.seeded = new_seed is not None
+        self._rng = np.random.default_rng(self.seed_sequence)

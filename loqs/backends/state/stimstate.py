@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from functools import singledispatchmethod
 import numpy as np
+from numpy.random import SeedSequence
 from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
 from loqs.backends import is_backend_available
@@ -34,6 +35,7 @@ from loqs.backends.reps import (
     is_rep_compatible,
 )
 from loqs.backends.state import BaseQuantumState, OutcomeDict
+from loqs.internal.seeding import child_seed_sequence, seed_word
 
 # Conditional imports for STIM
 if TYPE_CHECKING:
@@ -96,7 +98,7 @@ class STIMQuantumState(BaseQuantumState):
     _feed_forward: ClassVar[bool] = False
 
     _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
-    """`seed` is deliberately not here to avoid triggering re-caching."""
+    _INSTANCE_ATTRS = BaseQuantumState._INSTANCE_ATTRS + ["_tableau_restores"]
 
     _PICKLE_VIA_ENCODING_ATTRS = True
     """The underlying TableauSimulator can't be pickled directly."""
@@ -137,7 +139,7 @@ class STIMQuantumState(BaseQuantumState):
         self,
         state: STIMStateLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
-        seed: int | None = None,
+        seed: int | SeedSequence | None = None,
     ) -> None:
         """
         Parameters
@@ -151,13 +153,23 @@ class STIMQuantumState(BaseQuantumState):
             is used.
 
         seed:
-            Optional RNG seed. If not provided, default NumPy RNG behavior applies.
+            Optional RNG seed: an integer or a NumPy `SeedSequence`. If None,
+            fresh entropy is used. The sequence is kept in `seed_sequence`.
 
         Notes
         -----
-        STIM's [](api:stim.TableauSimulator) has its' own internal RNG. We try to prime
-        it as much as possible for consistency, but we cannot guarantee completely
-        identical RNG when copying/deserializing these objects.
+        STIM's [](api:stim.TableauSimulator) has its own generator. It is
+        seeded from a child of the state's `seed_sequence`, so it shares no
+        seed bits with the NumPy generator. An in-memory copy continues both
+        streams. A state read back or unpickled continues its NumPy generator
+        exactly, but starts its tableau simulator on a new stream derived
+        from the seed sequence and the restore count, so reading one file
+        twice gives the same draws, and they aren't the draws an
+        uninterrupted run would have made.
+
+        A caller who hands the same `SeedSequence` to a state and also spawns
+        from it gets a child that collides with the tableau's, so each state
+        should get its own sequence.
         """
         if not is_backend_available("stim_state"):
             raise ImportError(
@@ -166,22 +178,21 @@ class STIMQuantumState(BaseQuantumState):
             )
         self.qubit_labels = []
         if isinstance(state, STIMQuantumState):
-            # If we are setting a seed here, do not copy internal RNG
-            # Otherwise, DO copy internal RNG
-            self._state = state._state.copy(copy_rng=seed is None, seed=seed)
+            # Continue the source's tableau stream; a seed reseeds it below
+            self._state = state._state.copy(copy_rng=True)
             self.qubit_labels = state.qubit_labels
         elif isinstance(state, _TableauSimulator):
-            self._state = state.copy(copy_rng=seed is None, seed=seed)
+            self._state = state.copy(copy_rng=True)
         elif isinstance(state, _Tableau):
-            self._state = _TableauSimulator(seed=seed)
+            self._state = _TableauSimulator()
             self._state.set_inverse_tableau(state)
         elif isinstance(state, int):
-            self._state = _TableauSimulator(seed=seed)
+            self._state = _TableauSimulator()
             self._state.set_num_qubits(state)
         elif isinstance(state, Sequence) and all(
             [el in [0, 1] for el in state]
         ):
-            self._state = _TableauSimulator(seed=seed)
+            self._state = _TableauSimulator()
             self._state.set_num_qubits(len(state))
             # Flip specified bits
             for bit, val in enumerate(state):
@@ -202,8 +213,13 @@ class STIMQuantumState(BaseQuantumState):
             len(self.qubit_labels) == self.state.num_qubits
         ), "Must specify a qubit label for every qubit"
 
-        self.seed = seed
-        self._rng = np.random.default_rng(seed)
+        if seed is None and isinstance(
+            state, (STIMQuantumState, _TableauSimulator)
+        ):
+            # Keep the copied tableau stream; only the NumPy side is new
+            super().reset_seed(None)
+        else:
+            self.reset_seed(seed)
 
         self.latest_applied_circuit = _Circuit()
         self.latest_measurement_labels: list[QubitTypes] = []
@@ -244,27 +260,53 @@ class STIMQuantumState(BaseQuantumState):
         return super().apply_reps(reps)
 
     def copy(self) -> STIMQuantumState:
-        new_state = STIMQuantumState(self.state, self.qubit_labels, self.seed)
+        # No seed, so the tableau stream is carried over
+        new_state = type(self)(self.state, self.qubit_labels)
+        new_state.seed_sequence = self.seed_sequence
+        new_state.seeded = self.seeded
         new_state._rng = deepcopy(self._rng)
+        new_state._tableau_restores = self._tableau_restores
         return new_state
 
-    def reset_seed(self, new_seed: int | None) -> None:
+    _tableau_restores: int = 0
+    """Times this state's lineage has been restored from disk or a pickle."""
+
+    def _tableau_seed(self) -> int:
+        """Integer seed for the tableau simulator, from a child sequence
+        keyed by the restore count (just `0` for a never-restored state)."""
+        if self._tableau_restores == 0:
+            child = child_seed_sequence(self.seed_sequence, 0)
+        else:
+            child = child_seed_sequence(
+                self.seed_sequence, 0, self._tableau_restores
+            )
+        return seed_word(child)
+
+    def _restore_instance_attrs(self, attrs: Mapping[str, Any]) -> None:
+        super()._restore_instance_attrs(attrs)
+        self._tableau_restores = attrs["_tableau_restores"] + 1
+        self._state = self._state.copy(
+            copy_rng=False, seed=self._tableau_seed()
+        )
+
+    def reset_seed(self, new_seed: int | SeedSequence | None) -> None:
         """Reset the random seed for the quantum state.
 
-        Unlike some other implementations, this method explicitly forces a fresh
-        RNG initialization with the new seed in the underlying
-        [](api:stim.TableauSimulator) object.
+        Seeds the NumPy generator as the base class does, and also forces a
+        fresh generator in the underlying [](api:stim.TableauSimulator),
+        seeded from a child of the state's `seed_sequence`.
 
         Parameters
         ----------
-        new_seed : int | None
-            The new random seed to use. If None, the random number generator
-            will use its default seeding behavior.
+        new_seed : int | SeedSequence | None
+            The new random seed to use. If None, fresh entropy is used.
         """
+        super().reset_seed(new_seed)
+        self._tableau_restores = 0
         # We explicitly don't want to copy RNG here, force a new RNG seed
-        self._state = self._state.copy(copy_rng=False, seed=new_seed)
-        self.seed = new_seed
-        self._rng = np.random.default_rng(new_seed)
+        self._state = self._state.copy(
+            copy_rng=False, seed=self._tableau_seed()
+        )
 
     @singledispatchmethod
     def _apply_gate_rep(self, rep: GateRep) -> None:

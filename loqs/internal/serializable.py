@@ -222,6 +222,11 @@ SERIALIZATION_VERSION = 2
    relocations; see IMPORT_LOCATION_CHANGES_BY_VERSION.
 """
 
+INSTANCE_ATTRS_KEY = "$instance"
+"""Reserved record entry holding an object's `_INSTANCE_ATTRS` values.
+
+Can't collide with an attribute name, as `$collapsed` can't."""
+
 # Module-level ContextVars below stand in for a "global-ish" flag set once
 # at a top-level call and read deep inside the generic recursive decode
 # dispatch, without threading a parameter through every layer in between.
@@ -245,7 +250,9 @@ _SERIAL_HASH_MEMO: contextvars.ContextVar[dict | None] = (
     contextvars.ContextVar("serial_hash_memo", default=None)
 )
 """One top-level encode's `Serializable` hashes, by id, each stored with
-its object so the id can't be reused. Safe because nothing changes in
+its object so the id can't be reused, and with whether the object or
+anything the hash reached beneath it has `_INSTANCE_ATTRS` (so the `copy`
+record walk can skip what has none). Safe because nothing changes in
 place during one encode. It never outlives an encode: objects change in
 place between checkpoints, and `merge_dict_attr` holds one entry at a time.
 """
@@ -673,12 +680,100 @@ _FUNCTION_HEADER_RE = re.compile(
 )
 
 
-def _rebuild_from_encoding_attrs(cls: Type[T], attrs: Mapping[str, Any]) -> T:
+def _rebuild_from_encoding_attrs(
+    cls: Type[T],
+    attrs: Mapping[str, Any],
+    instance_attrs: Mapping[str, Any] | None = None,
+) -> T:
     """Unpickle helper for classes with `_PICKLE_VIA_ENCODING_ATTRS`.
 
-    Module-level so that it pickles by reference.
+    Module-level so that it pickles by reference. `instance_attrs`
+    defaults to `None` so a pickle made without it still loads.
     """
-    return cls._from_decoded_attrs(attrs)
+    obj = cls._from_decoded_attrs(attrs)
+    if instance_attrs is not None:
+        obj._restore_instance_attrs(instance_attrs)
+    return obj
+
+
+def _iter_instance_objects(value: Any, _path: tuple = ()):
+    """Yield every `Serializable` with `_INSTANCE_ATTRS` in `value` and
+    beneath it, once per place it occurs, in a fixed order.
+
+    The order is the object itself, then each `_SERIALIZE_ATTRS` value
+    (read with `_get_encoding_attr`, so values the encoder doesn't write
+    are never visited) in order, descending into dict values, lists,
+    tuples and object arrays. An object already on the current path isn't
+    entered again, so a cycle ends. During an encode, an object whose memo
+    entry (`_SERIAL_HASH_MEMO`) has nothing beneath it is skipped.
+
+    Raises
+    ------
+    ValueError
+        If a set holds such an object, since a set has no order.
+    """
+    if type(value) in _LEAF_BY_TYPE:
+        return
+    if isinstance(value, Serializable):
+        memo = _SERIAL_HASH_MEMO.get()
+        hit = memo.get(id(value)) if memo is not None else None
+        if hit is not None and not hit[2]:
+            return
+        if any(value is p for p in _path):
+            return
+        if value._INSTANCE_ATTRS:
+            yield value
+        path = _path + (value,)
+        for attr in value._SERIALIZE_ATTRS:
+            yield from _iter_instance_objects(
+                value._get_encoding_attr(attr), path
+            )
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _iter_instance_objects(v, _path)
+    elif isinstance(value, np.ndarray):
+        if value.dtype.kind == "O":
+            for v in value.flatten().tolist():
+                yield from _iter_instance_objects(v, _path)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _iter_instance_objects(v, _path)
+    elif isinstance(value, (set, frozenset)):
+        if any(True for v in value for _ in _iter_instance_objects(v, _path)):
+            raise ValueError(
+                "Cannot carry instance attributes of objects in a set"
+            )
+
+
+def _restore_subtree_instance_attrs(obj: Any, attrs_list: list) -> None:
+    """Put back the values `Serializable._subtree_instance_attrs` saved,
+    onto the objects of `obj`'s subtree in the same walk order.
+
+    Raises
+    ------
+    ValueError
+        If the walk and the list differ in length, or one object is
+        visited twice with unequal entries (the copy's aliasing doesn't
+        match its source's).
+    """
+    objs = list(_iter_instance_objects(obj))
+    if len(objs) != len(attrs_list):
+        raise ValueError(
+            f"Found {len(objs)} objects with instance attributes but "
+            f"{len(attrs_list)} saved entries"
+        )
+    seen: dict[int, tuple[Any, Any]] = {}
+    for o, attrs in zip(objs, attrs_list):
+        prev = seen.get(id(o))
+        if prev is not None:
+            if not Serializable._content_equal(prev[1], attrs):
+                raise ValueError(
+                    "One object occurs twice with different instance "
+                    "attributes; the copy's sharing differs from its source's"
+                )
+            continue
+        seen[id(o)] = (o, attrs)
+        o._restore_instance_attrs(attrs)
 
 
 class Serializable:
@@ -743,9 +838,11 @@ class Serializable:
         obj : Any
             The object to compute a key for.
         _visited : dict, optional
-            Internal: object ID to depth, for the `Serializable`s on the
-            current recursion path. A cycle is keyed by how many levels up
-            its target sits, never by an address.
+            Internal: object ID to `[depth, has_instance]`, for the
+            `Serializable`s on the current recursion path. A cycle is keyed
+            by how many levels up its target sits, never by an address.
+            `has_instance` collects whether anything at or beneath the
+            object has `_INSTANCE_ATTRS`, for its memo entry.
 
         Returns
         -------
@@ -766,24 +863,27 @@ class Serializable:
             return int.from_bytes(hasher.digest()[:16], "big")
 
         obj_id = id(obj)
-        depth = _visited.get(obj_id)
-        if depth is not None:
+        entry = _visited.get(obj_id)
+        if entry is not None:
             memo = _SERIAL_HASH_MEMO.get()
             if memo is not None:
                 # Hashes that met the cycle must not be memoized
                 memo.update(dict.fromkeys(_visited))
             return int.from_bytes(
                 hashlib.sha256(
-                    b"R" + struct.pack("<Q", len(_visited) - depth)
+                    b"R" + struct.pack("<Q", len(_visited) - entry[0])
                 ).digest()[:16],
                 "big",
             )
 
         memo = _SERIAL_HASH_MEMO.get()
-        if memo is not None and memo.get(obj_id) is not None:
-            return memo[obj_id][1]
+        hit = memo.get(obj_id) if memo is not None else None
+        if hit is not None:
+            if hit[2] and _visited:
+                _visited[next(reversed(_visited))][1] = True
+            return hit[1]
 
-        _visited[obj_id] = len(_visited)
+        _visited[obj_id] = [len(_visited), bool(obj._INSTANCE_ATTRS)]
         try:
             cls = type(obj)
             hasher = hashlib.sha256(b"S")
@@ -795,10 +895,12 @@ class Serializable:
                 )
             result = int.from_bytes(hasher.digest()[:16], "big")
             if memo is not None and obj_id not in memo:
-                memo[obj_id] = (obj, result)
+                memo[obj_id] = (obj, result, _visited[obj_id][1])
             return result
         finally:
-            del _visited[obj_id]
+            # The nearest enclosing `Serializable` is the last one left
+            if _visited.pop(obj_id)[1] and _visited:
+                _visited[next(reversed(_visited))][1] = True
 
     @staticmethod
     def _feed_str(hasher, text: str) -> None:
@@ -987,6 +1089,18 @@ class Serializable:
     implement [](api:Serializable._get_encoding_attr).
     """
 
+    _INSTANCE_ATTRS: ClassVar[list[str]] = []
+    """Names saved with every stored record of an object (a `copy` record
+    too) and through the pickle bridge.
+
+    Never part of the cache key, so objects that differ only in these
+    still share one stored source. Values are read with
+    [](api:Serializable._get_encoding_attr) and put back by
+    [](api:Serializable._restore_instance_attrs) after the object is built
+    or copied. Meant for small values on a class whose cached copies are
+    real copies (`copy_cached_reference`).
+    """
+
     _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset()
     """`_SERIALIZE_ATTRS` names that must always keep their own real HDF5
     group (and, one level further in, their own individually-addressable
@@ -1020,9 +1134,9 @@ class Serializable:
     `__dict__`.
 
     Meant for leaf classes that wrap a C++ handle (e.g. STIM and QSim
-    states) that plain pickle can't handle. Anything not in
-    `_SERIALIZE_ATTRS` is dropped (for STIM, the seed and measurement
-    record).
+    states) that plain pickle can't handle. Only `_SERIALIZE_ATTRS` and
+    `_INSTANCE_ATTRS` are carried; anything else is dropped (for STIM,
+    the measurement record).
     """
 
     def __reduce_ex__(self, protocol):
@@ -1032,7 +1146,35 @@ class Serializable:
             attr: self._get_encoding_attr(attr)
             for attr in self._SERIALIZE_ATTRS
         }
-        return (_rebuild_from_encoding_attrs, (type(self), attrs))
+        return (
+            _rebuild_from_encoding_attrs,
+            (type(self), attrs, self._instance_encoding_attrs()),
+        )
+
+    def _instance_encoding_attrs(self) -> dict | None:
+        """The `_INSTANCE_ATTRS` values of this one object, or `None` when
+        the class has none."""
+        if not self._INSTANCE_ATTRS:
+            return None
+        return {n: self._get_encoding_attr(n) for n in self._INSTANCE_ATTRS}
+
+    def _restore_instance_attrs(self, attrs: Mapping[str, Any]) -> None:
+        """Put back the values of [](api:Serializable._instance_encoding_attrs).
+
+        The default sets each name with `setattr`; override when a value
+        needs rebuilding.
+        """
+        for name, value in attrs.items():
+            setattr(self, name, value)
+
+    def _subtree_instance_attrs(self) -> list[dict] | None:
+        """The `_instance_encoding_attrs` of this object and every object
+        beneath it, in `_iter_instance_objects` order, or `None` when there
+        are none. This is what a `copy` record stores."""
+        out = [
+            o._instance_encoding_attrs() for o in _iter_instance_objects(self)
+        ]
+        return out or None
 
     ## ABSTRACT METHODS
     # Implement these in derived classes
@@ -2136,6 +2278,7 @@ class Serializable:
                 cache_type="copy",
                 reference_cache_id=source_cache_id,
                 source_cache_id=cache_id,
+                instance_attrs=obj._subtree_instance_attrs(),
             )
 
         # Otherwise, cache-miss so we create a new source

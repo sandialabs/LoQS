@@ -12,11 +12,13 @@ from typing import Any
 import pytest
 import h5py
 import numpy as np
+from numpy.random import SeedSequence
 
 import loqs.core.programresults as programresults_module
 import loqs.internal.checkpointstore as checkpointstore_module
 import loqs.internal.swmrledger as swmrledger_module
 from loqs.core.programresults import ProgramResults
+from loqs.internal.seeding import child_seed_sequence, seed_sequence_to_dict
 from loqs.internal.checkpointstore import (
     ITEM_LAYOUT,
     SHOT_LAYOUT,
@@ -254,8 +256,12 @@ class TestProgramResults:
         """A `ProgramResults` keeps its name, parent program, shot values,
         unwritten set and wall-clock times through `write` and `read`, and
         through a second write and read."""
+        # A child sequence with a 128-bit entropy and a spawn key
+        root = child_seed_sequence(SeedSequence(), 7, 1)
         results = ProgramResults(
-            name="RoundTripName", parent_program="RoundTripProgram"
+            name="RoundTripName",
+            parent_program="RoundTripProgram",
+            root_seed=root,
         )
         for i in range(3):
             history = History()
@@ -281,6 +287,9 @@ class TestProgramResults:
         assert isinstance(decoded, ProgramResults)
         assert decoded.name == "RoundTripName"
         assert decoded.parent_program == "RoundTripProgram"
+        assert seed_sequence_to_dict(decoded.root_seed) == (
+            seed_sequence_to_dict(root)
+        )
         assert set(decoded._unwritten_shots) == {0, 2}
         assert set(decoded.shot_wall_clock_times) == {0, 1, 2}
         for i in range(3):
@@ -299,6 +308,9 @@ class TestProgramResults:
         decoded.write(second_path, format=format_name)
         again = Serializable.read(second_path, format=format_name)
         assert again.name == "RoundTripName"
+        assert seed_sequence_to_dict(again.root_seed) == (
+            seed_sequence_to_dict(root)
+        )
         assert len(again.shot_histories) == 3
         assert set(again._unwritten_shots) == {0, 2}
 
