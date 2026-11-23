@@ -18,6 +18,7 @@ from typing import Any, ClassVar, cast
 import warnings
 
 import numpy as np
+from numpy.random import SeedSequence
 from numpy.typing import NDArray
 import stim
 
@@ -36,6 +37,14 @@ from loqs.core import (
     InstructionStack,
     OutputResults,
     QuantumProgram,
+)
+from loqs.backends.state import BaseQuantumState
+from loqs.internal.seeding import (
+    BATCH_STREAM,
+    INSTRUCTION_STREAM,
+    STATE_STREAM,
+    child_seed_sequence,
+    seed_word,
 )
 from loqs.internal.serializable import Serializable
 from loqs.core.instructions.builders import (
@@ -104,6 +113,7 @@ class _Step:
     sources: dict = field(default_factory=dict)  # Winning source per alias
     kwargs: dict = field(default_factory=dict)  # Its dry run's kwargs
     batch: Any = None  # The batch function, when the step runs batched
+    call: int = 0  # Its position among the shot's non-state-building calls
 
 
 @dataclass
@@ -123,6 +133,7 @@ class _Plan:
     body: Any = None  # The traced stack after the setup
     globals: dict = field(default_factory=dict)  # Global instructions by name
     circuits: dict = field(default_factory=dict)  # `_FastCircuit` by key
+    root: Any = None  # The run's root SeedSequence
 
 
 @dataclass
@@ -197,8 +208,7 @@ class _TracingSTIMState(STIMQuantumState):
             self.segments.append(circuit.copy())
 
     def copy(self) -> _TracingSTIMState:
-        new_state = _TracingSTIMState(self.state, self.qubit_labels, self.seed)
-        new_state._rng = deepcopy(self._rng)
+        new_state = cast(_TracingSTIMState, super().copy())
         new_state.drew = self.drew
         return new_state
 
@@ -338,8 +348,11 @@ class StimEngine(Serializable):
         """
         traced = self._traced_program(program)
         n_initial = len(traced.initial_history)
+        # Resolved on the user's program: the traced copy's states have lost
+        # a seeded state's sequence
+        root = program._resolve_root_seed()
         history = QuantumProgram._run_shot(
-            traced, self.max_frame_limit, program.default_base_seed, 0
+            traced, self.max_frame_limit, root, 0
         )
         if len(history) > n_initial:
             remaining = InstructionStack(history[-1]["stack"])
@@ -362,6 +375,7 @@ class StimEngine(Serializable):
         qubit_labels: list = []
         propagating = traced.initial_history.propagating_keys
         stack = traced.instruction_stack
+        calls = 0
         with warnings.catch_warnings():
             # An expired key still returns its value, but warns
             warnings.filterwarnings(
@@ -369,6 +383,9 @@ class StimEngine(Serializable):
             )
             for frame in list(history)[n_initial:]:
                 inst = frame["instruction"]
+                call = calls
+                if not self._builds_state(inst):
+                    calls += 1
                 label, seen = InstructionStack(stack).pop_instruction()
                 stack = frame["stack"]
                 step: dict = {
@@ -420,6 +437,7 @@ class StimEngine(Serializable):
                             if k not in propagating
                             and k != "measurement_outcomes"
                         },
+                        call=call,
                     )
                 )
 
@@ -443,7 +461,7 @@ class StimEngine(Serializable):
             traced,
             infos,
             n_setup,
-            self._template(traced, infos[:n_setup]),
+            self._template(traced, infos[:n_setup], root),
             np.concatenate(bits) if bits else np.zeros(0, dtype=bool),
             history,
             n_initial,
@@ -453,6 +471,7 @@ class StimEngine(Serializable):
                 if n_setup
                 else traced.instruction_stack
             ),
+            root=root,
         )
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -494,7 +513,9 @@ class StimEngine(Serializable):
                 step.label,
                 step.stack,
                 before,
+                plan.root,
                 0,
+                step.call,
                 sources=sources,
             )
             for alias, source in sources.items():
@@ -581,29 +602,43 @@ class StimEngine(Serializable):
         return sorted(reads)
 
     @staticmethod
+    def _builds_state(inst: Any) -> bool:
+        """Whether `inst` builds a quantum state, which `_run_shot` seeds
+        from the state stream and leaves out of its instruction calls."""
+        obj_class = inst.data.get("obj_class")
+        return isinstance(obj_class, type) and issubclass(
+            obj_class, BaseQuantumState
+        )
+
+    @staticmethod
     def _kwargs(
         program: QuantumProgram,
         inst: Any,
         label: Any,
         stack: Any,
         history: History,
+        root: SeedSequence,
         shot_index: int,
+        call: int,
         names: Sequence[str] | None = None,
         sources: dict | None = None,
     ) -> dict:
         """Collect an instruction's kwargs as `QuantumProgram._run_shot` does.
 
-        `stack` is the stack left after popping `label`. When `sources` is
-        given, it gets each parameter's alias mapped to the first priority
-        that supplied it.
+        `stack` is the stack left after popping `label`; `call` is the
+        instruction's position among the shot's calls that build no state.
+        When `sources` is given, it gets each parameter's alias mapped to
+        the first priority that supplied it.
         """
-        seed = program.default_base_seed
         program_data = {
             "history": history,
             "patch_label": label.get("patch_label"),
             "stack": stack,
-            "seed": None if seed is None else seed + shot_index,
         }
+        if any(inst.param_alias(k) == "seed" for k in inst.param_priorities):
+            program_data["seed"] = seed_word(
+                child_seed_sequence(root, shot_index, INSTRUCTION_STREAM, call)
+            )
         if program.default_noise_model is not None:
             program_data["model"] = program.default_noise_model
         label_kwargs = QuantumProgram._label_kwargs(label, inst)
@@ -660,8 +695,14 @@ class StimEngine(Serializable):
             no_serialize_keys=list(initial.no_serialize_keys),
         )
 
-    def _template(self, program: QuantumProgram, setup: list[_Step]) -> dict:
-        """The setup steps' classical output, built once without a state."""
+    def _template(
+        self, program: QuantumProgram, setup: list[_Step], root: SeedSequence
+    ) -> dict:
+        """The setup steps' classical output, built once without a state.
+
+        Raises `NotImplementedError` for a step that takes the program's
+        seed, since every shot would share the value drawn for shot 0.
+        """
         initial = program.initial_history
         history = self._new_history(program)
         with warnings.catch_warnings():
@@ -685,9 +726,25 @@ class StimEngine(Serializable):
                     and inst.data.get("frame_key") == "state"
                 ):
                     continue
+                sources: dict = {}
                 kwargs = self._kwargs(
-                    program, inst, step.label, step.stack, history, 0
+                    program,
+                    inst,
+                    step.label,
+                    step.stack,
+                    history,
+                    root,
+                    0,
+                    step.call,
+                    sources=sources,
                 )
+                if sources.get("seed") == "program":
+                    raise NotImplementedError(
+                        f"StimEngine can't run setup instruction "
+                        f"{inst.name!r}: it takes the program's seed, but "
+                        "the setup runs once for all shots, so a per-shot "
+                        "seed can't reach it"
+                    )
                 frame = inst.apply(**kwargs)
                 step.keys = set(frame) - {"instruction", "stack"}
                 history.append(frame)
@@ -766,7 +823,9 @@ class StimEngine(Serializable):
                     step.label,
                     step.stack,
                     history,
+                    plan.root,
                     shot_index,
+                    step.call,
                     sources=sources,
                 )
                 frame = step.inst.apply(**kwargs)
@@ -801,7 +860,9 @@ class StimEngine(Serializable):
                     step.label,
                     step.stack,
                     history,
+                    plan.root,
                     shot_index,
+                    step.call,
                     names=("pauli_frame_update", "patches"),
                     sources=sources,
                 )
@@ -1119,10 +1180,14 @@ class StimEngine(Serializable):
         discarded counts are `results["kept"].sum()` and `num_shots`
         minus it; the fast path returns no `kept`.
 
-        The seed is `program.default_base_seed`. The same seed gives the
-        same arrays on the same machine and stim version. The arrays agree
-        with [](api:QuantumProgram.run) in distribution only, never shot
-        for shot.
+        The run's root seed is the program's `default_base_seed` (an
+        integer or a `SeedSequence`), else a seeded state in the initial
+        history, else fresh entropy. The result records it as `root_seed`,
+        and passing that back as `default_base_seed` replays the run, an
+        unseeded one included. The same root gives the same arrays on the
+        same machine and stim version. The arrays agree with
+        [](api:QuantumProgram.run) in distribution only, never shot for
+        shot.
 
         Parameters
         ----------
@@ -1150,7 +1215,7 @@ class StimEngine(Serializable):
             return self._run_fast(plan, num_shots, resolved)
         text = _stim_text(plan.compiled)
         sampler = stim.Circuit(text).compile_sampler(
-            seed=program.default_base_seed
+            seed=seed_word(child_seed_sequence(plan.root, 0, BATCH_STREAM))
         )
         measurements = sampler.sample(num_shots)
         detectors, observables = _m2d_converter(text).convert(
@@ -1164,7 +1229,9 @@ class StimEngine(Serializable):
         }
         arrays.update(self._outputs(plan, measurements, resolved))
         return OutputResults(
-            arrays, name=f"StimEngine results for {program.name}"
+            arrays,
+            name=f"StimEngine results for {program.name}",
+            root_seed=plan.root,
         )
 
     def _run_fast(
@@ -1206,7 +1273,9 @@ class StimEngine(Serializable):
                 [filler if empty else r for r, empty in recs],
             )
         return OutputResults(
-            arrays, name=f"StimEngine results for {plan.program.name}"
+            arrays,
+            name=f"StimEngine results for {plan.program.name}",
+            root_seed=plan.root,
         )
 
     @staticmethod
@@ -1252,11 +1321,18 @@ class StimEngine(Serializable):
         shot's history, seed frame first, and its measurement record.
         """
         program = plan.program
-        base = program.default_base_seed
-        seed = None if base is None else base + shot_index
-        sim = stim.TableauSimulator(seed=seed)
+        # Seeded as the per-shot run seeds its first state: the simulator
+        # from that state's tableau child, the choices from its sequence
+        sim = stim.TableauSimulator(
+            seed=seed_word(
+                child_seed_sequence(plan.root, shot_index, STATE_STREAM, 0, 0)
+            )
+        )
         sim.set_num_qubits(len(plan.compiled.qubit_labels))
         rng = None  # The shot's choice draws, made on first use
+        call = sum(
+            not self._builds_state(s.inst) for s in plan.steps[: plan.n_setup]
+        )
 
         history = self._seed_history(plan)
         stack = InstructionStack(plan.body)
@@ -1289,7 +1365,9 @@ class StimEngine(Serializable):
                     label,
                     stack,
                     history,
+                    plan.root,
                     shot_index,
+                    call,
                     names=[
                         k
                         for k in inst.param_priorities
@@ -1307,14 +1385,18 @@ class StimEngine(Serializable):
                 entry = plan.circuits.get(tuple(key))
                 if entry is None:
                     entry = self._fast_circuit(
-                        plan, inst, label, stack, history, shot_index
+                        plan, inst, label, stack, history, shot_index, call
                     )
                     entry.alive = (inst, kwargs)
                     plan.circuits[tuple(key)] = entry
                 for segment in entry.segments:
                     if isinstance(segment, _Choice):
                         if rng is None:
-                            rng = np.random.default_rng(seed)
+                            rng = np.random.default_rng(
+                                child_seed_sequence(
+                                    plan.root, shot_index, STATE_STREAM, 0
+                                )
+                            )
                         pick = np.searchsorted(
                             segment.cumulative, rng.random(), side="right"
                         )
@@ -1340,7 +1422,14 @@ class StimEngine(Serializable):
             else:
                 frame = inst.apply(
                     **self._kwargs(
-                        program, inst, label, stack, history, shot_index
+                        program,
+                        inst,
+                        label,
+                        stack,
+                        history,
+                        plan.root,
+                        shot_index,
+                        call,
                     )
                 )
                 if "state" in frame:
@@ -1356,6 +1445,7 @@ class StimEngine(Serializable):
                 cast(InstructionStackLike, frame["stack"])
             )
             num_frames += 1
+            call += 1
 
         return history, np.asarray(
             sim.current_measurement_record(), dtype=bool
@@ -1377,6 +1467,7 @@ class StimEngine(Serializable):
         stack: Any,
         history: History,
         shot_index: int,
+        call: int,
     ) -> _FastCircuit:
         """Compile a physical-circuit step into STIM text for the fast path.
 
@@ -1396,7 +1487,9 @@ class StimEngine(Serializable):
             label,
             stack,
             history,
+            plan.root,
             shot_index,
+            call,
             names=names,
             sources=sources,
         )
@@ -1407,22 +1500,22 @@ class StimEngine(Serializable):
                     f"its per-shot fast path: its parameter {alias!r} comes "
                     f"from {source!r}, so its STIM text could differ per shot"
                 )
-        call = dict(kwargs)
+        apply_kwargs = dict(kwargs)
         for k in inst.param_priorities:
             alias = inst.param_alias(k)
             if alias == "state":
-                call[k] = _TracingSTIMState(
+                apply_kwargs[k] = _TracingSTIMState(
                     len(plan.compiled.qubit_labels),
                     plan.compiled.qubit_labels,
                 )
             elif alias == "patches" or k == "pauli_frame_update":
-                call[k] = None
+                apply_kwargs[k] = None
         circuit = kwargs.get("circuit")
         if isinstance(circuit, STIMPhysicalCircuit) and _passthrough_names(
             circuit.circuit
         ):
             raise self._fast_refusal(inst.name)
-        frame = inst.apply(**call)
+        frame = inst.apply(**apply_kwargs)
         state = frame["state"]
         emitted, order, _ = self._circuit(inst.name, frame, state)
         if _passthrough_names(stim.Circuit(emitted["stim"])):

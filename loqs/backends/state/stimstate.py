@@ -261,7 +261,7 @@ class STIMQuantumState(BaseQuantumState):
 
     def copy(self) -> STIMQuantumState:
         # No seed, so the tableau stream is carried over
-        new_state = STIMQuantumState(self.state, self.qubit_labels)
+        new_state = type(self)(self.state, self.qubit_labels)
         new_state.seed_sequence = self.seed_sequence
         new_state.seeded = self.seeded
         new_state._rng = deepcopy(self._rng)

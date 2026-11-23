@@ -17,7 +17,14 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from numpy.random import SeedSequence
+
+from loqs.core.programresults import _seed_from_stored
 from loqs.internal import Displayable
+from loqs.internal.seeding import (
+    as_seed_sequence,
+    seed_sequence_to_dict,
+)
 
 
 class OutputResults(Displayable):
@@ -36,6 +43,7 @@ class OutputResults(Displayable):
 
     _SERIALIZE_ATTRS = [
         "name",
+        "root_seed",
         "_values",
         "_offsets",
         "_inner_offsets",
@@ -47,6 +55,7 @@ class OutputResults(Displayable):
         # Stored arrays were validated when first built, so skip `outputs`
         obj = cls.__new__(cls)
         obj.name = attr_dict["name"]
+        obj.root_seed = _seed_from_stored(attr_dict.get("root_seed"))
         obj._values = attr_dict["_values"]
         obj._offsets = attr_dict["_offsets"]
         obj._inner_offsets = attr_dict["_inner_offsets"]
@@ -57,6 +66,7 @@ class OutputResults(Displayable):
         self,
         outputs: Mapping[str, Any],
         name: str = "(Unnamed output results)",
+        root_seed: int | SeedSequence | None = None,
     ) -> None:
         """
         Parameters
@@ -74,6 +84,12 @@ class OutputResults(Displayable):
         name:
             Name for logging.
 
+        root_seed:
+            The root the run's seeds were drawn from: an integer or a
+            `SeedSequence`, stored as a `SeedSequence`. None when none was
+            recorded. Passing it back as the program's `default_base_seed`
+            replays the run.
+
         Raises
         ------
         ValueError
@@ -82,6 +98,9 @@ class OutputResults(Displayable):
             shape.
         """
         self.name = name
+        self.root_seed: SeedSequence | None = (
+            None if root_seed is None else as_seed_sequence(root_seed)
+        )
         self._values: dict[str, NDArray] = {}
         self._offsets: dict[str, NDArray] = {}
         self._inner_offsets: dict[str, NDArray] = {}
@@ -100,6 +119,13 @@ class OutputResults(Displayable):
         counts = {k: len(o) - 1 for k, o in self._offsets.items()}
         if len(set(counts.values())) > 1:
             raise ValueError(f"Outputs have different shot counts: {counts}")
+
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        """The dict form of `root_seed`, or None; other attributes as usual."""
+        if attr == "root_seed":
+            seq = self.root_seed
+            return None if seq is None else seed_sequence_to_dict(seq)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @staticmethod
     def _from_dense(key: str, out: NDArray):

@@ -3,7 +3,10 @@
 import numpy as np
 import pytest
 
+from numpy.random import SeedSequence
+
 from loqs.core import OutputResults
+from loqs.internal.seeding import seed_sequence_to_dict
 
 
 def make_results():
@@ -25,6 +28,7 @@ def make_results():
             ],
         },
         name="test results",
+        root_seed=SeedSequence(),
     )
 
 
@@ -55,6 +59,9 @@ class TestOutputResults:
             assert len(old) == len(new)
             for a, b in zip(old, new):
                 same_record(a, b)
+        assert seed_sequence_to_dict(loaded.root_seed) == (
+            seed_sequence_to_dict(results.root_seed)
+        )
         assert loaded["empty"].shape == (3, 0)
         assert loaded["scalar"].shape == (3,)
         assert loaded["nested"].shape == (3, 2, 2)

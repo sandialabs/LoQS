@@ -22,6 +22,10 @@ STATE_STREAM = 0
 INSTRUCTION_STREAM = 1
 """Consumer key of the seed handed to a shot's instructions."""
 
+BATCH_STREAM = 2
+"""Consumer key of a sampler that draws a batch of shots, under the index of
+the batch's first shot."""
+
 
 def as_seed_sequence(seed: int | SeedSequence | None) -> SeedSequence:
     """Turn a seed into a `SeedSequence`.
